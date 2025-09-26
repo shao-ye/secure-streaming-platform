@@ -1,0 +1,38 @@
+{
+  "name": "yoyo-streaming-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "YOYO流媒体平台 - Cloudflare Worker业务逻辑层",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write src/**/*.js",
+    "init-data": "node scripts/generate-data.js"
+  },
+  "keywords": [
+    "cloudflare",
+    "worker",
+    "streaming",
+    "hls",
+    "video"
+  ],
+  "author": "YOYO Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231121.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.1.0",
+    "vitest": "^1.0.0",
+    "wrangler": "^3.19.0"
+  },
+  "dependencies": {}
+}

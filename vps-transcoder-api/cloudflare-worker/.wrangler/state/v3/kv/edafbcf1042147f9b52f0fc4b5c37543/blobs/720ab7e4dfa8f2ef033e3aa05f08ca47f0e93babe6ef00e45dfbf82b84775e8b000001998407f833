@@ -1,0 +1,1 @@
+[{id:cam1,name:大厅监控,rtmpUrl:rtmp://demo.server/live/hall,createdAt:2025-09-26T03:03:38.653Z,updatedAt:2025-09-26T03:03:38.653Z},{id:cam2,name:入口监控,rtmpUrl:rtmp://demo.server/live/entrance,createdAt:2025-09-26T03:03:38.653Z,updatedAt:2025-09-26T03:03:38.653Z}]

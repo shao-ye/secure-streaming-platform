@@ -1,0 +1,32 @@
+name = "yoyo-streaming-worker"
+main = "src/index.js"
+compatibility_date = "2023-12-01"
+
+[[kv_namespaces]]
+binding = "YOYO_USER_DB"
+id = "edafbcf1042147f9b52f0fc4b5c37543"
+preview_id = "f36b78f5fd4d493aa567f9e8abf68348"
+
+# 路由配置
+[[routes]]
+pattern = "streaming.yourdomain.com/*"
+zone_name = "yourdomain.com"
+
+# Durable Objects（如果需要）
+# [[durable_objects.bindings]]
+# name = "STREAMING_SESSIONS"
+# class_name = "StreamingSession"
+
+# 开发环境配置
+[dev]
+port = 8787
+local_protocol = "https"
+upstream_protocol = "https"
+
+# 开发环境配置
+[env.development]
+vars = { ENVIRONMENT = "development" }
+
+# 生产环境配置
+[env.production]
+vars = { ENVIRONMENT = "production" }

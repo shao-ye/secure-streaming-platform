@@ -1,0 +1,20 @@
+{
+  "name": "vps-transcoder-api-tests",
+  "version": "1.0.0",
+  "description": "VPS转码API测试套件",
+  "main": "api-test.js",
+  "scripts": {
+    "test": "node api-test.js",
+    "test:dev": "cross-env TEST_API_URL=http://localhost:3000 TEST_API_KEY=test-api-key-change-in-production node api-test.js",
+    "test:production": "node api-test.js",
+    "test:load": "node load-test.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "cross-env": "^7.0.3"
+  },
+  "devDependencies": {},
+  "author": "YOYO Team",
+  "license": "MIT"
+}
