@@ -4,7 +4,7 @@
  */
 
 import { Router } from './router';
-import { handleOptions } from './utils/cors';
+import { handleOptions, getCorsHeaders } from './utils/cors';
 import { logError } from './utils/logger';
 
 // 导入路由处理器
@@ -36,21 +36,23 @@ export default {
       router.post('/login', (req, env, ctx) => handleAuth.login(req, env, ctx));
       router.post('/logout', (req, env, ctx) => handleAuth.logout(req, env, ctx));
       router.get('/api/me', (req, env, ctx) => handleAuth.getCurrentUser(req, env, ctx));
+      router.get('/api/user', (req, env, ctx) => handleAuth.getCurrentUser(req, env, ctx)); // 前端需要的端点
 
       // 系统状态API（通用）
       router.get('/api/status', (req, env, ctx) => {
         return new Response(
           JSON.stringify({
             status: 'ok',
-            message: 'YOYO Streaming Platform API is running',
+            message: 'YOYO Streaming Platform API v2 is running',
             timestamp: new Date().toISOString(),
-            version: '1.0.0'
+            version: '2.0.0',
+            project: 'yoyo-api-v2'
           }),
           {
             status: 200,
             headers: {
               'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*'
+              ...getCorsHeaders(request)
             }
           }
         );
@@ -98,7 +100,7 @@ export default {
           status: 404,
           headers: {
             'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
+            ...getCorsHeaders(request)
           }
         }
       );
@@ -124,7 +126,7 @@ export default {
           status: 500,
           headers: {
             'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
+            ...getCorsHeaders(request)
           }
         }
       );
