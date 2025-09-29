@@ -4,6 +4,9 @@
 
 // 允许的域名列表
 const ALLOWED_ORIGINS = [
+  // 生产环境域名
+  'https://yoyo.5202021.xyz',
+  
   // Cloudflare Pages部署域名
   'https://yoyo-streaming.pages.dev',
   'https://yoyo-streaming-frontend.pages.dev',
