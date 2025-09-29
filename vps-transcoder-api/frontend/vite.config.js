@@ -76,11 +76,23 @@ export default defineConfig(({ command, mode }) => {
       minify: mode === 'production' ? 'esbuild' : false,
       rollupOptions: {
         output: {
-          manualChunks: {
-            'element-plus': ['element-plus'],
-            'hls': ['hls.js'],
-            'vue-vendor': ['vue', 'vue-router', 'pinia'],
-            'utils': ['axios', 'dayjs']
+          manualChunks(id) {
+            // 更安全的代码分割策略
+            if (id.includes('node_modules')) {
+              if (id.includes('element-plus')) {
+                return 'element-plus'
+              }
+              if (id.includes('hls.js')) {
+                return 'hls'
+              }
+              if (id.includes('vue') || id.includes('pinia') || id.includes('@vue')) {
+                return 'vue-vendor'
+              }
+              if (id.includes('axios') || id.includes('dayjs')) {
+                return 'utils'
+              }
+              return 'vendor'
+            }
           }
         }
       },
