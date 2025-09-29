@@ -70,11 +70,23 @@ export default {
       router.post('/api/admin/streams', (req, env, ctx) => handleAdmin.createStream(req, env, ctx));
       router.put('/api/admin/streams/:id', (req, env, ctx) => handleAdmin.updateStream(req, env, ctx));
       router.delete('/api/admin/streams/:id', (req, env, ctx) => handleAdmin.deleteStream(req, env, ctx));
+      
+      // 系统状态相关API - 匹配前端调用路径
       router.get('/api/admin/status', (req, env, ctx) => handleAdmin.getSystemStatus(req, env, ctx));
+      router.get('/api/admin/system/status', (req, env, ctx) => handleAdmin.getSystemStatus(req, env, ctx));
+      
+      // 缓存相关API
       router.get('/api/admin/cache/stats', (req, env, ctx) => handleAdmin.getCacheStats(req, env, ctx));
       router.post('/api/admin/cache/clear', (req, env, ctx) => handleAdmin.clearCache(req, env, ctx));
-      router.post('/api/admin/streams/reload', (req, env, ctx) => handleAdmin.reloadStreamsConfig(req, env, ctx));
+      
+      // VPS健康检查API - 新增
+      router.get('/api/admin/vps/health', (req, env, ctx) => handleAdmin.getVpsHealth(req, env, ctx));
+      
+      // 系统诊断API
       router.get('/api/admin/diagnostics', (req, env, ctx) => handleAdmin.getSystemDiagnostics(req, env, ctx));
+      
+      // 其他管理功能
+      router.post('/api/admin/streams/reload', (req, env, ctx) => handleAdmin.reloadStreamsConfig(req, env, ctx));
 
       // HLS代理路由
       router.get('/hls/:streamId/:file', (req, env, ctx) => handleProxy.hlsFile(req, env, ctx));
