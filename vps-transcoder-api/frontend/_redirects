@@ -1,0 +1,11 @@
+# Cloudflare Pages Redirects Configuration
+# 用于SPA路由和API代理
+
+# API代理到Cloudflare Worker
+/api/* https://yoyo-streaming-api.your-subdomain.workers.dev/api/:splat 200
+/login https://yoyo-streaming-api.your-subdomain.workers.dev/login 200
+/logout https://yoyo-streaming-api.your-subdomain.workers.dev/logout 200
+/hls/* https://yoyo-streaming-api.your-subdomain.workers.dev/hls/:splat 200
+
+# SPA路由 - 所有未匹配的路径都返回index.html
+/* /index.html 200
