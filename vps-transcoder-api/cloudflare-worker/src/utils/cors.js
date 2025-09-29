@@ -4,11 +4,21 @@
 
 // 允许的域名列表
 const ALLOWED_ORIGINS = [
+  // Cloudflare Pages部署域名
+  'https://yoyo-streaming.pages.dev',
+  'https://yoyo-streaming-frontend.pages.dev',
+  
+  // 自定义域名（如果有）
   'https://streaming.yourdomain.com',
   'https://admin.yourdomain.com',
+  
+  // 开发环境
   'http://localhost:3000',
-  'http://localhost:5173',
+  'http://localhost:8080',  // Vue开发服务器默认端口
+  'http://localhost:8081',
+  'http://localhost:5173',  // Vite开发服务器默认端口
   'http://127.0.0.1:3000',
+  'http://127.0.0.1:8080',
   'http://127.0.0.1:5173',
   'https://127.0.0.1:8787',
   'http://127.0.0.1:8787'
