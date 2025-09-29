@@ -17,7 +17,7 @@ export const useUserStore = defineStore('user', () => {
       })
 
       if (response.data.status === 'success') {
-        user.value = response.data.user
+        user.value = response.data.data.user  // 修复：正确获取用户数据
         return { success: true }
       } else {
         return { success: false, message: response.data.message }
@@ -45,7 +45,7 @@ export const useUserStore = defineStore('user', () => {
     try {
       const response = await axios.get('/api/user')
       if (response.data.status === 'success') {
-        user.value = response.data.user
+        user.value = response.data.data.user  // 修复：正确获取用户数据
       }
     } catch (error) {
       user.value = null
