@@ -58,6 +58,72 @@ export default {
         );
       });
 
+      // 初始化管理员用户端点（修复登录页面持续刷新问题）
+      router.post('/api/init-admin', async (req, env, ctx) => {
+        try {
+          // 检查是否已存在管理员用户
+          const existingUser = await env.YOYO_USER_DB.get('user:admin');
+          if (existingUser) {
+            return new Response(JSON.stringify({
+              status: 'success',
+              message: 'Admin user already exists',
+              data: { username: 'admin', role: 'admin', status: 'already_exists' }
+            }), {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/json',
+                ...getCorsHeaders(req)
+              }
+            });
+          }
+
+          // 创建管理员用户数据
+          const adminUser = {
+            username: 'admin',
+            role: 'admin',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+
+          // 存储到KV数据库
+          await env.YOYO_USER_DB.put('user:admin', JSON.stringify(adminUser));
+
+          // 初始化空的流配置
+          const initialStreams = [];
+          await env.YOYO_USER_DB.put('streams:config', JSON.stringify(initialStreams));
+
+          return new Response(JSON.stringify({
+            status: 'success',
+            message: 'Admin user initialized successfully',
+            data: {
+              username: adminUser.username,
+              role: adminUser.role,
+              createdAt: adminUser.createdAt
+            }
+          }), {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+              ...getCorsHeaders(req)
+            }
+          });
+
+        } catch (error) {
+          console.error('Init admin user error:', error);
+          return new Response(JSON.stringify({
+            status: 'error',
+            message: 'Failed to initialize admin user',
+            error: error.message
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...getCorsHeaders(req)
+            }
+          });
+        }
+      });
+
       // 用户功能API
       router.get('/api/streams', (req, env, ctx) => handleStreams.getStreams(req, env, ctx));
       router.post('/api/play/:id', (req, env, ctx) => handleStreams.playStream(req, env, ctx));

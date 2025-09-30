@@ -30,3 +30,7 @@ vars = { ENVIRONMENT = "development" }
 # 生产环境配置
 [env.production]
 vars = { ENVIRONMENT = "production" }
+
+[[env.production.kv_namespaces]]
+binding = "YOYO_USER_DB"
+id = "edafbcf1042147f9b52f0fc4b5c37543"
