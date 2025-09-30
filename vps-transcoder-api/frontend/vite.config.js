@@ -57,16 +57,8 @@ export default defineConfig(({ command, mode }) => {
           changeOrigin: true,
           secure: false,
         },
-        '/login': {
-          target: env.VITE_API_BASE_URL || 'http://localhost:8787',
-          changeOrigin: true,
-          secure: false,
-        },
-        '/logout': {
-          target: env.VITE_API_BASE_URL || 'http://localhost:8787',
-          changeOrigin: true,
-          secure: false,
-        },
+        // 移除 /login 和 /logout 代理配置，避免与前端路由冲突
+        // 这些路径应该由 Vue Router 处理，而不是代理到后端
       }
     },
     build: {
