@@ -24,6 +24,12 @@ instance.interceptors.request.use(
       }
     }
     
+    // 自动添加Authorization header
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    
     return config
   },
   (error) => {
@@ -60,12 +66,8 @@ instance.interceptors.response.use(
           break
         case 401:
           message = '未授权，请重新登录'
-          // 清除本地存储的用户信息
-          localStorage.removeItem('user')
-          // 延迟跳转，避免在某些情况下路由跳转失败
-          setTimeout(() => {
-            window.location.href = '/login'
-          }, 1000)
+          // 不在axios拦截器中清除localStorage，避免触发响应式更新导致路由循环
+          // 让具体的业务逻辑（如checkAuth方法）处理认证失败
           break
         case 403:
           message = '权限不足，无法访问该资源'
