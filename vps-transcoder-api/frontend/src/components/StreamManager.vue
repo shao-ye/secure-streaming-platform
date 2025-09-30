@@ -3,48 +3,61 @@
     <!-- 添加频道表单 -->
     <el-card class="add-form-card" shadow="never">
       <template #header>
-        <h3>添加新频道</h3>
+        <div class="form-header">
+          <h3>添加新频道</h3>
+          <el-button 
+            :icon="isFormCollapsed ? ArrowDown : ArrowUp"
+            @click="toggleFormCollapse"
+            circle
+            size="small"
+            :title="isFormCollapsed ? '展开表单' : '收起表单'"
+          />
+        </div>
       </template>
 
-      <el-form
-        ref="addFormRef"
-        :model="addForm"
-        :rules="formRules"
-        label-width="100px"
-        @submit.prevent="handleAdd"
-      >
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="频道名称" prop="name">
-              <el-input
-                v-model="addForm.name"
-                placeholder="请输入频道名称，如：大厅监控"
-                clearable
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="RTMP地址" prop="rtmpUrl">
-              <el-input
-                v-model="addForm.rtmpUrl"
-                placeholder="rtmp://example.com/live/stream"
-                clearable
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-form-item>
-          <el-button 
-            type="primary" 
-            :loading="addLoading"
-            @click="handleAdd"
+      <el-collapse-transition>
+        <div v-show="!isFormCollapsed">
+          <el-form
+            ref="addFormRef"
+            :model="addForm"
+            :rules="formRules"
+            label-width="100px"
+            @submit.prevent="handleAdd"
           >
-            添加频道
-          </el-button>
-          <el-button @click="resetAddForm">重置</el-button>
-        </el-form-item>
-      </el-form>
+            <el-row :gutter="20">
+              <el-col :span="12">
+                <el-form-item label="频道名称" prop="name">
+                  <el-input
+                    v-model="addForm.name"
+                    placeholder="请输入频道名称，如：大厅监控"
+                    clearable
+                  />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="RTMP地址" prop="rtmpUrl">
+                  <el-input
+                    v-model="addForm.rtmpUrl"
+                    placeholder="rtmp://example.com/live/stream"
+                    clearable
+                  />
+                </el-form-item>
+              </el-col>
+            </el-row>
+
+            <el-form-item>
+              <el-button 
+                type="primary" 
+                :loading="addLoading"
+                @click="handleAdd"
+              >
+                添加频道
+              </el-button>
+              <el-button @click="resetAddForm">重置</el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+      </el-collapse-transition>
     </el-card>
 
     <!-- 频道列表 -->
@@ -62,13 +75,15 @@
         </div>
       </template>
 
-      <el-table
-        v-loading="streamsStore.loading"
-        :data="sortedStreams"
-        stripe
-        border
-        style="width: 100%"
-      >
+      <div class="table-container">
+        <el-table
+          v-loading="streamsStore.loading"
+          :data="sortedStreams"
+          stripe
+          border
+          style="width: 100%"
+          :max-height="tableMaxHeight"
+        >
         <el-table-column prop="id" label="ID" width="120" />
         <el-table-column prop="name" label="频道名称" min-width="200" />
         <el-table-column prop="rtmpUrl" label="RTMP地址" min-width="300">
@@ -130,7 +145,8 @@
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
 
       <div v-if="!streamsStore.loading && streamsStore.streams.length === 0" class="empty-state">
         <el-empty description="暂无频道数据" />
@@ -197,6 +213,7 @@ const editFormRef = ref(null)
 const addLoading = ref(false)
 const editLoading = ref(false)
 const editDialogVisible = ref(false)
+const isFormCollapsed = ref(false)
 
 // 排序后的频道列表
 const sortedStreams = computed(() => {
@@ -206,6 +223,15 @@ const sortedStreams = computed(() => {
     const orderB = b.sortOrder || 0
     return orderA - orderB
   })
+})
+
+// 动态计算表格最大高度
+const tableMaxHeight = computed(() => {
+  // 基础高度：视窗高度减去其他元素占用的空间
+  const baseHeight = window.innerHeight - 300 // 为头部、表单等预留空间
+  // 如果表单折叠，可以增加更多高度给表格
+  const extraHeight = isFormCollapsed.value ? 200 : 0
+  return Math.max(400, baseHeight + extraHeight) // 最小高度400px
 })
 
 const addForm = reactive({
@@ -339,6 +365,11 @@ const formatDate = (timestamp) => {
   return dayjs(timestamp).format('YYYY-MM-DD HH:mm:ss')
 }
 
+// 折叠功能
+const toggleFormCollapse = () => {
+  isFormCollapsed.value = !isFormCollapsed.value
+}
+
 // 排序功能
 const moveUp = async (index) => {
   if (index === 0) return
@@ -404,6 +435,16 @@ onMounted(() => {
   margin-bottom: 20px;
 }
 
+.form-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.form-header h3 {
+  margin: 0;
+}
+
 .list-header {
   display: flex;
   justify-content: space-between;
@@ -412,6 +453,35 @@ onMounted(() => {
 
 .list-header h3 {
   margin: 0;
+}
+
+.table-container {
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+/* 表格滚动条样式优化 */
+.table-container :deep(.el-table__body-wrapper) {
+  overflow-y: auto;
+}
+
+.table-container :deep(.el-table__body-wrapper::-webkit-scrollbar) {
+  width: 8px;
+}
+
+.table-container :deep(.el-table__body-wrapper::-webkit-scrollbar-track) {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+}
+
+.table-container :deep(.el-table__body-wrapper::-webkit-scrollbar-thumb) {
+  background-color: #c0c4cc;
+  border-radius: 4px;
+  transition: background-color 0.3s ease;
+}
+
+.table-container :deep(.el-table__body-wrapper::-webkit-scrollbar-thumb:hover) {
+  background-color: #909399;
 }
 
 .rtmp-url {
