@@ -62,6 +62,8 @@ const selectStream = (stream) => {
 .stream-list {
   flex: 1;
   overflow-y: auto;
+  max-height: calc(100vh - 140px); /* 限制最大高度，为头部和标题留出空间 */
+  min-height: 400px; /* 设置最小高度 */
 }
 
 .loading-container {
@@ -77,6 +79,8 @@ const selectStream = (stream) => {
 
 .streams-container {
   padding: 0;
+  /* 确保容器可以滚动 */
+  overflow-y: auto;
 }
 
 .stream-item {
@@ -141,21 +145,43 @@ const selectStream = (stream) => {
   100% { opacity: 1; }
 }
 
-/* 滚动条样式 */
+/* 滚动条样式 - 优化显示效果 */
 .stream-list::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 
 .stream-list::-webkit-scrollbar-track {
-  background-color: #f1f1f1;
+  background-color: #f5f5f5;
+  border-radius: 4px;
 }
 
 .stream-list::-webkit-scrollbar-thumb {
   background-color: #c0c4cc;
-  border-radius: 3px;
+  border-radius: 4px;
+  transition: background-color 0.3s ease;
 }
 
 .stream-list::-webkit-scrollbar-thumb:hover {
-  background-color: #a8abb2;
+  background-color: #909399;
+}
+
+/* 为streams-container也添加滚动条样式 */
+.streams-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.streams-container::-webkit-scrollbar-track {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+}
+
+.streams-container::-webkit-scrollbar-thumb {
+  background-color: #c0c4cc;
+  border-radius: 4px;
+  transition: background-color 0.3s ease;
+}
+
+.streams-container::-webkit-scrollbar-thumb:hover {
+  background-color: #909399;
 }
 </style>

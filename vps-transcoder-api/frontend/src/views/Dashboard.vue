@@ -166,6 +166,7 @@ onMounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* 防止容器本身滚动 */
 }
 
 .stream-list-header {
@@ -214,5 +215,15 @@ onMounted(() => {
   .welcome-text {
     display: none;
   }
+}
+
+/* 确保侧边栏高度正确计算 */
+.aside {
+  height: calc(100vh - 60px); /* 减去header高度 */
+}
+
+/* 优化流列表容器的高度计算 */
+.stream-list-container {
+  max-height: calc(100vh - 60px); /* 减去header高度 */
 }
 </style>
