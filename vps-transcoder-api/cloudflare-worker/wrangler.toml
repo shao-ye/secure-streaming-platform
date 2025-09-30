@@ -9,8 +9,8 @@ preview_id = "f36b78f5fd4d493aa567f9e8abf68348"
 
 # 路由配置
 [[routes]]
-pattern = "streaming.yourdomain.com/*"
-zone_name = "yourdomain.com"
+pattern = "yoyoapi.5202021.xyz/*"streaming
+zone_name = "streaming.5202021.xyz/*"
 
 # Durable Objects（如果需要）
 # [[durable_objects.bindings]]

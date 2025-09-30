@@ -24,7 +24,7 @@ function getSessionIdFromRequest(request) {
     return acc;
   }, {});
 
-  return cookies.sessionId;
+  return cookies.session || cookies.sessionId;
 }
 
 /**
@@ -188,7 +188,7 @@ export const handleAuth = {
       const response = successResponse(responseData, 'Login successful', request);
 
       // 设置安全的HttpOnly Cookie
-      const cookieValue = `sessionId=${sessionId}; HttpOnly; Secure; SameSite=Strict; Max-Age=${Math.floor(sessionTimeout / 1000)}; Path=/`;
+      const cookieValue = `session=${sessionId}; HttpOnly; Secure; SameSite=Strict; Max-Age=${Math.floor(sessionTimeout / 1000)}; Path=/`;
       response.headers.set('Set-Cookie', cookieValue);
 
       return response;
@@ -217,7 +217,7 @@ export const handleAuth = {
 
       // 创建响应并清除Cookie
       const response = successResponse(null, 'Logout successful', request);
-      response.headers.set('Set-Cookie', 'sessionId=; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Path=/');
+      response.headers.set('Set-Cookie', 'session=; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Path=/');
 
       return response;
 
