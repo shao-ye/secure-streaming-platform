@@ -12,10 +12,12 @@ export const useStreamsStore = defineStore('streams', () => {
     try {
       const response = await axios.get('/api/streams')
       if (response.data.status === 'success') {
-        streams.value = response.data.streams
+        // 修复数据结构解析：API返回的数据在 response.data.data.streams 中
+        streams.value = response.data.data?.streams || []
       }
     } catch (error) {
       console.error('获取频道列表失败:', error)
+      streams.value = [] // 确保出错时清空列表
     } finally {
       loading.value = false
     }
