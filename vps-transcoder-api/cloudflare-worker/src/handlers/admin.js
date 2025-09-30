@@ -301,6 +301,63 @@ export const handleAdmin = {
   },
 
   /**
+   * 更新流配置排序
+   */
+  async updateStreamSort(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      const { id: streamId } = request.params;
+      if (!streamId) {
+        return errorResponse('Stream ID is required', 'MISSING_STREAM_ID', 400, request);
+      }
+
+      let sortData;
+      try {
+        sortData = await request.json();
+      } catch (error) {
+        return errorResponse('Invalid JSON in request body', 'INVALID_JSON', 400, request);
+      }
+
+      const { sortOrder } = sortData;
+      if (typeof sortOrder !== 'number') {
+        return errorResponse('Sort order must be a number', 'INVALID_SORT_ORDER', 400, request);
+      }
+
+      // 获取现有流配置
+      const existingStream = await getStreamConfig(env, streamId);
+      if (!existingStream) {
+        return errorResponse(
+          `Stream with ID '${streamId}' not found`,
+          'STREAM_NOT_FOUND',
+          404,
+          request
+        );
+      }
+
+      // 更新排序
+      const updatedStream = await updateStreamConfig(env, streamId, {
+        ...existingStream,
+        sortOrder: sortOrder,
+        updatedAt: new Date().toISOString()
+      });
+
+      logInfo(env, 'Admin updated stream sort order', {
+        username: auth.user.username,
+        streamId: streamId,
+        sortOrder: sortOrder
+      });
+
+      return successResponse(updatedStream, 'Stream sort order updated successfully', request);
+
+    } catch (error) {
+      logError(env, 'Admin update stream sort handler error', error);
+      return errorResponse('Failed to update stream sort order', 'ADMIN_SORT_ERROR', 500, request);
+    }
+  },
+
+  /**
    * 获取系统状态信息
    */
   async getSystemStatus(request, env, ctx) {

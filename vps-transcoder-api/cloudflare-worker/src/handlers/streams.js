@@ -116,11 +116,18 @@ export const handleStreams = {
       // 获取流配置
       const streamsConfig = await getStreamsConfig(env);
 
-      // 只返回用户需要的信息（隐藏敏感的RTMP URL）
-      const publicStreams = streamsConfig.map(stream => ({
+      // 按排序字段排序，然后只返回用户需要的信息（隐藏敏感的RTMP URL）
+      const sortedStreams = streamsConfig.sort((a, b) => {
+        const orderA = a.sortOrder || 0;
+        const orderB = b.sortOrder || 0;
+        return orderA - orderB;
+      });
+
+      const publicStreams = sortedStreams.map(stream => ({
         id: stream.id,
         name: stream.name,
-        createdAt: stream.createdAt
+        createdAt: stream.createdAt,
+        sortOrder: stream.sortOrder || 0
       }));
 
       logInfo(env, 'Streams list retrieved', {

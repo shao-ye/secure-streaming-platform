@@ -33,10 +33,108 @@ export default {
       router.get('/admin', (req, env, ctx) => handlePages.admin(req, env, ctx));
 
       // 认证相关API
-      router.post('/login', (req, env, ctx) => handleAuth.login(req, env, ctx));
-      router.post('/logout', (req, env, ctx) => handleAuth.logout(req, env, ctx));
+      router.post('/api/login', (req, env, ctx) => handleAuth.login(req, env, ctx));
+      router.post('/api/logout', (req, env, ctx) => handleAuth.logout(req, env, ctx));
       router.get('/api/me', (req, env, ctx) => handleAuth.getCurrentUser(req, env, ctx));
       router.get('/api/user', (req, env, ctx) => handleAuth.getCurrentUser(req, env, ctx)); // 前端需要的端点
+
+      // 临时调试端点 - 查看用户数据
+      router.get('/api/debug/user', async (req, env, ctx) => {
+        try {
+          const userData = await env.YOYO_USER_DB.get('user:admin');
+          return new Response(
+            JSON.stringify({
+              status: 'success',
+              message: 'User data retrieved for debugging',
+              data: userData ? JSON.parse(userData) : null,
+              timestamp: new Date().toISOString()
+            }),
+            {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+              }
+            }
+          );
+        } catch (error) {
+          return new Response(
+            JSON.stringify({
+              status: 'error',
+              message: 'Failed to retrieve user data',
+              error: error.message,
+              timestamp: new Date().toISOString()
+            }),
+            {
+              status: 500,
+              headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+              }
+            }
+          );
+        }
+      });
+
+      // 临时调试端点 - 查看会话数据（通过查询参数）
+      router.get('/api/debug/session', async (req, env, ctx) => {
+        try {
+          const url = new URL(req.url);
+          const sessionId = url.searchParams.get('id');
+          
+          if (!sessionId) {
+            return new Response(
+              JSON.stringify({
+                status: 'error',
+                message: 'Session ID is required as query parameter: ?id=sessionId',
+                timestamp: new Date().toISOString()
+              }),
+              {
+                status: 400,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Access-Control-Allow-Origin': '*'
+                }
+              }
+            );
+          }
+          
+          const sessionData = await env.YOYO_USER_DB.get(`session:${sessionId}`);
+          return new Response(
+            JSON.stringify({
+              status: 'success',
+              message: 'Session data retrieved for debugging',
+              data: sessionData ? JSON.parse(sessionData) : null,
+              sessionId: sessionId,
+              exists: !!sessionData,
+              timestamp: new Date().toISOString()
+            }),
+            {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+              }
+            }
+          );
+        } catch (error) {
+          return new Response(
+            JSON.stringify({
+              status: 'error',
+              message: 'Failed to retrieve session data',
+              error: error.message,
+              timestamp: new Date().toISOString()
+            }),
+            {
+              status: 500,
+              headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+              }
+            }
+          );
+        }
+      });
 
       // 系统状态API（通用）
       router.get('/api/status', (req, env, ctx) => {
@@ -61,26 +159,42 @@ export default {
       // 初始化管理员用户端点（修复登录页面持续刷新问题）
       router.post('/api/init-admin', async (req, env, ctx) => {
         try {
+          // 导入密码哈希函数
+          const { hashPassword, generateRandomString } = await import('./utils/crypto.js');
+          
           // 检查是否已存在管理员用户
           const existingUser = await env.YOYO_USER_DB.get('user:admin');
           if (existingUser) {
-            return new Response(JSON.stringify({
-              status: 'success',
-              message: 'Admin user already exists',
-              data: { username: 'admin', role: 'admin', status: 'already_exists' }
-            }), {
-              status: 200,
-              headers: {
-                'Content-Type': 'application/json',
-                ...getCorsHeaders(req)
-              }
-            });
+            const userData = JSON.parse(existingUser);
+            // 如果用户存在但缺少密码字段，则重新创建
+            if (!userData.hashedPassword || !userData.salt) {
+              console.log('Admin user exists but missing password fields, recreating...');
+            } else {
+              return new Response(JSON.stringify({
+                status: 'success',
+                message: 'Admin user already exists with complete data',
+                data: { username: 'admin', role: 'admin', status: 'already_exists' }
+              }), {
+                status: 200,
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...getCorsHeaders(req)
+                }
+              });
+            }
           }
 
-          // 创建管理员用户数据
+          // 生成密码哈希和盐值
+          const password = 'admin123';
+          const salt = generateRandomString(16);
+          const hashedPassword = await hashPassword(password, salt);
+
+          // 创建完整的管理员用户数据
           const adminUser = {
             username: 'admin',
             role: 'admin',
+            hashedPassword: hashedPassword,
+            salt: salt,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
@@ -94,11 +208,12 @@ export default {
 
           return new Response(JSON.stringify({
             status: 'success',
-            message: 'Admin user initialized successfully',
+            message: 'Admin user initialized successfully with password',
             data: {
               username: adminUser.username,
               role: adminUser.role,
-              createdAt: adminUser.createdAt
+              createdAt: adminUser.createdAt,
+              hasPassword: true
             }
           }), {
             status: 200,
@@ -131,9 +246,10 @@ export default {
       router.get('/api/stream/:id/status', (req, env, ctx) => handleStreams.getStreamStatus(req, env, ctx));
       router.get('/api/streams/status', (req, env, ctx) => handleStreams.getAllStreamsStatus(req, env, ctx));
 
-      // 管理员功能API
+      // 管理员功能API - 注意路由顺序，更具体的路由要放在前面
       router.get('/api/admin/streams', (req, env, ctx) => handleAdmin.getStreams(req, env, ctx));
       router.post('/api/admin/streams', (req, env, ctx) => handleAdmin.createStream(req, env, ctx));
+      router.put('/api/admin/streams/:id/sort', (req, env, ctx) => handleAdmin.updateStreamSort(req, env, ctx));
       router.put('/api/admin/streams/:id', (req, env, ctx) => handleAdmin.updateStream(req, env, ctx));
       router.delete('/api/admin/streams/:id', (req, env, ctx) => handleAdmin.deleteStream(req, env, ctx));
       

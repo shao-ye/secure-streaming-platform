@@ -8,13 +8,20 @@ import { errorResponse, successResponse } from '../utils/cors.js';
 import { logAuthEvent, logError, logInfo } from '../utils/logger.js';
 
 /**
- * 从请求中提取会话ID
+ * 从请求中提取会话ID（支持Authorization header和Cookie）
  */
 function getSessionIdFromRequest(request) {
   if (!request || !request.headers) {
     return null;
   }
   
+  // 优先从Authorization header获取token
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7);
+  }
+  
+  // 如果没有Authorization header，则从Cookie获取
   const cookieHeader = request.headers.get('Cookie');
   if (!cookieHeader) return null;
 
@@ -181,14 +188,15 @@ export const handleAuth = {
         session: {
           sessionId: session.sessionId,
           expiresAt: new Date(session.expiresAt).toISOString()
-        }
+        },
+        token: sessionId // 返回token供前端使用Authorization header
       };
 
       // 创建响应并设置Cookie
       const response = successResponse(responseData, 'Login successful', request);
 
-      // 设置安全的HttpOnly Cookie
-      const cookieValue = `session=${sessionId}; HttpOnly; Secure; SameSite=Strict; Max-Age=${Math.floor(sessionTimeout / 1000)}; Path=/`;
+      // 设置简化的Cookie（避免跨域问题）
+      const cookieValue = `session=${sessionId}; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(sessionTimeout / 1000)}; Path=/`;
       response.headers.set('Set-Cookie', cookieValue);
 
       return response;
