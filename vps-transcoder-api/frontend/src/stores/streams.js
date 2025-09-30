@@ -109,6 +109,21 @@ export const useStreamsStore = defineStore('streams', () => {
     }
   }
 
+  const updateStreamSort = async (id, sortOrder) => {
+    try {
+      const response = await axios.put(`/api/admin/streams/${id}/sort`, { sortOrder })
+      if (response.data.status === 'success') {
+        return { success: true }
+      }
+      return { success: false, message: response.data.message }
+    } catch (error) {
+      return { 
+        success: false, 
+        message: error.response?.data?.message || '更新排序失败' 
+      }
+    }
+  }
+
   return {
     streams,
     loading,
@@ -119,6 +134,7 @@ export const useStreamsStore = defineStore('streams', () => {
     fetchAdminStreams,
     addStream,
     updateStream,
-    deleteStream
+    deleteStream,
+    updateStreamSort
   }
 })
