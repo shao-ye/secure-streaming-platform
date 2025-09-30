@@ -37,8 +37,10 @@ async function requireAdmin(request, env) {
 function validateStreamData(data, isUpdate = false) {
   const errors = [];
 
-  if (!isUpdate && (!data.id || typeof data.id !== 'string')) {
-    errors.push('Stream ID is required and must be a string');
+  // 对于新建流，ID是可选的（如果没有提供会自动生成）
+  // 对于更新流，不检查ID（因为ID不允许更改）
+  if (data.id && typeof data.id !== 'string') {
+    errors.push('Stream ID must be a string');
   }
 
   if (data.id && !/^[a-zA-Z0-9_-]+$/.test(data.id)) {
