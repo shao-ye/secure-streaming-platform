@@ -64,7 +64,7 @@
 
       <el-table
         v-loading="streamsStore.loading"
-        :data="streamsStore.streams"
+        :data="sortedStreams"
         stripe
         border
         style="width: 100%"
@@ -78,9 +78,36 @@
             </el-tooltip>
           </template>
         </el-table-column>
+        <el-table-column label="排序" width="100" align="center">
+          <template #default="scope">
+            <span class="sort-order">{{ scope.row.sortOrder || 0 }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180">
           <template #default="scope">
             {{ formatDate(scope.row.createdAt) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="排序操作" width="120" align="center">
+          <template #default="scope">
+            <el-button-group>
+              <el-button
+                type="primary"
+                size="small"
+                :icon="ArrowUp"
+                :disabled="scope.$index === 0"
+                @click="moveUp(scope.$index)"
+                title="上移"
+              />
+              <el-button
+                type="primary"
+                size="small"
+                :icon="ArrowDown"
+                :disabled="scope.$index === sortedStreams.length - 1"
+                @click="moveDown(scope.$index)"
+                title="下移"
+              />
+            </el-button-group>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
@@ -157,9 +184,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Edit, Delete } from '@element-plus/icons-vue'
+import { Refresh, Edit, Delete, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
 import { useStreamsStore } from '../stores/streams'
 import dayjs from 'dayjs'
 
@@ -170,6 +197,16 @@ const editFormRef = ref(null)
 const addLoading = ref(false)
 const editLoading = ref(false)
 const editDialogVisible = ref(false)
+
+// 排序后的频道列表
+const sortedStreams = computed(() => {
+  const streams = [...streamsStore.streams]
+  return streams.sort((a, b) => {
+    const orderA = a.sortOrder || 0
+    const orderB = b.sortOrder || 0
+    return orderA - orderB
+  })
+})
 
 const addForm = reactive({
   name: '',
@@ -300,6 +337,57 @@ const refreshList = () => {
 const formatDate = (timestamp) => {
   if (!timestamp) return '-'
   return dayjs(timestamp).format('YYYY-MM-DD HH:mm:ss')
+}
+
+// 排序功能
+const moveUp = async (index) => {
+  if (index === 0) return
+  
+  const currentStream = sortedStreams.value[index]
+  const prevStream = sortedStreams.value[index - 1]
+  
+  // 交换排序值
+  const tempOrder = currentStream.sortOrder || index
+  const newCurrentOrder = prevStream.sortOrder || (index - 1)
+  const newPrevOrder = tempOrder
+  
+  try {
+    // 更新两个频道的排序
+    await Promise.all([
+      streamsStore.updateStreamSort(currentStream.id, newCurrentOrder),
+      streamsStore.updateStreamSort(prevStream.id, newPrevOrder)
+    ])
+    
+    ElMessage.success('排序更新成功')
+    await streamsStore.fetchAdminStreams() // 刷新列表
+  } catch (error) {
+    ElMessage.error('排序更新失败')
+  }
+}
+
+const moveDown = async (index) => {
+  if (index === sortedStreams.value.length - 1) return
+  
+  const currentStream = sortedStreams.value[index]
+  const nextStream = sortedStreams.value[index + 1]
+  
+  // 交换排序值
+  const tempOrder = currentStream.sortOrder || index
+  const newCurrentOrder = nextStream.sortOrder || (index + 1)
+  const newNextOrder = tempOrder
+  
+  try {
+    // 更新两个频道的排序
+    await Promise.all([
+      streamsStore.updateStreamSort(currentStream.id, newCurrentOrder),
+      streamsStore.updateStreamSort(nextStream.id, newNextOrder)
+    ])
+    
+    ElMessage.success('排序更新成功')
+    await streamsStore.fetchAdminStreams() // 刷新列表
+  } catch (error) {
+    ElMessage.error('排序更新失败')
+  }
 }
 
 onMounted(() => {
