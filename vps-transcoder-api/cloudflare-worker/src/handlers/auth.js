@@ -8,7 +8,7 @@ import { errorResponse, successResponse } from '../utils/cors.js';
 import { logAuthEvent, logError, logInfo } from '../utils/logger.js';
 
 /**
- * 从请求中提取会话ID（支持Authorization header和Cookie）
+ * 从请求中提取会话ID（支持Authorization header、Cookie和查询参数）
  */
 function getSessionIdFromRequest(request) {
   if (!request || !request.headers) {
@@ -21,7 +21,14 @@ function getSessionIdFromRequest(request) {
     return authHeader.substring(7);
   }
   
-  // 如果没有Authorization header，则从Cookie获取
+  // 从查询参数获取token（用于HLS文件请求）
+  const url = new URL(request.url);
+  const tokenFromQuery = url.searchParams.get('token');
+  if (tokenFromQuery) {
+    return tokenFromQuery;
+  }
+  
+  // 如果没有Authorization header和查询参数，则从Cookie获取
   const cookieHeader = request.headers.get('Cookie');
   if (!cookieHeader) return null;
 
