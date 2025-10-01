@@ -93,13 +93,29 @@ export const handleProxy = {
         }
 
         // 获取响应内容
-        const responseBody = await vpsResponse.arrayBuffer();
+        let responseBody = await vpsResponse.arrayBuffer();
+
+        // 如果是m3u8文件，需要修改其中的片段URL以包含认证token
+        if (fileExtension === 'm3u8') {
+          const m3u8Content = new TextDecoder().decode(responseBody);
+          const url = new URL(request.url);
+          const token = url.searchParams.get('token');
+          
+          if (token) {
+            // 修改m3u8内容，为所有.ts片段URL添加token参数
+            const modifiedContent = m3u8Content.replace(
+              /^([^#\n\r]+\.ts)$/gm,
+              `$1?token=${token}`
+            );
+            responseBody = new TextEncoder().encode(modifiedContent);
+          }
+        }
 
         // 准备响应头
         const responseHeaders = {
           'Content-Type': vpsResponse.headers.get('Content-Type') || 
                           (fileExtension === 'm3u8' ? 'application/vnd.apple.mpegurl' : 'video/mp2t'),
-          'Content-Length': vpsResponse.headers.get('Content-Length'),
+          'Content-Length': responseBody.byteLength.toString(),
           'Last-Modified': vpsResponse.headers.get('Last-Modified'),
           'ETag': vpsResponse.headers.get('ETag'),
           'Access-Control-Allow-Origin': '*',

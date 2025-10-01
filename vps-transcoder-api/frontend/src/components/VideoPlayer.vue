@@ -411,13 +411,18 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 强制16:9宽高比容器 */
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  max-height: calc(100vh - 200px);
 }
 
 .video-element {
   width: 100%;
   height: 100%;
-  max-height: calc(100vh - 200px);
-  object-fit: contain;
+  /* 强制16:9宽高比 */
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
   background-color: #000;
 }
 
@@ -472,6 +477,11 @@ onUnmounted(() => {
 
   .stream-title {
     font-size: 16px;
+  }
+
+  .player-container {
+    /* 移动设备上保持16:9比例，调整最大高度 */
+    max-height: calc(100vh - 150px);
   }
 
   .player-info {
