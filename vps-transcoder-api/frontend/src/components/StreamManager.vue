@@ -245,10 +245,11 @@ const sortedStreams = computed(() => {
 // 动态计算表格最大高度
 const tableMaxHeight = computed(() => {
   // 基础高度：视窗高度减去其他元素占用的空间
-  const baseHeight = window.innerHeight - 500 // 大幅增加预留空间，强制显示滚动条
-  // 如果表单折叠，可以增加更多高度给表格
-  const extraHeight = isFormCollapsed.value ? 60 : 0
-  return Math.max(250, baseHeight + extraHeight) // 大幅降低最小高度到250px，确保滚动条出现
+  const baseHeight = window.innerHeight - 450 // 适中的预留空间
+  // 表单折叠时可以显著增加表格高度
+  const extraHeight = isFormCollapsed.value ? 150 : 0
+  // 确保表格有合理的高度范围，既能显示足够内容又能保证滚动条出现
+  return Math.max(280, Math.min(500, baseHeight + extraHeight))
 })
 
 const addForm = reactive({
@@ -479,6 +480,7 @@ onMounted(() => {
   border-radius: 4px;
   position: relative;
   min-height: 400px; /* 设置最小高度确保表格有足够显示空间 */
+  padding-bottom: 20px; /* 为最后一行添加底部间距 */
 }
 
 /* 表格滚动条样式优化 */
@@ -489,6 +491,7 @@ onMounted(() => {
 .table-container :deep(.el-table__body-wrapper) {
   overflow-y: auto !important;
   scrollbar-width: thin; /* Firefox 滚动条样式 */
+  padding-bottom: 15px; /* 为表格内容添加底部间距 */
 }
 
 .table-container :deep(.el-table__body-wrapper::-webkit-scrollbar) {
