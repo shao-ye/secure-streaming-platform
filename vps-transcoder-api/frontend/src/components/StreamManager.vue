@@ -83,6 +83,7 @@
           border
           style="width: 100%"
           :max-height="tableMaxHeight"
+          height="500"
         >
         <el-table-column prop="id" label="ID" width="120" />
         <el-table-column prop="name" label="频道名称" min-width="200" />
@@ -228,10 +229,10 @@ const sortedStreams = computed(() => {
 // 动态计算表格最大高度
 const tableMaxHeight = computed(() => {
   // 基础高度：视窗高度减去其他元素占用的空间
-  const baseHeight = window.innerHeight - 300 // 为头部、表单等预留空间
+  const baseHeight = window.innerHeight - 350 // 为头部、表单等预留空间
   // 如果表单折叠，可以增加更多高度给表格
-  const extraHeight = isFormCollapsed.value ? 200 : 0
-  return Math.max(400, baseHeight + extraHeight) // 最小高度400px
+  const extraHeight = isFormCollapsed.value ? 150 : 0
+  return Math.max(500, baseHeight + extraHeight) // 最小高度500px，确保有足够空间显示数据
 })
 
 const addForm = reactive({
@@ -458,30 +459,45 @@ onMounted(() => {
 .table-container {
   overflow: hidden;
   border-radius: 4px;
+  max-height: 600px; /* 设置容器最大高度 */
+  position: relative;
 }
 
 /* 表格滚动条样式优化 */
+.table-container :deep(.el-table) {
+  height: 100%;
+}
+
 .table-container :deep(.el-table__body-wrapper) {
-  overflow-y: auto;
+  overflow-y: auto !important;
+  max-height: 500px; /* 确保表格主体有滚动 */
 }
 
 .table-container :deep(.el-table__body-wrapper::-webkit-scrollbar) {
-  width: 8px;
+  width: 10px;
 }
 
 .table-container :deep(.el-table__body-wrapper::-webkit-scrollbar-track) {
-  background-color: #f5f5f5;
-  border-radius: 4px;
+  background-color: #f1f1f1;
+  border-radius: 5px;
 }
 
 .table-container :deep(.el-table__body-wrapper::-webkit-scrollbar-thumb) {
   background-color: #c0c4cc;
-  border-radius: 4px;
+  border-radius: 5px;
   transition: background-color 0.3s ease;
 }
 
 .table-container :deep(.el-table__body-wrapper::-webkit-scrollbar-thumb:hover) {
   background-color: #909399;
+}
+
+/* 确保表格头部固定 */
+.table-container :deep(.el-table__header-wrapper) {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: #fafafa;
 }
 
 .rtmp-url {
