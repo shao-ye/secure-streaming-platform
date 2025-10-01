@@ -28,18 +28,30 @@
 
       <el-container>
         <!-- 侧边栏 -->
-        <el-aside width="300px" class="aside">
+        <el-aside :width="sidebarCollapsed ? '60px' : '300px'" class="aside">
           <div class="stream-list-container">
             <div class="stream-list-header">
-              <h3>频道列表</h3>
-              <el-button 
-                :icon="Refresh"
-                @click="refreshStreams"
-                :loading="streamsStore.loading"
-                circle
-              />
+              <h3 v-if="!sidebarCollapsed">频道列表</h3>
+              <div class="header-buttons">
+                <el-button 
+                  v-if="!sidebarCollapsed"
+                  :icon="Refresh"
+                  @click="refreshStreams"
+                  :loading="streamsStore.loading"
+                  circle
+                />
+                <el-button 
+                  :icon="sidebarCollapsed ? Expand : Fold"
+                  @click="toggleSidebar"
+                  circle
+                  :title="sidebarCollapsed ? '展开' : '收起'"
+                />
+              </div>
             </div>
-            <StreamList @stream-select="handleStreamSelect" />
+            <StreamList 
+              v-if="!sidebarCollapsed" 
+              @stream-select="handleStreamSelect" 
+            />
           </div>
         </el-aside>
 
@@ -69,7 +81,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Setting, SwitchButton, Refresh } from '@element-plus/icons-vue'
+import { Setting, SwitchButton, Refresh, Fold, Expand } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useStreamsStore } from '../stores/streams'
 import StreamList from '../components/StreamList.vue'
@@ -81,6 +93,7 @@ const streamsStore = useStreamsStore()
 
 const currentHlsUrl = ref('')
 const currentStreamName = ref('')
+const sidebarCollapsed = ref(false)
 
 const handleStreamSelect = async (stream) => {
   try {
@@ -101,6 +114,10 @@ const handlePlayerError = (error) => {
 
 const refreshStreams = () => {
   streamsStore.fetchStreams()
+}
+
+const toggleSidebar = () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
 const handleLogout = async () => {
@@ -181,6 +198,16 @@ onMounted(() => {
 .stream-list-header h3 {
   margin: 0;
   color: #303133;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.aside {
+  transition: width 0.3s ease;
 }
 
 .main {

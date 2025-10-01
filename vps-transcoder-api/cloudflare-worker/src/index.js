@@ -156,6 +156,105 @@ export default {
         );
       });
 
+      // 初始化所有用户端点（包括管理员和普通用户）
+      router.post('/api/init-users', async (req, env, ctx) => {
+        try {
+          // 导入密码哈希函数
+          const { hashPassword, generateRandomString } = await import('./utils/crypto.js');
+          
+          const results = [];
+          
+          // 定义所有用户
+          const users = [
+            { username: 'admin', password: 'admin123', role: 'admin' },
+            { username: 'yangyang', password: '123456', role: 'user' },
+            { username: '凤凰', password: '123456', role: 'user' }
+          ];
+          
+          for (const userInfo of users) {
+            // 检查用户是否已存在
+            const existingUser = await env.YOYO_USER_DB.get(`user:${userInfo.username}`);
+            
+            if (existingUser) {
+              const userData = JSON.parse(existingUser);
+              // 如果用户存在但缺少密码字段，则重新创建
+              if (!userData.hashedPassword || !userData.salt) {
+                console.log(`User ${userInfo.username} exists but missing password fields, recreating...`);
+              } else {
+                results.push({
+                  username: userInfo.username,
+                  status: 'already_exists',
+                  role: userInfo.role
+                });
+                continue;
+              }
+            }
+            
+            // 生成密码哈希和盐值
+            const salt = generateRandomString(16);
+            const hashedPassword = await hashPassword(userInfo.password, salt);
+            
+            // 创建用户数据
+            const userData = {
+              username: userInfo.username,
+              role: userInfo.role,
+              hashedPassword: hashedPassword,
+              salt: salt,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            };
+            
+            // 存储到KV数据库
+            await env.YOYO_USER_DB.put(`user:${userInfo.username}`, JSON.stringify(userData));
+            
+            results.push({
+              username: userInfo.username,
+              status: 'created',
+              role: userInfo.role,
+              createdAt: userData.createdAt
+            });
+          }
+          
+          // 初始化空的流配置（如果不存在）
+          const existingStreams = await env.YOYO_USER_DB.get('streams:config');
+          if (!existingStreams) {
+            const initialStreams = [];
+            await env.YOYO_USER_DB.put('streams:config', JSON.stringify(initialStreams));
+          }
+          
+          return new Response(JSON.stringify({
+            status: 'success',
+            message: 'Users initialized successfully',
+            data: {
+              users: results,
+              totalUsers: results.length,
+              newUsers: results.filter(u => u.status === 'created').length,
+              existingUsers: results.filter(u => u.status === 'already_exists').length
+            }
+          }), {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+              ...getCorsHeaders(req)
+            }
+          });
+          
+        } catch (error) {
+          console.error('Init users error:', error);
+          return new Response(JSON.stringify({
+            status: 'error',
+            message: 'Failed to initialize users',
+            error: error.message
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...getCorsHeaders(req)
+            }
+          });
+        }
+      });
+
       // 初始化管理员用户端点（修复登录页面持续刷新问题）
       router.post('/api/init-admin', async (req, env, ctx) => {
         try {

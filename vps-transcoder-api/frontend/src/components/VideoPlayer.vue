@@ -407,7 +407,6 @@ onUnmounted(() => {
 }
 
 .player-container {
-  flex: 1;
   position: relative;
   display: flex;
   align-items: center;
@@ -417,7 +416,8 @@ onUnmounted(() => {
   aspect-ratio: 16 / 9;
   background-color: #000;
   /* 限制最大高度避免溢出 */
-  max-height: calc(100vh - 150px);
+  max-height: calc(100vh - 200px);
+  flex-shrink: 0;
 }
 
 .video-element {
@@ -452,7 +452,6 @@ onUnmounted(() => {
   border-top: 1px solid #333;
   font-size: 12px;
   flex-shrink: 0;
-  margin-top: auto;
 }
 
 .info-item {
