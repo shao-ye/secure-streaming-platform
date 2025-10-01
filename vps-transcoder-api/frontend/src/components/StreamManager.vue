@@ -91,6 +91,7 @@
           style="width: 100%"
           :max-height="tableMaxHeight"
         >
+        <el-table-column type="index" label="序号" width="60" :index="(index) => index + 1" />
         <el-table-column prop="id" label="ID" width="120" />
         <el-table-column prop="name" label="频道名称" min-width="200" />
         <el-table-column prop="rtmpUrl" label="RTMP地址" min-width="300">
@@ -244,10 +245,10 @@ const sortedStreams = computed(() => {
 // 动态计算表格最大高度
 const tableMaxHeight = computed(() => {
   // 基础高度：视窗高度减去其他元素占用的空间
-  const baseHeight = window.innerHeight - 350 // 增加预留空间，让表格高度更合理
+  const baseHeight = window.innerHeight - 400 // 进一步增加预留空间，确保滚动条出现
   // 如果表单折叠，可以增加更多高度给表格
-  const extraHeight = isFormCollapsed.value ? 100 : 0
-  return Math.max(400, baseHeight + extraHeight) // 降低最小高度到400px，确保会出现滚动条
+  const extraHeight = isFormCollapsed.value ? 80 : 0
+  return Math.max(300, baseHeight + extraHeight) // 进一步降低最小高度到300px，强制显示滚动条
 })
 
 const addForm = reactive({
