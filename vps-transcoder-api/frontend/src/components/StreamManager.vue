@@ -245,10 +245,10 @@ const sortedStreams = computed(() => {
 // 动态计算表格最大高度
 const tableMaxHeight = computed(() => {
   // 基础高度：视窗高度减去其他元素占用的空间
-  const baseHeight = window.innerHeight - 400 // 进一步增加预留空间，确保滚动条出现
+  const baseHeight = window.innerHeight - 500 // 大幅增加预留空间，强制显示滚动条
   // 如果表单折叠，可以增加更多高度给表格
-  const extraHeight = isFormCollapsed.value ? 80 : 0
-  return Math.max(300, baseHeight + extraHeight) // 进一步降低最小高度到300px，强制显示滚动条
+  const extraHeight = isFormCollapsed.value ? 60 : 0
+  return Math.max(250, baseHeight + extraHeight) // 大幅降低最小高度到250px，确保滚动条出现
 })
 
 const addForm = reactive({
