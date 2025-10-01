@@ -46,6 +46,9 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 
+// 信任代理配置 - 修复Rate-Limit问题
+app.set('trust proxy', 1);
+
 // CORS配置
 app.use(cors({
     origin: NODE_ENV === 'development' ? true : process.env.ALLOWED_ORIGINS?.split(',') || [],
@@ -65,15 +68,20 @@ if (NODE_ENV !== 'test') {
     }));
 }
 
-// 速率限制
+// 速率限制 - 针对VPS环境优化
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15分钟
-    max: NODE_ENV === 'development' ? 1000 : 100, // 开发环境更宽松
+    max: NODE_ENV === 'development' ? 1000 : 100,
     message: {
         error: 'Too many requests from this IP, please try again later.'
     },
     standardHeaders: true,
     legacyHeaders: false,
+    // 移除trustProxy配置，使用全局app.set('trust proxy', 1)设置
+    skip: (req) => {
+        // 跳过本地请求的速率限制
+        return req.ip === '127.0.0.1' || req.ip === '::1';
+    }
 });
 
 app.use('/api/', limiter);

@@ -53,44 +53,43 @@ class ProcessManager {
    */
   buildFFmpegArgs(rtmpUrl, streamId) {
     const outputDir = path.join(this.hlsOutputDir, streamId);
-    const outputFile = path.join(outputDir, 'stream.m3u8');
+    const outputFile = path.join(outputDir, 'playlist.m3u8');
 
     return [
-      // 输入配置
+      // 输入配置 - 优化连接参数
       '-i', rtmpUrl,
       '-fflags', '+genpts',
       '-avoid_negative_ts', 'make_zero',
-
-      // 视频编码配置
+      
+      // 连接优化参数
+      '-reconnect', '1',
+      '-reconnect_at_eof', '1',
+      '-reconnect_streamed', '1',
+      '-reconnect_delay_max', '2',
+      
+      // 视频编码配置 - 基于成功的手动测试优化
       '-c:v', 'libx264',
-      '-preset', 'veryfast',
+      '-preset', 'ultrafast',
       '-tune', 'zerolatency',
       '-profile:v', 'baseline',
       '-level', '3.0',
-      '-maxrate', '2500k',
-      '-bufsize', '5000k',
-      '-pix_fmt', 'yuv420p',
-      '-g', '50',
-      '-keyint_min', '25',
-      '-sc_threshold', '0',
-
+      '-g', '30',
+      '-keyint_min', '15',
+      
       // 音频编码配置
       '-c:a', 'aac',
-      '-b:a', '128k',
+      '-b:a', '96k',
       '-ac', '2',
       '-ar', '44100',
-
-      // HLS配置
+      
+      // HLS输出配置 - 与手动测试保持一致
       '-f', 'hls',
       '-hls_time', this.hlsSegmentTime.toString(),
       '-hls_list_size', this.hlsListSize.toString(),
-      '-hls_wrap', (this.hlsListSize * 2).toString(),
-      '-hls_delete_threshold', '1',
+      '-hls_segment_filename', path.join(outputDir, 'segment%03d.ts'),
       '-hls_flags', 'delete_segments+round_durations+independent_segments',
-      '-hls_segment_type', 'mpegts',
-      '-hls_segment_filename', path.join(outputDir, 'segment_%03d.ts'),
-      '-method', 'PUT',
-
+      '-hls_allow_cache', '0',
+      
       // 输出文件
       outputFile
     ];
@@ -98,11 +97,11 @@ class ProcessManager {
 
   /**
    * 启动视频流转码
-   * @param {string} streamId - 流ID
    * @param {string} rtmpUrl - RTMP输入流URL
+   * @param {string} streamId - 流ID
    * @returns {Promise<Object>} 启动结果
    */
-  async startStream(streamId, rtmpUrl) {
+  async startStream(rtmpUrl, streamId) {
     try {
       // 验证输入参数
       if (!streamId || !rtmpUrl) {
@@ -156,7 +155,7 @@ class ProcessManager {
       this.setupProcessEventHandlers(streamInfo);
 
       // 等待进程稳定启动（检查输出文件生成）
-      await this.waitForStreamReady(streamId, 10000); // 10秒超时
+      await this.waitForStreamReady(streamId, 30000); // 30秒超时（增加）
 
       streamInfo.status = 'running';
 
@@ -171,7 +170,7 @@ class ProcessManager {
         processId,
         pid: ffmpegProcess.pid,
         outputDir,
-        hlsUrl: `/hls/${streamId}/stream.m3u8`
+        hlsUrl: `/hls/${streamId}/playlist.m3u8`
       };
 
     } catch (error) {
@@ -252,10 +251,10 @@ class ProcessManager {
    * @param {number} timeout - 超时时间（毫秒）
    * @returns {Promise<void>}
    */
-  async waitForStreamReady(streamId, timeout = 10000) {
+  async waitForStreamReady(streamId, timeout = 30000) {
     const startTime = Date.now();
     const outputDir = path.join(this.hlsOutputDir, streamId);
-    const m3u8File = path.join(outputDir, 'stream.m3u8');
+    const m3u8File = path.join(outputDir, 'playlist.m3u8');
 
     return new Promise((resolve, reject) => {
       const checkReady = () => {

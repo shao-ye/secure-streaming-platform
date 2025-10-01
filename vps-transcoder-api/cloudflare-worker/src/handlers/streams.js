@@ -12,7 +12,7 @@ import { logStreamEvent, logError, logInfo } from '../utils/logger.js';
  */
 async function callTranscoderAPI(env, endpoint, method = 'GET', data = null) {
   try {
-    const vpsApiUrl = env.VPS_API_URL || 'http://your-vps-ip:3000';
+    const vpsApiUrl = env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz';
     const apiKey = env.VPS_API_KEY;
 
     if (!apiKey) {
@@ -74,14 +74,14 @@ async function callTranscoderAPI(env, endpoint, method = 'GET', data = null) {
  */
 async function checkVpsHealth(env) {
   try {
-    const vpsApiUrl = env.VPS_API_URL || 'http://your-vps-ip:3000';
+    const vpsApiUrl = env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz';
     const apiKey = env.VPS_API_KEY;
 
     if (!apiKey) {
       return { available: false, error: 'VPS API key not configured' };
     }
 
-    const response = await fetch(`${vpsApiUrl}/api/health`, {
+    const response = await fetch(`${vpsApiUrl}/health`, {
       method: 'GET',
       headers: {
         'X-API-Key': apiKey,
@@ -192,8 +192,8 @@ export const handleStreams = {
           processId: transcoderResponse.data?.processId
         });
 
-        // 返回HLS播放地址
-        const hlsUrl = `/hls/${streamId}/stream.m3u8`;
+        // 返回HLS播放地址（修复文件名匹配问题）
+        const hlsUrl = `/hls/${streamId}/playlist.m3u8`;
 
         return successResponse({
           streamId,

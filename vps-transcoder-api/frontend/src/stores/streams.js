@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import axios from '../utils/axios'
+import { config } from '../utils/config'
 
 export const useStreamsStore = defineStore('streams', () => {
   const streams = ref([])
@@ -27,11 +28,18 @@ export const useStreamsStore = defineStore('streams', () => {
     try {
       const response = await axios.post(`/api/play/${streamId}`)
       if (response.data.status === 'success') {
+        // 将相对路径转换为完整的HLS代理URL
+        let hlsUrl = response.data.hlsUrl
+        if (hlsUrl.startsWith('/hls/')) {
+          // 构建完整的HLS代理URL
+          hlsUrl = `${config.api.baseURL}${hlsUrl}`
+        }
+        
         currentStream.value = {
           id: streamId,
-          hlsUrl: response.data.hlsUrl
+          hlsUrl: hlsUrl
         }
-        return response.data.hlsUrl
+        return hlsUrl
       }
       throw new Error(response.data.message)
     } catch (error) {

@@ -29,7 +29,12 @@ vars = { ENVIRONMENT = "development" }
 
 # 生产环境配置
 [env.production]
-vars = { ENVIRONMENT = "production" }
+[env.production.vars]
+ENVIRONMENT = "production"
+VPS_API_URL = "https://yoyo-vps.5202021.xyz"
+VPS_HLS_URL = "https://yoyo-vps.5202021.xyz"
+VPS_ENABLED = "true"
+VPS_API_KEY = "85da076ae24b028b3d1ea1884e6b13c5afe34488be0f8d39a05fbbf26d23e938"
 
 [[env.production.kv_namespaces]]
 binding = "YOYO_USER_DB"

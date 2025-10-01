@@ -54,8 +54,8 @@ export const handleProxy = {
         return errorResponse('Invalid file type', 'INVALID_FILE_TYPE', 400, request);
       }
 
-      // 构建VPS上的HLS文件URL
-      const vpsBaseUrl = env.VPS_HLS_URL || `http://${env.VPS_IP || 'your-vps-ip'}:8080`;
+      // 构建VPS上的HLS文件URL（修复端口和域名配置）
+      const vpsBaseUrl = env.VPS_HLS_URL || 'https://yoyo-vps.5202021.xyz';
       const hlsFileUrl = `${vpsBaseUrl}/hls/${streamId}/${file}`;
 
       try {
