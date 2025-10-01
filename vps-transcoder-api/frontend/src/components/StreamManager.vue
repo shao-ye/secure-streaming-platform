@@ -244,10 +244,10 @@ const sortedStreams = computed(() => {
 // 动态计算表格最大高度
 const tableMaxHeight = computed(() => {
   // 基础高度：视窗高度减去其他元素占用的空间
-  const baseHeight = window.innerHeight - 280 // 减少预留空间，给表格更多显示区域
+  const baseHeight = window.innerHeight - 350 // 增加预留空间，让表格高度更合理
   // 如果表单折叠，可以增加更多高度给表格
-  const extraHeight = isFormCollapsed.value ? 180 : 0
-  return Math.max(600, baseHeight + extraHeight) // 最小高度600px，确保有足够空间显示数据
+  const extraHeight = isFormCollapsed.value ? 100 : 0
+  return Math.max(400, baseHeight + extraHeight) // 降低最小高度到400px，确保会出现滚动条
 })
 
 const addForm = reactive({
@@ -408,24 +408,17 @@ const moveUp = async (index) => {
   if (index === 0) return
   
   const currentStream = sortedStreams.value[index]
-  const prevStream = sortedStreams.value[index - 1]
   
-  // 交换排序值
-  const tempOrder = currentStream.sortOrder || index
-  const newCurrentOrder = prevStream.sortOrder || (index - 1)
-  const newPrevOrder = tempOrder
+  // 简单的排序值-1操作
+  const newSortOrder = Math.max(1, (currentStream.sortOrder || 1) - 1)
   
   try {
-    // 更新两个频道的排序
-    await Promise.all([
-      streamsStore.updateStreamSort(currentStream.id, newCurrentOrder),
-      streamsStore.updateStreamSort(prevStream.id, newPrevOrder)
-    ])
-    
+    await streamsStore.updateStreamSort(currentStream.id, newSortOrder)
     ElMessage.success('排序更新成功')
     await streamsStore.fetchAdminStreams() // 刷新列表
   } catch (error) {
     ElMessage.error('排序更新失败')
+    console.error('排序更新错误:', error)
   }
 }
 
@@ -433,24 +426,17 @@ const moveDown = async (index) => {
   if (index === sortedStreams.value.length - 1) return
   
   const currentStream = sortedStreams.value[index]
-  const nextStream = sortedStreams.value[index + 1]
   
-  // 交换排序值
-  const tempOrder = currentStream.sortOrder || index
-  const newCurrentOrder = nextStream.sortOrder || (index + 1)
-  const newNextOrder = tempOrder
+  // 简单的排序值+1操作
+  const newSortOrder = (currentStream.sortOrder || 1) + 1
   
   try {
-    // 更新两个频道的排序
-    await Promise.all([
-      streamsStore.updateStreamSort(currentStream.id, newCurrentOrder),
-      streamsStore.updateStreamSort(nextStream.id, newNextOrder)
-    ])
-    
+    await streamsStore.updateStreamSort(currentStream.id, newSortOrder)
     ElMessage.success('排序更新成功')
     await streamsStore.fetchAdminStreams() // 刷新列表
   } catch (error) {
     ElMessage.error('排序更新失败')
+    console.error('排序更新错误:', error)
   }
 }
 
