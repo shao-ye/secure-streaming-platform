@@ -162,10 +162,16 @@ export async function addStreamConfig(env, streamConfig) {
       throw new Error(`Stream with ID '${streamConfig.id}' already exists`);
     }
 
+    // 计算默认排序值（当前最大排序值+1）
+    const maxSortOrder = streamsConfig.reduce((max, stream) => {
+      return Math.max(max, stream.sortOrder || 0);
+    }, 0);
+
     const newStream = {
       id: streamConfig.id,
       name: streamConfig.name,
       rtmpUrl: streamConfig.rtmpUrl,
+      sortOrder: streamConfig.sortOrder !== undefined ? streamConfig.sortOrder : maxSortOrder + 1,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };

@@ -3,7 +3,7 @@
  * 主入口文件
  */
 
-import { Router } from './router';
+import { Router } from './router.js';
 import { handleOptions, getCorsHeaders } from './utils/cors';
 import { logError } from './utils/logger';
 
