@@ -422,7 +422,7 @@ onUnmounted(() => {
   height: 100%;
   /* 强制16:9宽高比 */
   aspect-ratio: 16 / 9;
-  object-fit: cover;
+  object-fit: contain;
   background-color: #000;
 }
 
