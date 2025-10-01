@@ -72,6 +72,13 @@
           >
             刷新
           </el-button>
+          <el-button 
+            type="info"
+            @click="debugData"
+            size="small"
+          >
+            调试数据
+          </el-button>
         </div>
       </template>
 
@@ -83,7 +90,6 @@
           border
           style="width: 100%"
           :max-height="tableMaxHeight"
-          height="500"
         >
         <el-table-column prop="id" label="ID" width="120" />
         <el-table-column prop="name" label="频道名称" min-width="200" />
@@ -184,6 +190,15 @@
             clearable
           />
         </el-form-item>
+        <el-form-item label="排序序号" prop="sortOrder">
+          <el-input-number
+            v-model="editForm.sortOrder"
+            :min="0"
+            :max="999"
+            placeholder="排序序号，数字越小越靠前"
+            style="width: 100%"
+          />
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -229,10 +244,10 @@ const sortedStreams = computed(() => {
 // 动态计算表格最大高度
 const tableMaxHeight = computed(() => {
   // 基础高度：视窗高度减去其他元素占用的空间
-  const baseHeight = window.innerHeight - 350 // 为头部、表单等预留空间
+  const baseHeight = window.innerHeight - 280 // 减少预留空间，给表格更多显示区域
   // 如果表单折叠，可以增加更多高度给表格
-  const extraHeight = isFormCollapsed.value ? 150 : 0
-  return Math.max(500, baseHeight + extraHeight) // 最小高度500px，确保有足够空间显示数据
+  const extraHeight = isFormCollapsed.value ? 180 : 0
+  return Math.max(600, baseHeight + extraHeight) // 最小高度600px，确保有足够空间显示数据
 })
 
 const addForm = reactive({
@@ -243,7 +258,8 @@ const addForm = reactive({
 const editForm = reactive({
   id: '',
   name: '',
-  rtmpUrl: ''
+  rtmpUrl: '',
+  sortOrder: 0
 })
 
 const formRules = {
@@ -300,6 +316,7 @@ const startEdit = (stream) => {
   editForm.id = stream.id
   editForm.name = stream.name
   editForm.rtmpUrl = stream.rtmpUrl
+  editForm.sortOrder = stream.sortOrder || 0
   editDialogVisible.value = true
 }
 
@@ -314,7 +331,8 @@ const handleEdit = async () => {
   try {
     const result = await streamsStore.updateStream(editForm.id, {
       name: editForm.name,
-      rtmpUrl: editForm.rtmpUrl
+      rtmpUrl: editForm.rtmpUrl,
+      sortOrder: editForm.sortOrder
     })
 
     if (result.success) {
@@ -359,6 +377,20 @@ const handleDelete = async (stream) => {
 
 const refreshList = () => {
   streamsStore.fetchAdminStreams()
+}
+
+// 调试数据功能
+const debugData = () => {
+  console.log('=== 调试数据 ===')
+  console.log('原始数据:', streamsStore.streams)
+  console.log('排序后数据:', sortedStreams.value)
+  console.log('表格最大高度:', tableMaxHeight.value)
+  console.log('表单是否折叠:', isFormCollapsed.value)
+  
+  ElMessage.info({
+    message: `共${streamsStore.streams.length}条数据，请查看浏览器控制台获取详细信息`,
+    duration: 3000
+  })
 }
 
 const formatDate = (timestamp) => {
@@ -457,20 +489,19 @@ onMounted(() => {
 }
 
 .table-container {
-  overflow: hidden;
   border-radius: 4px;
-  max-height: 600px; /* 设置容器最大高度 */
   position: relative;
+  min-height: 400px; /* 设置最小高度确保表格有足够显示空间 */
 }
 
 /* 表格滚动条样式优化 */
 .table-container :deep(.el-table) {
-  height: 100%;
+  border-radius: 4px;
 }
 
 .table-container :deep(.el-table__body-wrapper) {
   overflow-y: auto !important;
-  max-height: 500px; /* 确保表格主体有滚动 */
+  scrollbar-width: thin; /* Firefox 滚动条样式 */
 }
 
 .table-container :deep(.el-table__body-wrapper::-webkit-scrollbar) {
