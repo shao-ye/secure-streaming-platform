@@ -415,13 +415,13 @@ onUnmounted(() => {
   aspect-ratio: 16 / 9;
   max-width: 100%;
   max-height: calc(100vh - 200px);
+  background-color: #000;
 }
 
 .video-element {
-  width: 100%;
-  height: 100%;
-  /* 强制16:9宽高比 */
-  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  max-height: 100%;
+  /* 移除强制宽高比，让视频保持原始比例 */
   object-fit: contain;
   background-color: #000;
 }
