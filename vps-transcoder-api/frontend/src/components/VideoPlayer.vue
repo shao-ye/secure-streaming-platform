@@ -391,6 +391,7 @@ onUnmounted(() => {
   padding: 15px 20px;
   background-color: #1a1a1a;
   border-bottom: 1px solid #333;
+  flex-shrink: 0;
 }
 
 .stream-title {
@@ -411,17 +412,18 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 强制16:9宽高比容器 */
+  /* 确保容器保持16:9比例 */
+  width: 100%;
   aspect-ratio: 16 / 9;
-  max-width: 100%;
-  max-height: calc(100vh - 200px);
   background-color: #000;
+  /* 限制最大高度避免溢出 */
+  max-height: calc(100vh - 150px);
 }
 
 .video-element {
-  max-width: 100%;
-  max-height: 100%;
-  /* 移除强制宽高比，让视频保持原始比例 */
+  width: 100%;
+  height: 100%;
+  /* 保持视频完整显示在16:9容器内 */
   object-fit: contain;
   background-color: #000;
 }
@@ -449,6 +451,8 @@ onUnmounted(() => {
   background-color: #1a1a1a;
   border-top: 1px solid #333;
   font-size: 12px;
+  flex-shrink: 0;
+  margin-top: auto;
 }
 
 .info-item {
