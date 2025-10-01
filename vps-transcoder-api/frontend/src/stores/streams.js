@@ -28,8 +28,8 @@ export const useStreamsStore = defineStore('streams', () => {
     try {
       const response = await axios.post(`/api/play/${streamId}`)
       if (response.data.status === 'success') {
-        // 将相对路径转换为完整的HLS代理URL
-        let hlsUrl = response.data.hlsUrl
+        // 从正确的数据结构中获取HLS URL
+        let hlsUrl = response.data.data.hlsUrl
         if (hlsUrl.startsWith('/hls/')) {
           // 构建完整的HLS代理URL
           hlsUrl = `${config.api.baseURL}${hlsUrl}`
