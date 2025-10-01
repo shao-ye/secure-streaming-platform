@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import axios from '../utils/axios'
 import { config } from '../utils/config'
+import { useUserStore } from './user'
 
 export const useStreamsStore = defineStore('streams', () => {
   const streams = ref([])
@@ -33,6 +34,13 @@ export const useStreamsStore = defineStore('streams', () => {
         if (hlsUrl.startsWith('/hls/')) {
           // 构建完整的HLS代理URL
           hlsUrl = `${config.api.baseURL}${hlsUrl}`
+          
+          // 添加session token作为查询参数以解决HLS代理认证问题
+          const userStore = useUserStore()
+          if (userStore.token) {
+            const separator = hlsUrl.includes('?') ? '&' : '?'
+            hlsUrl = `${hlsUrl}${separator}token=${encodeURIComponent(userStore.token)}`
+          }
         }
         
         currentStream.value = {
