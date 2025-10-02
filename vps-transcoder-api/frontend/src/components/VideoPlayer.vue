@@ -71,11 +71,13 @@
           <span>缩放: {{ Math.round(scale * 100) }}%</span>
           <span>| 单指拖拽</span>
           <span>| 双击重置</span>
+          <span v-if="isFullscreen">| 全屏缩放</span>
         </div>
       </div>
     </div>
 
-    <div class="player-info">
+    <!-- 状态栏 - 在缩放时向下移动 -->
+    <div class="player-info" :class="{ 'zoomed-state': scale > 1 }">
       <div class="info-item">
         <span class="label">状态:</span>
         <el-tag :type="statusType" size="small">{{ status }}</el-tag>
@@ -653,6 +655,22 @@ onUnmounted(() => {
   max-height: calc(100vh - 200px);
   flex-shrink: 0;
   overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+/* 缩放状态下增加容器高度 */
+.video-player:has(.player-info.zoomed-state) .player-container {
+  max-height: calc(100vh - 160px);
+}
+
+/* 全屏状态下确保缩放功能正常工作 */
+.player-container:fullscreen,
+.player-container:-webkit-full-screen,
+.player-container:-moz-full-screen,
+.player-container:-ms-fullscreen {
+  max-height: 100vh;
+  width: 100vw;
+  height: 100vh;
 }
 
 /* 移除全屏状态下的触摸行为限制，让视频控件正常工作 */
@@ -729,6 +747,18 @@ onUnmounted(() => {
   border-top: 1px solid #333;
   font-size: 12px;
   flex-shrink: 0;
+  transition: transform 0.3s ease, margin-top 0.3s ease;
+  position: relative;
+  z-index: 10;
+}
+
+/* 缩放状态下状态栏向下移动，增加播放面积 */
+.player-info.zoomed-state {
+  transform: translateY(20px);
+  margin-top: 20px;
+  background-color: rgba(26, 26, 26, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: 8px 8px 0 0;
 }
 
 .info-item {
@@ -768,6 +798,18 @@ onUnmounted(() => {
     flex-direction: column;
     gap: 8px;
     padding: 10px 15px;
+  }
+
+  /* 移动端缩放状态下的状态栏优化 */
+  .player-info.zoomed-state {
+    transform: translateY(15px);
+    margin-top: 15px;
+    padding: 8px 12px;
+  }
+
+  /* 移动端缩放状态下增加更多容器高度 */
+  .video-player:has(.player-info.zoomed-state) .player-container {
+    max-height: calc(100vh - 120px);
   }
 
   .value {
