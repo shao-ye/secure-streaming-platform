@@ -583,65 +583,7 @@ const handleTouchEnd = (event) => {
   }
 }
 
-// 组件卸载时清理事件监听器
-onUnmounted(() => {
-  debugLog('VideoPlayer组件卸载，清理事件监听器')
-  
-  // 清理全屏状态监听器
-  document.removeEventListener('fullscreenchange', checkFullscreenState)
-  document.removeEventListener('webkitfullscreenchange', checkFullscreenState)
-  document.removeEventListener('mozfullscreenchange', checkFullscreenState)
-  document.removeEventListener('MSFullscreenChange', checkFullscreenState)
-  
-  // 清理屏幕方向和尺寸监听器
-  window.removeEventListener('orientationchange', checkFullscreenState)
-  window.removeEventListener('resize', checkFullscreenState)
-  
-  // 清理视频元素监听器
-  if (videoRef.value) {
-    videoRef.value.removeEventListener('webkitbeginfullscreen', checkFullscreenState)
-    videoRef.value.removeEventListener('webkitendfullscreen', checkFullscreenState)
-  }
-  
-  // 清理HLS实例
-  if (hls.value) {
-    hls.value.destroy()
-  }
-})
-
-// 双击重置缩放功能
-const handleDoubleClick = (event) => {
-  debugLog('双击事件:', {
-    remainingTouches: event.touches.length,
-    wasScaling: lastTouchDistance.value > 0,
-    wasDragging: isDragging.value
-  })
-  
-  touches.value = Array.from(event.touches)
-  
-  if (touches.value.length === 0) {
-    // 所有手指离开
-    isDragging.value = false
-    lastTouchDistance.value = 0
-    
-    // 如果缩放比例接近1，自动重置
-    if (scale.value < 1.1 && scale.value > 0.9) {
-      resetZoom()
-    }
-    debugLog('所有触摸结束')
-  } else if (touches.value.length === 1 && lastTouchDistance.value > 0) {
-    // 从双指变为单指，如果已缩放则开始拖拽
-    if (scale.value > 1) {
-      isDragging.value = true
-      lastPanPoint.value = {
-        x: touches.value[0].clientX,
-        y: touches.value[0].clientY
-      }
-    }
-    lastTouchDistance.value = 0
-    debugLog('从双指变为单指')
-  }
-}
+// 组件卸载时清理事件监听器（合并到下面的onUnmounted中）
 
 // 鼠标滚轮缩放支持
 const handleWheel = (event) => {
@@ -687,7 +629,7 @@ const handleDoubleClick = () => {
 }
 
 onUnmounted(() => {
-  debugLog('VideoPlayer组件卸载')
+  debugLog('VideoPlayer组件卸载，清理所有事件监听器')
   destroyHls()
   
   // 清理全屏状态监听器
@@ -695,6 +637,23 @@ onUnmounted(() => {
   document.removeEventListener('webkitfullscreenchange', checkFullscreenState)
   document.removeEventListener('mozfullscreenchange', checkFullscreenState)
   document.removeEventListener('MSFullscreenChange', checkFullscreenState)
+  
+  // 清理屏幕方向和尺寸监听器
+  window.removeEventListener('orientationchange', () => {
+    setTimeout(checkFullscreenState, 100)
+  })
+  window.removeEventListener('resize', checkFullscreenState)
+  
+  // 清理视频元素监听器
+  if (videoRef.value) {
+    videoRef.value.removeEventListener('webkitbeginfullscreen', checkFullscreenState)
+    videoRef.value.removeEventListener('webkitendfullscreen', checkFullscreenState)
+  }
+  
+  // 清理HLS实例
+  if (hls.value) {
+    hls.value.destroy()
+  }
 })
 </script>
 
