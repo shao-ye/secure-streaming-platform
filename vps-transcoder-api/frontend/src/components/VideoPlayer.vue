@@ -403,10 +403,24 @@ watch(() => props.hlsUrl, (newUrl) => {
   }
 }, { immediate: true })
 
-// 全屏状态检测 - 修复移动端全屏检测
+// 检测设备类型和浏览器
+const getDeviceInfo = () => {
+  const userAgent = navigator.userAgent.toLowerCase()
+  const isIOS = /iphone|ipad|ipod/.test(userAgent)
+  const isAndroid = /android/.test(userAgent)
+  const isSafari = /safari/.test(userAgent) && !/chrome/.test(userAgent)
+  const isChrome = /chrome/.test(userAgent)
+  const isMobile = /mobile|android|iphone|ipad|ipod/.test(userAgent)
+  
+  return { isIOS, isAndroid, isSafari, isChrome, isMobile }
+}
+
+// 全屏状态检测 - 跨平台兼容
 const checkFullscreenState = () => {
   const wasFullscreen = isFullscreen.value
+  const deviceInfo = getDeviceInfo()
   
+  // 标准全屏检测
   const isDocumentFullscreen = !!(
     document.fullscreenElement ||
     document.webkitFullscreenElement ||
@@ -414,24 +428,31 @@ const checkFullscreenState = () => {
     document.msFullscreenElement
   )
   
+  // iOS Safari 特殊处理
   const isVideoFullscreen = videoRef.value && (
     videoRef.value.webkitDisplayingFullscreen ||
-    videoRef.value.displayingFullscreen ||
-    document.webkitIsFullScreen ||
-    document.mozFullScreen ||
-    document.msFullscreenElement
+    videoRef.value.displayingFullscreen
   )
   
-  const isLandscape = window.screen && window.screen.orientation && 
-    (window.screen.orientation.angle === 90 || window.screen.orientation.angle === -90)
+  // 移动端横屏检测（作为辅助判断）
+  const isLandscapeFullscreen = deviceInfo.isMobile && 
+    window.innerHeight < window.innerWidth && 
+    window.innerHeight < 500 // 避免平板误判
   
-  isFullscreen.value = isDocumentFullscreen || isVideoFullscreen || 
-    (isLandscape && window.innerHeight < window.innerWidth)
+  // 综合判断全屏状态
+  if (deviceInfo.isIOS) {
+    // iOS: 主要依赖视频元素全屏状态
+    isFullscreen.value = isVideoFullscreen || isDocumentFullscreen
+  } else {
+    // Android/PC: 主要依赖文档全屏状态
+    isFullscreen.value = isDocumentFullscreen || isLandscapeFullscreen
+  }
   
   debugLog('全屏状态检测:', {
+    deviceInfo,
     isDocumentFullscreen,
     isVideoFullscreen,
-    isLandscape,
+    isLandscapeFullscreen,
     finalState: isFullscreen.value,
     screenSize: `${window.innerWidth}x${window.innerHeight}`
   })
@@ -448,23 +469,39 @@ onMounted(() => {
     initHls()
   }
   
-  // 监听全屏状态变化
+  // 跨平台全屏状态监听
+  const deviceInfo = getDeviceInfo()
+  
+  // 标准全屏事件监听
   document.addEventListener('fullscreenchange', checkFullscreenState)
   document.addEventListener('webkitfullscreenchange', checkFullscreenState)
   document.addEventListener('mozfullscreenchange', checkFullscreenState)
   document.addEventListener('MSFullscreenChange', checkFullscreenState)
   
-  // 监听屏幕方向变化（移动端全屏检测）
-  window.addEventListener('orientationchange', () => {
-    setTimeout(checkFullscreenState, 100)
-  })
-  window.addEventListener('resize', checkFullscreenState)
-  
-  // 监听视频元素的全屏事件（移动端Safari等）
-  if (videoRef.value) {
-    videoRef.value.addEventListener('webkitbeginfullscreen', checkFullscreenState)
-    videoRef.value.addEventListener('webkitendfullscreen', checkFullscreenState)
+  // 移动端特殊处理
+  if (deviceInfo.isMobile) {
+    // 屏幕方向变化监听
+    window.addEventListener('orientationchange', () => {
+      setTimeout(checkFullscreenState, 200) // 增加延迟确保状态稳定
+    })
+    window.addEventListener('resize', () => {
+      setTimeout(checkFullscreenState, 100)
+    })
+    
+    // iOS Safari 视频全屏事件
+    if (deviceInfo.isIOS && videoRef.value) {
+      videoRef.value.addEventListener('webkitbeginfullscreen', checkFullscreenState)
+      videoRef.value.addEventListener('webkitendfullscreen', checkFullscreenState)
+      videoRef.value.addEventListener('webkitfullscreenchange', checkFullscreenState)
+    }
   }
+  
+  // PC端额外监听
+  if (!deviceInfo.isMobile) {
+    window.addEventListener('resize', checkFullscreenState)
+  }
+  
+  debugLog('事件监听器设置完成:', deviceInfo)
 })
 
 // 触摸事件处理 - 双指缩放功能
@@ -482,61 +519,98 @@ const getTouchCenter = (touch1, touch2) => {
 }
 
 const handleTouchStart = (event) => {
+  const deviceInfo = getDeviceInfo()
+  
   debugLog('触摸开始:', {
     touchCount: event.touches.length,
     isFullscreen: isFullscreen.value,
     scale: scale.value,
-    target: event.target.tagName
+    target: event.target.tagName,
+    deviceInfo
   })
   
   touches.value = Array.from(event.touches)
   
-  // 双指缩放 - 始终启用，不管是否全屏
+  // 双指缩放 - 跨平台兼容处理
   if (touches.value.length === 2) {
-    event.preventDefault() // 只对双指缩放阻止默认行为
+    // 在所有平台上都支持双指缩放
+    event.preventDefault()
     isDragging.value = false
     lastTouchDistance.value = getTouchDistance(touches.value[0], touches.value[1])
     lastTouchCenter.value = getTouchCenter(touches.value[0], touches.value[1])
-    debugLog('双指缩放开始')
-  } else if (touches.value.length === 1 && scale.value > 1) {
-    // 单指拖拽 - 只在已缩放状态下启用（包括全屏状态）
-    event.preventDefault()
-    isDragging.value = true
-    lastPanPoint.value = {
-      x: touches.value[0].clientX,
-      y: touches.value[0].clientY
+    debugLog('双指缩放开始 - 平台:', deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'PC')
+  } else if (touches.value.length === 1) {
+    // 单指处理 - 根据平台和状态决定行为
+    if (scale.value > 1) {
+      // 已缩放状态下允许拖拽
+      if (deviceInfo.isIOS) {
+        // iOS: 在全屏状态下需要特殊处理
+        if (isFullscreen.value) {
+          event.preventDefault()
+          isDragging.value = true
+        } else {
+          // 非全屏状态下正常拖拽
+          event.preventDefault()
+          isDragging.value = true
+        }
+      } else {
+        // Android/PC: 正常拖拽处理
+        event.preventDefault()
+        isDragging.value = true
+      }
+      
+      lastPanPoint.value = {
+        x: touches.value[0].clientX,
+        y: touches.value[0].clientY
+      }
+      debugLog('单指拖拽开始:', { 
+        scale: scale.value, 
+        isFullscreen: isFullscreen.value,
+        platform: deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'PC'
+      })
+    } else {
+      // 未缩放状态下不阻止默认行为，让视频控件正常工作
+      isDragging.value = false
+      debugLog('单指点击 - 允许默认行为')
     }
-    debugLog('单指拖拽开始 - 缩放状态:', { scale: scale.value, isFullscreen: isFullscreen.value })
-  } else {
-    // 单指点击 - 不阻止默认行为，让视频控件正常工作
-    isDragging.value = false
-    debugLog('单指点击 - 允许默认行为')
   }
 }
 
 const handleTouchMove = (event) => {
+  const deviceInfo = getDeviceInfo()
   touches.value = Array.from(event.touches)
   
   if (touches.value.length === 1 && isDragging.value && scale.value > 1) {
-    // 单指拖拽 - 在缩放时允许拖拽（包括全屏状态）
+    // 单指拖拽 - 跨平台兼容处理
     event.preventDefault()
+    
     const deltaX = touches.value[0].clientX - lastPanPoint.value.x
     const deltaY = touches.value[0].clientY - lastPanPoint.value.y
     
-    translateX.value += deltaX
-    translateY.value += deltaY
+    // 根据平台调整拖拽敏感度
+    let sensitivity = 1
+    if (deviceInfo.isIOS && isFullscreen.value) {
+      // iOS全屏状态下可能需要调整敏感度
+      sensitivity = 1.2
+    }
+    
+    translateX.value += deltaX * sensitivity
+    translateY.value += deltaY * sensitivity
     
     lastPanPoint.value = {
       x: touches.value[0].clientX,
       y: touches.value[0].clientY
     }
+    
     debugLog('单指拖拽中:', { 
-      deltaX, 
-      deltaY, 
+      deltaX: deltaX * sensitivity, 
+      deltaY: deltaY * sensitivity, 
       translateX: translateX.value, 
       translateY: translateY.value,
       isFullscreen: isFullscreen.value,
-      scale: scale.value
+      scale: scale.value,
+      platform: deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'PC',
+      sensitivity
     })
   } else if (touches.value.length === 2) {
     // 双指缩放
@@ -546,7 +620,26 @@ const handleTouchMove = (event) => {
     
     if (lastTouchDistance.value > 0) {
       const scaleChange = currentDistance / lastTouchDistance.value
-      const newScale = Math.max(0.5, Math.min(3, scale.value * scaleChange))
+      let newScale = Math.max(0.5, Math.min(3, scale.value * scaleChange))
+      
+      // 根据平台调整缩放敏感度
+      const deviceInfo = getDeviceInfo()
+      let scaleSensitivity = 1
+      
+      if (deviceInfo.isIOS) {
+        // iOS: 在全屏状态下调整缩放敏感度
+        scaleSensitivity = isFullscreen.value ? 0.8 : 1
+      } else if (deviceInfo.isAndroid) {
+        // Android: 标准敏感度
+        scaleSensitivity = 1
+      } else {
+        // PC: 可能需要更高敏感度
+        scaleSensitivity = 1.1
+      }
+      
+      // 应用敏感度调整
+      const adjustedScaleChange = 1 + (scaleChange - 1) * scaleSensitivity
+      newScale = Math.max(0.5, Math.min(3, scale.value * adjustedScaleChange))
       
       // 以触摸中心点为缩放中心
       const containerRect = containerRef.value.getBoundingClientRect()
@@ -555,11 +648,18 @@ const handleTouchMove = (event) => {
       
       // 调整平移以保持缩放中心点不变
       const scaleDiff = newScale - scale.value
-      translateX.value -= centerX * scaleDiff / scale.value
-      translateY.value -= centerY * scaleDiff / scale.value
+      if (scale.value > 0) {
+        translateX.value -= centerX * scaleDiff / scale.value
+        translateY.value -= centerY * scaleDiff / scale.value
+      }
       
       scale.value = newScale
-      debugLog('双指缩放中:', { scale: newScale })
+      debugLog('双指缩放中:', { 
+        scale: newScale, 
+        platform: deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'PC',
+        scaleSensitivity,
+        isFullscreen: isFullscreen.value
+      })
     }
     
     lastTouchDistance.value = currentDistance
@@ -632,28 +732,40 @@ onUnmounted(() => {
   debugLog('VideoPlayer组件卸载，清理所有事件监听器')
   destroyHls()
   
-  // 清理全屏状态监听器
+  const deviceInfo = getDeviceInfo()
+  
+  // 清理标准全屏状态监听器
   document.removeEventListener('fullscreenchange', checkFullscreenState)
   document.removeEventListener('webkitfullscreenchange', checkFullscreenState)
   document.removeEventListener('mozfullscreenchange', checkFullscreenState)
   document.removeEventListener('MSFullscreenChange', checkFullscreenState)
   
-  // 清理屏幕方向和尺寸监听器
-  window.removeEventListener('orientationchange', () => {
-    setTimeout(checkFullscreenState, 100)
-  })
-  window.removeEventListener('resize', checkFullscreenState)
+  // 清理移动端特殊监听器
+  if (deviceInfo.isMobile) {
+    // 注意：orientationchange 的清理需要使用相同的函数引用
+    // 这里我们清理所有可能的监听器
+    window.removeEventListener('orientationchange', checkFullscreenState)
+    window.removeEventListener('resize', checkFullscreenState)
+    
+    // 清理iOS Safari视频全屏事件
+    if (deviceInfo.isIOS && videoRef.value) {
+      videoRef.value.removeEventListener('webkitbeginfullscreen', checkFullscreenState)
+      videoRef.value.removeEventListener('webkitendfullscreen', checkFullscreenState)
+      videoRef.value.removeEventListener('webkitfullscreenchange', checkFullscreenState)
+    }
+  }
   
-  // 清理视频元素监听器
-  if (videoRef.value) {
-    videoRef.value.removeEventListener('webkitbeginfullscreen', checkFullscreenState)
-    videoRef.value.removeEventListener('webkitendfullscreen', checkFullscreenState)
+  // 清理PC端监听器
+  if (!deviceInfo.isMobile) {
+    window.removeEventListener('resize', checkFullscreenState)
   }
   
   // 清理HLS实例
   if (hls.value) {
     hls.value.destroy()
   }
+  
+  debugLog('所有事件监听器已清理完成')
 })
 </script>
 
