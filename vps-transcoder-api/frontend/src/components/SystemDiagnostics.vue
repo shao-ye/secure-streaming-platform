@@ -116,7 +116,7 @@
     <el-row :gutter="20">
       <!-- 缓存统计 -->
       <el-col :span="12">
-        <el-card shadow="never">
+        <el-card shadow="never" style="height: 400px;">
           <template #header>
             <div class="card-header">
               <h3>缓存统计</h3>
@@ -129,7 +129,7 @@
             </div>
           </template>
 
-          <div v-if="cacheStats.totalItems > 0">
+          <div v-if="cacheStats.totalItems >= 0" style="max-height: 300px; overflow-y: auto;">
             <el-descriptions :column="2" border>
               <el-descriptions-item label="总条目数">
                 {{ cacheStats.totalItems }}
@@ -174,7 +174,7 @@
 
       <!-- 系统诊断 -->
       <el-col :span="12">
-        <el-card shadow="never">
+        <el-card shadow="never" style="height: 400px;">
           <template #header>
             <div class="card-header">
               <h3>系统诊断</h3>
@@ -187,7 +187,7 @@
             </div>
           </template>
 
-          <div v-if="diagnostics.checks && diagnostics.checks.length > 0">
+          <div v-if="diagnostics.checks && diagnostics.checks.length > 0" style="max-height: 300px; overflow-y: auto;">
             <div
               v-for="check in diagnostics.checks"
               :key="check.name"
@@ -224,9 +224,9 @@
     </el-row>
 
     <!-- 日志查看器 -->
-    <el-row>
+    <el-row style="margin-top: 20px;">
       <el-col :span="24">
-        <el-card shadow="never">
+        <el-card shadow="never" style="height: 300px;">
           <template #header>
             <div class="card-header">
               <h3>系统日志</h3>
@@ -247,7 +247,7 @@
             </div>
           </template>
 
-          <div class="log-viewer">
+          <div class="log-viewer" style="max-height: 200px; overflow-y: auto; padding: 10px; background-color: #f5f5f5; border-radius: 4px;">
             <div
               v-for="(log, index) in logs"
               :key="index"
