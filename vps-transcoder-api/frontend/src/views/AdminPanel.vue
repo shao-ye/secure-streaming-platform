@@ -115,6 +115,8 @@ onMounted(() => {
 .admin-panel {
   height: 100vh;
   background-color: #f0f2f5;
+  display: flex;
+  flex-direction: column;
 }
 
 .header {
@@ -124,6 +126,7 @@ onMounted(() => {
   background-color: #fff;
   border-bottom: 1px solid #e4e7ed;
   padding: 0 20px;
+  flex-shrink: 0;
 }
 
 .header-left h2 {
@@ -136,11 +139,23 @@ onMounted(() => {
   gap: 10px;
 }
 
+.el-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
 .admin-tabs {
   background-color: #fff;
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  height: 100%;
+}
+
+.admin-tabs :deep(.el-tabs__content) {
+  height: calc(100vh - 200px);
+  overflow-y: auto;
 }
 
 .system-status {

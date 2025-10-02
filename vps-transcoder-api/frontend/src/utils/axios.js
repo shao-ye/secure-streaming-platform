@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { config, debugLog, errorLog, warnLog } from './config'
+import router from '../router'
 
 const instance = axios.create({
   baseURL: config.api.baseURL,
@@ -65,9 +66,16 @@ instance.interceptors.response.use(
           message = data?.message || '请求参数错误'
           break
         case 401:
-          message = '未授权，请重新登录'
-          // 不在axios拦截器中清除localStorage，避免触发响应式更新导致路由循环
-          // 让具体的业务逻辑（如checkAuth方法）处理认证失败
+          message = '登录已失效，正在跳转到登录页面...'
+          // 清除本地存储的认证信息
+          localStorage.removeItem('auth_token')
+          localStorage.removeItem('user_info')
+          // 延迟跳转，避免路由循环
+          setTimeout(() => {
+            if (router.currentRoute.value.path !== '/login') {
+              router.push('/login')
+            }
+          }, 1000)
           break
         case 403:
           message = '权限不足，无法访问该资源'
