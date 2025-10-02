@@ -403,17 +403,41 @@ watch(() => props.hlsUrl, (newUrl) => {
   }
 }, { immediate: true })
 
-// 全屏状态检测
+// 全屏状态检测 - 修复移动端全屏检测
 const checkFullscreenState = () => {
-  isFullscreen.value = !!(
+  const wasFullscreen = isFullscreen.value
+  
+  const isDocumentFullscreen = !!(
     document.fullscreenElement ||
     document.webkitFullscreenElement ||
     document.mozFullScreenElement ||
     document.msFullscreenElement
   )
   
+  const isVideoFullscreen = videoRef.value && (
+    videoRef.value.webkitDisplayingFullscreen ||
+    videoRef.value.displayingFullscreen ||
+    document.webkitIsFullScreen ||
+    document.mozFullScreen ||
+    document.msFullscreenElement
+  )
+  
+  const isLandscape = window.screen && window.screen.orientation && 
+    (window.screen.orientation.angle === 90 || window.screen.orientation.angle === -90)
+  
+  isFullscreen.value = isDocumentFullscreen || isVideoFullscreen || 
+    (isLandscape && window.innerHeight < window.innerWidth)
+  
+  debugLog('全屏状态检测:', {
+    isDocumentFullscreen,
+    isVideoFullscreen,
+    isLandscape,
+    finalState: isFullscreen.value,
+    screenSize: `${window.innerWidth}x${window.innerHeight}`
+  })
+  
   // 退出全屏时重置缩放
-  if (!isFullscreen.value) {
+  if (wasFullscreen && !isFullscreen.value) {
     resetZoom()
   }
 }
@@ -429,6 +453,18 @@ onMounted(() => {
   document.addEventListener('webkitfullscreenchange', checkFullscreenState)
   document.addEventListener('mozfullscreenchange', checkFullscreenState)
   document.addEventListener('MSFullscreenChange', checkFullscreenState)
+  
+  // 监听屏幕方向变化（移动端全屏检测）
+  window.addEventListener('orientationchange', () => {
+    setTimeout(checkFullscreenState, 100)
+  })
+  window.addEventListener('resize', checkFullscreenState)
+  
+  // 监听视频元素的全屏事件（移动端Safari等）
+  if (videoRef.value) {
+    videoRef.value.addEventListener('webkitbeginfullscreen', checkFullscreenState)
+    videoRef.value.addEventListener('webkitendfullscreen', checkFullscreenState)
+  }
 })
 
 // 触摸事件处理 - 双指缩放功能
@@ -449,6 +485,7 @@ const handleTouchStart = (event) => {
   debugLog('触摸开始:', {
     touchCount: event.touches.length,
     isFullscreen: isFullscreen.value,
+    scale: scale.value,
     target: event.target.tagName
   })
   
@@ -462,14 +499,14 @@ const handleTouchStart = (event) => {
     lastTouchCenter.value = getTouchCenter(touches.value[0], touches.value[1])
     debugLog('双指缩放开始')
   } else if (touches.value.length === 1 && scale.value > 1) {
-    // 单指拖拽 - 只在已缩放状态下启用
+    // 单指拖拽 - 只在已缩放状态下启用（包括全屏状态）
     event.preventDefault()
     isDragging.value = true
     lastPanPoint.value = {
       x: touches.value[0].clientX,
       y: touches.value[0].clientY
     }
-    debugLog('单指拖拽开始')
+    debugLog('单指拖拽开始 - 缩放状态:', { scale: scale.value, isFullscreen: isFullscreen.value })
   } else {
     // 单指点击 - 不阻止默认行为，让视频控件正常工作
     isDragging.value = false
@@ -481,7 +518,7 @@ const handleTouchMove = (event) => {
   touches.value = Array.from(event.touches)
   
   if (touches.value.length === 1 && isDragging.value && scale.value > 1) {
-    // 单指拖拽 - 只在缩放时允许拖拽
+    // 单指拖拽 - 在缩放时允许拖拽（包括全屏状态）
     event.preventDefault()
     const deltaX = touches.value[0].clientX - lastPanPoint.value.x
     const deltaY = touches.value[0].clientY - lastPanPoint.value.y
@@ -493,7 +530,14 @@ const handleTouchMove = (event) => {
       x: touches.value[0].clientX,
       y: touches.value[0].clientY
     }
-    debugLog('单指拖拽中')
+    debugLog('单指拖拽中:', { 
+      deltaX, 
+      deltaY, 
+      translateX: translateX.value, 
+      translateY: translateY.value,
+      isFullscreen: isFullscreen.value,
+      scale: scale.value
+    })
   } else if (touches.value.length === 2) {
     // 双指缩放
     event.preventDefault()
@@ -525,6 +569,49 @@ const handleTouchMove = (event) => {
 
 const handleTouchEnd = (event) => {
   debugLog('触摸结束:', {
+    touchCount: event.touches.length,
+    isDragging: isDragging.value,
+    scale: scale.value,
+    isFullscreen: isFullscreen.value
+  })
+  
+  touches.value = Array.from(event.touches)
+  
+  if (event.touches.length === 0) {
+    isDragging.value = false
+    debugLog('所有触摸结束，停止拖拽')
+  }
+}
+
+// 组件卸载时清理事件监听器
+onUnmounted(() => {
+  debugLog('VideoPlayer组件卸载，清理事件监听器')
+  
+  // 清理全屏状态监听器
+  document.removeEventListener('fullscreenchange', checkFullscreenState)
+  document.removeEventListener('webkitfullscreenchange', checkFullscreenState)
+  document.removeEventListener('mozfullscreenchange', checkFullscreenState)
+  document.removeEventListener('MSFullscreenChange', checkFullscreenState)
+  
+  // 清理屏幕方向和尺寸监听器
+  window.removeEventListener('orientationchange', checkFullscreenState)
+  window.removeEventListener('resize', checkFullscreenState)
+  
+  // 清理视频元素监听器
+  if (videoRef.value) {
+    videoRef.value.removeEventListener('webkitbeginfullscreen', checkFullscreenState)
+    videoRef.value.removeEventListener('webkitendfullscreen', checkFullscreenState)
+  }
+  
+  // 清理HLS实例
+  if (hls.value) {
+    hls.value.destroy()
+  }
+})
+
+// 双击重置缩放功能
+const handleDoubleClick = (event) => {
+  debugLog('双击事件:', {
     remainingTouches: event.touches.length,
     wasScaling: lastTouchDistance.value > 0,
     wasDragging: isDragging.value
