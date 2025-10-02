@@ -227,7 +227,107 @@
       </el-col>
     </el-row>
 
-    <!-- 日志查看器 -->
+    <!-- 流量统计 -->
+    <el-row style="margin-top: 20px;" :gutter="20">
+      <el-col :span="12">
+        <el-card shadow="never" style="height: 400px;">
+          <template #header>
+            <div class="card-header">
+              <h3>流量统计</h3>
+              <el-button
+                size="small"
+                :icon="Refresh"
+                @click="refreshTrafficStats"
+                :loading="loading.traffic"
+              />
+            </div>
+          </template>
+
+          <div style="max-height: 320px; overflow-y: auto;">
+            <div v-if="trafficStats.summary">
+              <el-descriptions :column="2" border size="small">
+                <el-descriptions-item label="总流量">
+                  {{ trafficStats.summary.totalBandwidth }} GB
+                </el-descriptions-item>
+                <el-descriptions-item label="总请求数">
+                  {{ trafficStats.summary.totalRequests.toLocaleString() }}
+                </el-descriptions-item>
+                <el-descriptions-item label="总费用">
+                  ${{ trafficStats.summary.totalCost }}
+                </el-descriptions-item>
+                <el-descriptions-item label="月均流量">
+                  {{ trafficStats.summary.avgMonthlyBandwidth }} GB
+                </el-descriptions-item>
+              </el-descriptions>
+
+              <!-- 月度流量表格 -->
+              <div style="margin-top: 15px;">
+                <h4>月度流量详情</h4>
+                <el-table :data="trafficStats.monthly.slice(-6)" size="small" style="width: 100%">
+                  <el-table-column prop="month" label="月份" width="80" />
+                  <el-table-column prop="bandwidth" label="流量(GB)" width="80" />
+                  <el-table-column prop="requests" label="请求数" width="80">
+                    <template #default="scope">
+                      {{ scope.row.requests.toLocaleString() }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="cost" label="费用($)" width="70" />
+                </el-table>
+              </div>
+            </div>
+            <el-empty v-else description="点击刷新按钮获取流量统计" />
+          </div>
+        </el-card>
+      </el-col>
+
+      <!-- 登录日志 -->
+      <el-col :span="12">
+        <el-card shadow="never" style="height: 400px;">
+          <template #header>
+            <div class="card-header">
+              <h3>登录日志</h3>
+              <el-button
+                size="small"
+                :icon="Refresh"
+                @click="refreshLoginLogs"
+                :loading="loading.loginLogs"
+              />
+            </div>
+          </template>
+
+          <div style="max-height: 320px; overflow-y: auto;">
+            <div v-if="loginLogs.length > 0">
+              <div
+                v-for="log in loginLogs.slice(0, 10)"
+                :key="log.id"
+                class="login-log-item"
+                style="border-bottom: 1px solid #eee; padding: 8px 0;"
+              >
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <div>
+                    <el-tag :type="log.status === 'success' ? 'success' : 'danger'" size="small">
+                      {{ log.username }}
+                    </el-tag>
+                    <span style="margin-left: 8px; font-size: 12px; color: #666;">
+                      {{ log.ip }} - {{ log.location }}
+                    </span>
+                  </div>
+                  <div style="font-size: 12px; color: #999;">
+                    {{ formatTime(log.timestamp) }}
+                  </div>
+                </div>
+                <div style="font-size: 11px; color: #999; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  {{ log.userAgent }}
+                </div>
+              </div>
+            </div>
+            <el-empty v-else description="点击刷新按钮获取登录日志" />
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <!-- 系统日志 -->
     <el-row style="margin-top: 20px;">
       <el-col :span="24">
         <el-card shadow="never" style="height: 350px;">
@@ -318,6 +418,14 @@ const diagnostics = reactive({
 
 const logs = ref([])
 
+const trafficStats = reactive({
+  monthly: [],
+  summary: null,
+  realtime: null
+})
+
+const loginLogs = ref([])
+
 const loading = reactive({
   system: false,
   cache: false,
@@ -325,7 +433,9 @@ const loading = reactive({
   vps: false,
   cacheStats: false,
   diagnostics: false,
-  logs: false
+  logs: false,
+  traffic: false,
+  loginLogs: false
 })
 
 // 定时器
@@ -555,6 +665,40 @@ const clearLogs = async () => {
   }
 }
 
+// 刷新流量统计
+const refreshTrafficStats = async () => {
+  loading.traffic = true
+  try {
+    const response = await axios.get('/api/admin/traffic/stats')
+    if (response.data.status === 'success') {
+      Object.assign(trafficStats, response.data.data.traffic)
+      infoLog('流量统计刷新成功')
+    }
+  } catch (error) {
+    errorLog('获取流量统计失败:', error)
+    ElMessage.error('获取流量统计失败')
+  } finally {
+    loading.traffic = false
+  }
+}
+
+// 刷新登录日志
+const refreshLoginLogs = async () => {
+  loading.loginLogs = true
+  try {
+    const response = await axios.get('/api/admin/login/logs')
+    if (response.data.status === 'success') {
+      loginLogs.value = response.data.data.logs
+      infoLog('登录日志刷新成功')
+    }
+  } catch (error) {
+    errorLog('获取登录日志失败:', error)
+    ElMessage.error('获取登录日志失败')
+  } finally {
+    loading.loginLogs = false
+  }
+}
+
 // 初始化数据
 const initData = async () => {
   await Promise.all([
@@ -562,7 +706,9 @@ const initData = async () => {
     refreshCacheStats(),
     checkVpsHealth(),
     runDiagnostics(),
-    refreshLogs()
+    refreshLogs(),
+    refreshTrafficStats(),
+    refreshLoginLogs()
   ])
 }
 

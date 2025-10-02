@@ -8,6 +8,62 @@ import { errorResponse, successResponse } from '../utils/cors.js';
 import { logAuthEvent, logError, logInfo } from '../utils/logger.js';
 
 /**
+ * 记录登录日志到KV存储
+ */
+async function recordLoginLog(env, username, request, success, details = {}) {
+  try {
+    // 获取客户端信息
+    const clientIP = request.headers.get('CF-Connecting-IP') || 
+                     request.headers.get('X-Forwarded-For') || 
+                     request.headers.get('X-Real-IP') || 
+                     '未知';
+    
+    const userAgent = request.headers.get('User-Agent') || '未知';
+    const country = request.cf?.country || '未知';
+    const city = request.cf?.city || '未知';
+    
+    // 创建登录日志条目
+    const logEntry = {
+      id: generateSessionId(), // 使用随机ID
+      username: username || '未知',
+      ip: clientIP,
+      userAgent: userAgent,
+      timestamp: new Date().toISOString(),
+      status: success ? 'success' : 'failed',
+      location: `${country} ${city}`,
+      details: details
+    };
+
+    // 获取现有登录日志
+    let loginLogs = [];
+    try {
+      const existingLogs = await env.YOYO_USER_DB.get('login_logs');
+      if (existingLogs) {
+        loginLogs = JSON.parse(existingLogs);
+      }
+    } catch (error) {
+      console.warn('Failed to get existing login logs:', error);
+    }
+
+    // 添加新日志条目
+    loginLogs.unshift(logEntry);
+    
+    // 保持最多1000条记录
+    if (loginLogs.length > 1000) {
+      loginLogs = loginLogs.slice(0, 1000);
+    }
+
+    // 保存到KV
+    await env.YOYO_USER_DB.put('login_logs', JSON.stringify(loginLogs));
+    
+    console.log('Login log recorded:', { username, success, ip: clientIP });
+  } catch (error) {
+    console.error('Failed to record login log:', error);
+    // 不抛出错误，避免影响登录流程
+  }
+}
+
+/**
  * 从请求中提取会话ID（支持Authorization header、Cookie和查询参数）
  */
 function getSessionIdFromRequest(request) {
@@ -156,6 +212,7 @@ export const handleAuth = {
       // 验证输入
       if (!username || !password) {
         logAuthEvent(env, 'login_attempt', username || 'unknown', request, false, { reason: 'missing_credentials' });
+        await recordLoginLog(env, username || 'unknown', request, false, { reason: 'missing_credentials' });
         return errorResponse('Username and password are required', 'MISSING_CREDENTIALS', 400, request);
       }
 
@@ -163,6 +220,7 @@ export const handleAuth = {
       const user = await getUser(env, username);
       if (!user) {
         logAuthEvent(env, 'login_attempt', username, request, false, { reason: 'user_not_found' });
+        await recordLoginLog(env, username, request, false, { reason: 'user_not_found' });
         return errorResponse('Invalid username or password', 'INVALID_CREDENTIALS', 401, request);
       }
 
@@ -170,6 +228,7 @@ export const handleAuth = {
       const isValidPassword = await verifyPassword(password, user.salt, user.hashedPassword);
       if (!isValidPassword) {
         logAuthEvent(env, 'login_attempt', username, request, false, { reason: 'invalid_password' });
+        await recordLoginLog(env, username, request, false, { reason: 'invalid_password' });
         return errorResponse('Invalid username or password', 'INVALID_CREDENTIALS', 401, request);
       }
 
@@ -180,6 +239,13 @@ export const handleAuth = {
 
       // 记录成功登录
       logAuthEvent(env, 'login_success', username, request, true, {
+        sessionId,
+        role: user.role,
+        responseTime: Date.now() - startTime
+      });
+      
+      // 记录登录日志到KV存储
+      await recordLoginLog(env, username, request, true, {
         sessionId,
         role: user.role,
         responseTime: Date.now() - startTime

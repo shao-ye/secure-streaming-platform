@@ -366,6 +366,12 @@ export default {
       // 系统诊断API
       router.get('/api/admin/diagnostics', (req, env, ctx) => handleAdmin.getSystemDiagnostics(req, env, ctx));
       
+      // 流量统计API
+      router.get('/api/admin/traffic/stats', (req, env, ctx) => handleAdmin.getTrafficStats(req, env, ctx));
+      
+      // 登录日志API
+      router.get('/api/admin/login/logs', (req, env, ctx) => handleAdmin.getLoginLogs(req, env, ctx));
+      
       // 其他管理功能
       router.post('/api/admin/streams/reload', (req, env, ctx) => handleAdmin.reloadStreamsConfig(req, env, ctx));
 
