@@ -129,10 +129,10 @@
             </div>
           </template>
 
-          <div v-if="cacheStats.totalKeys > 0">
+          <div v-if="cacheStats.totalItems > 0">
             <el-descriptions :column="2" border>
               <el-descriptions-item label="总条目数">
-                {{ cacheStats.totalKeys }}
+                {{ cacheStats.totalItems }}
               </el-descriptions-item>
               <el-descriptions-item label="命中率">
                 {{ cacheStats.hitRate ? (cacheStats.hitRate * 100).toFixed(2) + '%' : 'N/A' }}
@@ -152,18 +152,18 @@
             </el-descriptions>
 
             <!-- 缓存键列表 -->
-            <div class="cache-keys" v-if="cacheStats.keys && cacheStats.keys.length > 0">
+            <div class="cache-keys" v-if="cacheStats.items && cacheStats.items.length > 0">
               <h4>缓存键列表</h4>
               <el-tag
-                v-for="key in cacheStats.keys.slice(0, 10)"
+                v-for="key in cacheStats.items.slice(0, 10)"
                 :key="key"
                 size="small"
                 class="cache-key-tag"
               >
                 {{ key }}
               </el-tag>
-              <el-tag v-if="cacheStats.keys.length > 10" size="small" type="info">
-                +{{ cacheStats.keys.length - 10 }} more...
+              <el-tag v-if="cacheStats.items.length > 10" size="small" type="info">
+                +{{ cacheStats.items.length - 10 }} more...
               </el-tag>
             </div>
           </div>
@@ -453,8 +453,41 @@ const runDiagnostics = async () => {
   try {
     const response = await axios.get('/api/admin/diagnostics')
     if (response.data.status === 'success') {
-      diagnostics.checks = response.data.data.checks || []
+      // 将API返回的数据转换为前端期望的格式
+      const data = response.data.data
+      const checks = [
+        {
+          name: 'Worker服务',
+          status: 'ok',
+          details: `版本: ${data.worker?.version}, 环境: ${data.worker?.environment}`
+        },
+        {
+          name: 'KV数据库',
+          status: data.kv?.available ? 'ok' : 'error',
+          details: `命名空间: ${data.kv?.namespace}`,
+          error: data.kv?.available ? null : data.kv?.testResult
+        },
+        {
+          name: 'VPS连接',
+          status: data.vps?.available ? 'ok' : 'error',
+          details: data.vps?.url,
+          error: data.vps?.available ? null : data.vps?.testResult
+        },
+        {
+          name: '缓存系统',
+          status: 'ok',
+          details: `缓存条目: ${data.cache?.totalItems || 0}`
+        },
+        {
+          name: '性能检测',
+          status: 'ok',
+          details: `诊断耗时: ${data.performance?.diagnosticsTime}ms`
+        }
+      ]
+      
+      diagnostics.checks = checks
       diagnostics.lastRun = new Date().toISOString()
+      ElMessage.success('系统诊断完成')
       infoLog('系统诊断完成')
     }
   } catch (error) {
