@@ -11,7 +11,7 @@
               </el-icon>
             </div>
             <div class="status-info">
-              <div class="status-value">{{ systemStatus.status }}</div>
+              <div class="status-value">{{ systemStatus.vps?.status || 'Unknown' }}</div>
               <div class="status-label">系统状态</div>
             </div>
           </div>
@@ -27,7 +27,7 @@
               </el-icon>
             </div>
             <div class="status-info">
-              <div class="status-value">{{ cacheStats.totalKeys || 0 }}</div>
+              <div class="status-value">{{ systemStatus.streams?.configured || 0 }}</div>
               <div class="status-label">缓存条目</div>
             </div>
           </div>
@@ -43,7 +43,7 @@
               </el-icon>
             </div>
             <div class="status-info">
-              <div class="status-value">{{ vpsStatus.status || 'Unknown' }}</div>
+              <div class="status-value">{{ systemStatus.vps?.status || 'Unknown' }}</div>
               <div class="status-label">VPS状态</div>
             </div>
           </div>
@@ -59,7 +59,7 @@
               </el-icon>
             </div>
             <div class="status-info">
-              <div class="status-value">{{ formatUptime(systemStatus.uptime) }}</div>
+              <div class="status-value">{{ formatTime(systemStatus.cloudflare?.worker?.timestamp) }}</div>
               <div class="status-label">运行时间</div>
             </div>
           </div>
@@ -355,7 +355,12 @@ const refreshSystemStatus = async () => {
   try {
     const response = await axios.get('/api/admin/system/status')
     if (response.data.status === 'success') {
+      // 正确解析API返回的数据结构
       Object.assign(systemStatus, response.data.data)
+      // 同时更新VPS状态
+      if (response.data.data.vps) {
+        Object.assign(vpsStatus, response.data.data.vps)
+      }
       infoLog('系统状态刷新成功')
     }
   } catch (error) {
@@ -371,7 +376,8 @@ const refreshCacheStats = async () => {
   try {
     const response = await axios.get('/api/admin/cache/stats')
     if (response.data.status === 'success') {
-      Object.assign(cacheStats, response.data.data)
+      // 正确解析缓存统计数据
+      Object.assign(cacheStats, response.data.data.cache || response.data.data)
       infoLog('缓存统计刷新成功')
     }
   } catch (error) {
