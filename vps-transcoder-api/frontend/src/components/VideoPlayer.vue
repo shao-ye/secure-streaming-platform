@@ -65,11 +65,11 @@
         </el-result>
       </div>
 
-      <!-- 全屏缩放提示 -->
-      <div v-if="isFullscreen" class="zoom-hint">
+      <!-- 缩放提示 -->
+      <div v-if="scale > 1" class="zoom-hint">
         <div class="zoom-info">
-          <span>双指缩放: {{ Math.round(scale * 100) }}%</span>
-          <span v-if="scale > 1">| 单指拖拽</span>
+          <span>缩放: {{ Math.round(scale * 100) }}%</span>
+          <span>| 单指拖拽</span>
           <span>| 双击重置</span>
         </div>
       </div>
@@ -444,40 +444,43 @@ const getTouchCenter = (touch1, touch2) => {
 }
 
 const handleTouchStart = (event) => {
-  // 只在全屏状态下启用缩放功能
-  if (!isFullscreen.value) {
-    return
-  }
+  debugLog('触摸开始:', {
+    touchCount: event.touches.length,
+    isFullscreen: isFullscreen.value,
+    target: event.target.tagName
+  })
   
-  event.preventDefault()
   touches.value = Array.from(event.touches)
   
-  if (touches.value.length === 1) {
-    // 单指拖拽
+  // 双指缩放 - 始终启用，不管是否全屏
+  if (touches.value.length === 2) {
+    event.preventDefault() // 只对双指缩放阻止默认行为
+    isDragging.value = false
+    lastTouchDistance.value = getTouchDistance(touches.value[0], touches.value[1])
+    lastTouchCenter.value = getTouchCenter(touches.value[0], touches.value[1])
+    debugLog('双指缩放开始')
+  } else if (touches.value.length === 1 && scale.value > 1) {
+    // 单指拖拽 - 只在已缩放状态下启用
+    event.preventDefault()
     isDragging.value = true
     lastPanPoint.value = {
       x: touches.value[0].clientX,
       y: touches.value[0].clientY
     }
-  } else if (touches.value.length === 2) {
-    // 双指缩放
+    debugLog('单指拖拽开始')
+  } else {
+    // 单指点击 - 不阻止默认行为，让视频控件正常工作
     isDragging.value = false
-    lastTouchDistance.value = getTouchDistance(touches.value[0], touches.value[1])
-    lastTouchCenter.value = getTouchCenter(touches.value[0], touches.value[1])
+    debugLog('单指点击 - 允许默认行为')
   }
 }
 
 const handleTouchMove = (event) => {
-  // 只在全屏状态下启用缩放功能
-  if (!isFullscreen.value) {
-    return
-  }
-  
-  event.preventDefault()
   touches.value = Array.from(event.touches)
   
   if (touches.value.length === 1 && isDragging.value && scale.value > 1) {
     // 单指拖拽 - 只在缩放时允许拖拽
+    event.preventDefault()
     const deltaX = touches.value[0].clientX - lastPanPoint.value.x
     const deltaY = touches.value[0].clientY - lastPanPoint.value.y
     
@@ -488,8 +491,10 @@ const handleTouchMove = (event) => {
       x: touches.value[0].clientX,
       y: touches.value[0].clientY
     }
+    debugLog('单指拖拽中')
   } else if (touches.value.length === 2) {
     // 双指缩放
+    event.preventDefault()
     const currentDistance = getTouchDistance(touches.value[0], touches.value[1])
     const currentCenter = getTouchCenter(touches.value[0], touches.value[1])
     
@@ -508,6 +513,7 @@ const handleTouchMove = (event) => {
       translateY.value -= centerY * scaleDiff / scale.value
       
       scale.value = newScale
+      debugLog('双指缩放中:', { scale: newScale })
     }
     
     lastTouchDistance.value = currentDistance
@@ -516,15 +522,16 @@ const handleTouchMove = (event) => {
 }
 
 const handleTouchEnd = (event) => {
-  // 只在全屏状态下启用缩放功能
-  if (!isFullscreen.value) {
-    return
-  }
+  debugLog('触摸结束:', {
+    remainingTouches: event.touches.length,
+    wasScaling: lastTouchDistance.value > 0,
+    wasDragging: isDragging.value
+  })
   
-  event.preventDefault()
   touches.value = Array.from(event.touches)
   
   if (touches.value.length === 0) {
+    // 所有手指离开
     isDragging.value = false
     lastTouchDistance.value = 0
     
@@ -532,24 +539,23 @@ const handleTouchEnd = (event) => {
     if (scale.value < 1.1 && scale.value > 0.9) {
       resetZoom()
     }
-  } else if (touches.value.length === 1) {
-    // 从双指变为单指，重新开始拖拽
-    isDragging.value = true
-    lastPanPoint.value = {
-      x: touches.value[0].clientX,
-      y: touches.value[0].clientY
+    debugLog('所有触摸结束')
+  } else if (touches.value.length === 1 && lastTouchDistance.value > 0) {
+    // 从双指变为单指，如果已缩放则开始拖拽
+    if (scale.value > 1) {
+      isDragging.value = true
+      lastPanPoint.value = {
+        x: touches.value[0].clientX,
+        y: touches.value[0].clientY
+      }
     }
     lastTouchDistance.value = 0
+    debugLog('从双指变为单指')
   }
 }
 
 // 鼠标滚轮缩放支持
 const handleWheel = (event) => {
-  // 只在全屏状态下启用缩放功能
-  if (!isFullscreen.value) {
-    return
-  }
-  
   event.preventDefault()
   
   const delta = event.deltaY > 0 ? 0.9 : 1.1
@@ -570,6 +576,8 @@ const handleWheel = (event) => {
   if (scale.value < 1.1 && scale.value > 0.9) {
     resetZoom()
   }
+  
+  debugLog('鼠标滚轮缩放:', { scale: newScale })
 }
 
 // 重置缩放
@@ -581,16 +589,12 @@ const resetZoom = () => {
 
 // 双击重置缩放
 const handleDoubleClick = () => {
-  // 只在全屏状态下启用缩放功能
-  if (!isFullscreen.value) {
-    return
-  }
-  
   if (scale.value === 1) {
     scale.value = 2
   } else {
     resetZoom()
   }
+  debugLog('双击缩放:', { scale: scale.value })
 }
 
 onUnmounted(() => {
@@ -651,14 +655,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 只在全屏状态下禁用触摸行为 */
-.player-container:fullscreen,
-.player-container:-webkit-full-screen,
-.player-container:-moz-full-screen,
-.player-container:-ms-fullscreen {
-  touch-action: none;
-  user-select: none;
-}
+/* 移除全屏状态下的触摸行为限制，让视频控件正常工作 */
 
 .video-wrapper {
   width: 100%;
