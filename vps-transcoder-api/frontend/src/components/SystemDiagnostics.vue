@@ -27,7 +27,7 @@
               </el-icon>
             </div>
             <div class="status-info">
-              <div class="status-value">{{ systemStatus.streams?.configured || 0 }}</div>
+              <div class="status-value">{{ cacheStats.totalItems || 0 }}</div>
               <div class="status-label">缓存条目</div>
             </div>
           </div>
@@ -367,6 +367,9 @@ const refreshSystemStatus = async () => {
       }
       infoLog('系统状态刷新成功')
     }
+    
+    // 同时刷新缓存统计，确保数据一致性
+    await refreshCacheStats()
   } catch (error) {
     errorLog('获取系统状态失败:', error)
     ElMessage.error('获取系统状态失败')
