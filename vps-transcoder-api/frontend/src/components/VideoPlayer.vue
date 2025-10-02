@@ -528,6 +528,9 @@ onMounted(() => {
   }
   
   debugLog('事件监听器设置完成:', deviceInfo)
+  
+  // 设置禁用播放暂停按钮的多层防护机制
+  setupPauseDisabling()
 })
 
 // 触摸事件处理 - 双指缩放功能
@@ -771,9 +774,205 @@ const handleDoubleClick = () => {
   debugLog('双击缩放:', { scale: scale.value })
 }
 
+// 设置禁用播放暂停按钮的多层防护机制
+const setupPauseDisabling = () => {
+  debugLog('开始设置禁用播放暂停按钮的多层防护机制')
+  
+  if (!videoRef.value) {
+    debugLog('视频元素未找到，延迟设置防护机制')
+    setTimeout(setupPauseDisabling, 100)
+    return
+  }
+  
+  const video = videoRef.value
+  
+  // 第1层防护：重写video.pause()方法
+  const originalPause = video.pause.bind(video)
+  video.pause = function() {
+    debugLog('拦截video.pause()调用，强制继续播放')
+    // 不执行暂停，而是确保播放
+    if (video.paused) {
+      video.play().catch(err => {
+        debugLog('强制播放失败:', err)
+      })
+    }
+    return Promise.resolve()
+  }
+  
+  // 第2层防护：重写HTMLMediaElement原型的pause方法
+  const originalPrototypePause = HTMLMediaElement.prototype.pause
+  HTMLMediaElement.prototype.pause = function() {
+    if (this === video) {
+      debugLog('拦截HTMLMediaElement.prototype.pause调用')
+      // 对目标视频元素不执行暂停
+      if (this.paused) {
+        this.play().catch(err => {
+          debugLog('原型方法强制播放失败:', err)
+        })
+      }
+      return
+    }
+    // 对其他视频元素正常执行
+    return originalPrototypePause.call(this)
+  }
+  
+  // 第3层防护：事件监听器拦截暂停事件
+  const pauseEventHandler = (event) => {
+    debugLog('拦截pause事件，阻止暂停')
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    
+    // 强制恢复播放
+    setTimeout(() => {
+      if (video.paused) {
+        video.play().catch(err => {
+          debugLog('事件拦截后强制播放失败:', err)
+        })
+      }
+    }, 10)
+  }
+  
+  const suspendEventHandler = (event) => {
+    debugLog('拦截suspend事件')
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  
+  const waitingEventHandler = (event) => {
+    debugLog('拦截waiting事件')
+    // 不阻止waiting事件，但确保最终恢复播放
+    setTimeout(() => {
+      if (video.paused) {
+        video.play().catch(err => {
+          debugLog('waiting事件后强制播放失败:', err)
+        })
+      }
+    }, 50)
+  }
+  
+  // 绑定事件监听器
+  video.addEventListener('pause', pauseEventHandler, { capture: true })
+  video.addEventListener('suspend', suspendEventHandler, { capture: true })
+  video.addEventListener('waiting', waitingEventHandler, { capture: true })
+  
+  // 第4层防护：禁用视频控件的播放/暂停按钮
+  video.addEventListener('click', (event) => {
+    debugLog('拦截视频控件点击事件')
+    // 检查是否点击了控件区域
+    const rect = video.getBoundingClientRect()
+    const clickY = event.clientY - rect.top
+    const controlsHeight = 40 // 估计控件高度
+    
+    if (clickY > rect.height - controlsHeight) {
+      debugLog('检测到控件区域点击，可能是暂停按钮')
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      
+      // 确保视频继续播放
+      setTimeout(() => {
+        if (video.paused) {
+          video.play().catch(err => {
+            debugLog('控件点击后强制播放失败:', err)
+          })
+        }
+      }, 10)
+    }
+  }, { capture: true })
+  
+  // 第5层防护：键盘事件拦截（空格键暂停）
+  const keyboardHandler = (event) => {
+    if (event.code === 'Space' || event.key === ' ') {
+      debugLog('拦截空格键暂停操作')
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      
+      // 确保视频继续播放
+      if (video.paused) {
+        video.play().catch(err => {
+          debugLog('空格键拦截后强制播放失败:', err)
+        })
+      }
+    }
+  }
+  
+  document.addEventListener('keydown', keyboardHandler, { capture: true })
+  
+  // 第6层防护：定期检查播放状态
+  const playbackChecker = setInterval(() => {
+    if (video.paused && !video.ended) {
+      debugLog('定期检查发现视频暂停，强制恢复播放')
+      video.play().catch(err => {
+        debugLog('定期检查强制播放失败:', err)
+      })
+    }
+  }, 500)
+  
+  // 第7层防护：监听播放状态变化
+  const playHandler = () => {
+    debugLog('视频开始播放')
+  }
+  
+  const pausedHandler = () => {
+    debugLog('检测到视频暂停，立即恢复播放')
+    setTimeout(() => {
+      if (video.paused && !video.ended) {
+        video.play().catch(err => {
+          debugLog('暂停检测后强制播放失败:', err)
+        })
+      }
+    }, 10)
+  }
+  
+  video.addEventListener('play', playHandler)
+  video.addEventListener('pause', pausedHandler)
+  
+  // 存储清理函数，用于组件卸载时清理
+  const cleanupPauseDisabling = () => {
+    debugLog('清理禁用暂停功能的事件监听器')
+    
+    // 恢复原始方法
+    video.pause = originalPause
+    HTMLMediaElement.prototype.pause = originalPrototypePause
+    
+    // 移除事件监听器
+    video.removeEventListener('pause', pauseEventHandler, { capture: true })
+    video.removeEventListener('suspend', suspendEventHandler, { capture: true })
+    video.removeEventListener('waiting', waitingEventHandler, { capture: true })
+    video.removeEventListener('play', playHandler)
+    video.removeEventListener('pause', pausedHandler)
+    document.removeEventListener('keydown', keyboardHandler, { capture: true })
+    
+    // 清理定时器
+    clearInterval(playbackChecker)
+  }
+  
+  // 将清理函数添加到组件的清理列表中
+  if (!window.videoPlayerCleanupFunctions) {
+    window.videoPlayerCleanupFunctions = []
+  }
+  window.videoPlayerCleanupFunctions.push(cleanupPauseDisabling)
+  
+  debugLog('禁用播放暂停按钮的多层防护机制设置完成')
+}
+
 onUnmounted(() => {
   debugLog('VideoPlayer组件卸载，清理所有事件监听器')
   destroyHls()
+  
+  // 清理禁用暂停功能的事件监听器
+  if (window.videoPlayerCleanupFunctions) {
+    window.videoPlayerCleanupFunctions.forEach(cleanup => {
+      try {
+        cleanup()
+      } catch (err) {
+        debugLog('清理函数执行失败:', err)
+      }
+    })
+    window.videoPlayerCleanupFunctions = []
+  }
   
   const deviceInfo = getDeviceInfo()
   
