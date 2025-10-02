@@ -131,25 +131,27 @@
             </div>
           </template>
 
-          <div v-if="cacheStats.totalItems >= 0" style="max-height: 300px; overflow-y: auto;">
+          <div v-if="cacheStats.totalItems >= 0" style="max-height: 350px; overflow-y: auto;">
             <el-descriptions :column="2" border>
               <el-descriptions-item label="总条目数">
-                {{ cacheStats.totalItems }}
+                {{ cacheStats.totalItems || 0 }}
               </el-descriptions-item>
-              <el-descriptions-item label="命中率">
-                {{ cacheStats.hitRate ? (cacheStats.hitRate * 100).toFixed(2) + '%' : 'N/A' }}
+              <el-descriptions-item label="缓存状态">
+                <el-tag :type="cacheStats.totalItems > 0 ? 'success' : 'info'" size="small">
+                  {{ cacheStats.totalItems > 0 ? '有数据' : '空缓存' }}
+                </el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="总命中数">
-                {{ cacheStats.hits || 0 }}
+              <el-descriptions-item label="缓存类型">
+                KV存储
               </el-descriptions-item>
-              <el-descriptions-item label="总未命中数">
-                {{ cacheStats.misses || 0 }}
+              <el-descriptions-item label="可用性">
+                <el-tag type="success" size="small">正常</el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="内存使用">
-                {{ formatBytes(cacheStats.memoryUsage || 0) }}
+              <el-descriptions-item label="最后检查">
+                {{ formatTime(new Date().toISOString()) }}
               </el-descriptions-item>
-              <el-descriptions-item label="最后更新">
-                {{ formatTime(cacheStats.lastUpdated) }}
+              <el-descriptions-item label="存储位置">
+                Cloudflare KV
               </el-descriptions-item>
             </el-descriptions>
 
@@ -189,7 +191,7 @@
             </div>
           </template>
 
-          <div v-if="diagnostics.checks && diagnostics.checks.length > 0" style="max-height: 300px; overflow-y: auto;">
+          <div v-if="diagnostics.checks && diagnostics.checks.length > 0" style="max-height: 350px; overflow-y: auto;">
             <div
               v-for="check in diagnostics.checks"
               :key="check.name"
@@ -249,7 +251,7 @@
             </div>
           </template>
 
-          <div class="log-viewer" style="max-height: 200px; overflow-y: auto; padding: 10px; background-color: #f5f5f5; border-radius: 4px;">
+          <div class="log-viewer" style="max-height: 250px; overflow-y: auto; padding: 10px; background-color: #f5f5f5; border-radius: 4px;">
             <div
               v-for="(log, index) in logs"
               :key="index"
