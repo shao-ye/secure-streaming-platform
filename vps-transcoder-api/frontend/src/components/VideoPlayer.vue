@@ -64,6 +64,15 @@
           </template>
         </el-result>
       </div>
+
+      <!-- 全屏缩放提示 -->
+      <div v-if="isFullscreen" class="zoom-hint">
+        <div class="zoom-info">
+          <span>双指缩放: {{ Math.round(scale * 100) }}%</span>
+          <span v-if="scale > 1">| 单指拖拽</span>
+          <span>| 双击重置</span>
+        </div>
+      </div>
     </div>
 
     <div class="player-info">
@@ -113,6 +122,7 @@ const lastTouchCenter = ref({ x: 0, y: 0 })
 const touches = ref([])
 const isDragging = ref(false)
 const lastPanPoint = ref({ x: 0, y: 0 })
+const isFullscreen = ref(false)
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -391,11 +401,32 @@ watch(() => props.hlsUrl, (newUrl) => {
   }
 }, { immediate: true })
 
+// 全屏状态检测
+const checkFullscreenState = () => {
+  isFullscreen.value = !!(
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement
+  )
+  
+  // 退出全屏时重置缩放
+  if (!isFullscreen.value) {
+    resetZoom()
+  }
+}
+
 onMounted(() => {
   debugLog('VideoPlayer组件挂载')
   if (props.hlsUrl) {
     initHls()
   }
+  
+  // 监听全屏状态变化
+  document.addEventListener('fullscreenchange', checkFullscreenState)
+  document.addEventListener('webkitfullscreenchange', checkFullscreenState)
+  document.addEventListener('mozfullscreenchange', checkFullscreenState)
+  document.addEventListener('MSFullscreenChange', checkFullscreenState)
 })
 
 // 触摸事件处理 - 双指缩放功能
@@ -413,6 +444,11 @@ const getTouchCenter = (touch1, touch2) => {
 }
 
 const handleTouchStart = (event) => {
+  // 只在全屏状态下启用缩放功能
+  if (!isFullscreen.value) {
+    return
+  }
+  
   event.preventDefault()
   touches.value = Array.from(event.touches)
   
@@ -432,6 +468,11 @@ const handleTouchStart = (event) => {
 }
 
 const handleTouchMove = (event) => {
+  // 只在全屏状态下启用缩放功能
+  if (!isFullscreen.value) {
+    return
+  }
+  
   event.preventDefault()
   touches.value = Array.from(event.touches)
   
@@ -475,6 +516,11 @@ const handleTouchMove = (event) => {
 }
 
 const handleTouchEnd = (event) => {
+  // 只在全屏状态下启用缩放功能
+  if (!isFullscreen.value) {
+    return
+  }
+  
   event.preventDefault()
   touches.value = Array.from(event.touches)
   
@@ -499,6 +545,11 @@ const handleTouchEnd = (event) => {
 
 // 鼠标滚轮缩放支持
 const handleWheel = (event) => {
+  // 只在全屏状态下启用缩放功能
+  if (!isFullscreen.value) {
+    return
+  }
+  
   event.preventDefault()
   
   const delta = event.deltaY > 0 ? 0.9 : 1.1
@@ -530,6 +581,11 @@ const resetZoom = () => {
 
 // 双击重置缩放
 const handleDoubleClick = () => {
+  // 只在全屏状态下启用缩放功能
+  if (!isFullscreen.value) {
+    return
+  }
+  
   if (scale.value === 1) {
     scale.value = 2
   } else {
@@ -540,6 +596,12 @@ const handleDoubleClick = () => {
 onUnmounted(() => {
   debugLog('VideoPlayer组件卸载')
   destroyHls()
+  
+  // 清理全屏状态监听器
+  document.removeEventListener('fullscreenchange', checkFullscreenState)
+  document.removeEventListener('webkitfullscreenchange', checkFullscreenState)
+  document.removeEventListener('mozfullscreenchange', checkFullscreenState)
+  document.removeEventListener('MSFullscreenChange', checkFullscreenState)
 })
 </script>
 
@@ -587,8 +649,15 @@ onUnmounted(() => {
   max-height: calc(100vh - 200px);
   flex-shrink: 0;
   overflow: hidden;
-  touch-action: none; /* 禁用默认触摸行为 */
-  user-select: none; /* 禁用文本选择 */
+}
+
+/* 只在全屏状态下禁用触摸行为 */
+.player-container:fullscreen,
+.player-container:-webkit-full-screen,
+.player-container:-moz-full-screen,
+.player-container:-ms-fullscreen {
+  touch-action: none;
+  user-select: none;
 }
 
 .video-wrapper {
@@ -602,6 +671,33 @@ onUnmounted(() => {
 
 .video-wrapper:active {
   cursor: grabbing;
+}
+
+/* 全屏缩放提示样式 */
+.zoom-hint {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.zoom-info {
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.zoom-info span {
+  margin-right: 8px;
+}
+
+.zoom-info span:last-child {
+  margin-right: 0;
 }
 
 .video-element {
