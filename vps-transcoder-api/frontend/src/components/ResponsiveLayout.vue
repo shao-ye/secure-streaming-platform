@@ -441,26 +441,13 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  /* 隐藏滚动条但保持滚动功能 */
-  scrollbar-width: thin;
-  scrollbar-color: #c1c1c1 transparent;
+  /* 完全隐藏滚动条 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .stream-list-container::-webkit-scrollbar {
-  width: 6px;
-}
-
-.stream-list-container::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.stream-list-container::-webkit-scrollbar-thumb {
-  background-color: #c1c1c1;
-  border-radius: 3px;
-}
-
-.stream-list-container::-webkit-scrollbar-thumb:hover {
-  background-color: #a1a1a1;
+  display: none;
 }
 
 /* 主内容区域 */

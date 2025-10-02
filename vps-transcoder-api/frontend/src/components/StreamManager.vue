@@ -20,13 +20,6 @@
             >
               刷新
             </el-button>
-            <el-button 
-              type="info"
-              @click="debugData"
-              size="small"
-            >
-              调试数据
-            </el-button>
           </div>
         </div>
       </template>
@@ -41,7 +34,6 @@
           :height="tableHeight"
         >
         <el-table-column type="index" label="序号" width="60" :index="(index) => index + 1" />
-        <el-table-column prop="id" label="ID" width="120" />
         <el-table-column prop="name" label="频道名称" min-width="200" />
         <el-table-column prop="rtmpUrl" label="RTMP地址" min-width="300">
           <template #default="scope">
@@ -371,19 +363,6 @@ const refreshList = () => {
   streamsStore.fetchAdminStreams()
 }
 
-// 调试数据功能
-const debugData = () => {
-  console.log('=== 调试数据 ===')
-  console.log('原始数据:', streamsStore.streams)
-  console.log('排序后数据:', sortedStreams.value)
-  console.log('表格高度:', tableHeight.value)
-  console.log('添加对话框状态:', showAddDialog.value)
-  
-  ElMessage.info({
-    message: `共${streamsStore.streams.length}条数据，请查看浏览器控制台获取详细信息`,
-    duration: 3000
-  })
-}
 
 const formatDate = (timestamp) => {
   if (!timestamp) return '-'
@@ -525,6 +504,31 @@ onMounted(() => {
     flex-direction: column;
     gap: 15px;
     align-items: flex-start;
+  }
+  
+  .header-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  
+  .header-actions .el-button {
+    flex: 1;
+    min-width: 80px;
+  }
+  
+  /* 移动端表格优化 */
+  .table-container {
+    overflow-x: auto;
+  }
+  
+  .table-container :deep(.el-table) {
+    min-width: 800px;
+  }
+  
+  /* 移动端对话框优化 */
+  .el-dialog {
+    width: 95% !important;
+    margin: 0 auto;
   }
 }
 </style>

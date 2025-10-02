@@ -26,7 +26,6 @@
         </div>
         <div class="stream-info">
           <h4 class="stream-name">{{ stream.name }}</h4>
-          <p class="stream-id">ID: {{ stream.id }}</p>
         </div>
         <div class="stream-action">
           <el-icon 
@@ -145,43 +144,22 @@ const selectStream = (stream) => {
   100% { opacity: 1; }
 }
 
-/* 滚动条样式 - 优化显示效果 */
+/* 隐藏滚动条但保持滚动功能 */
+.stream-list {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
 .stream-list::-webkit-scrollbar {
-  width: 8px;
+  display: none;
 }
 
-.stream-list::-webkit-scrollbar-track {
-  background-color: #f5f5f5;
-  border-radius: 4px;
+.streams-container {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-.stream-list::-webkit-scrollbar-thumb {
-  background-color: #c0c4cc;
-  border-radius: 4px;
-  transition: background-color 0.3s ease;
-}
-
-.stream-list::-webkit-scrollbar-thumb:hover {
-  background-color: #909399;
-}
-
-/* 为streams-container也添加滚动条样式 */
 .streams-container::-webkit-scrollbar {
-  width: 8px;
-}
-
-.streams-container::-webkit-scrollbar-track {
-  background-color: #f5f5f5;
-  border-radius: 4px;
-}
-
-.streams-container::-webkit-scrollbar-thumb {
-  background-color: #c0c4cc;
-  border-radius: 4px;
-  transition: background-color 0.3s ease;
-}
-
-.streams-container::-webkit-scrollbar-thumb:hover {
-  background-color: #909399;
+  display: none;
 }
 </style>

@@ -197,16 +197,55 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  .header {
+    padding: 0 15px;
+    flex-direction: column;
+    gap: 10px;
+    height: auto;
+    min-height: 60px;
+  }
+  
+  .header-left h2 {
+    font-size: 18px;
+    margin: 10px 0 5px 0;
+  }
+  
   .header-right {
     gap: 8px;
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .header-right .el-button {
+    flex: 1;
+    max-width: 120px;
+  }
+
+  .el-main {
+    padding: 10px;
   }
 
   .status-cards {
     grid-template-columns: 1fr;
+    gap: 15px;
   }
 
   .admin-tabs {
-    padding: 15px;
+    padding: 10px;
+  }
+  
+  .admin-tabs :deep(.el-tabs__content) {
+    height: calc(100vh - 180px);
+  }
+  
+  /* 移动端标签页优化 */
+  .admin-tabs :deep(.el-tabs__header) {
+    margin: 0 0 15px 0;
+  }
+  
+  .admin-tabs :deep(.el-tabs__item) {
+    padding: 0 15px;
+    font-size: 14px;
   }
 }
 </style>
