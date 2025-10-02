@@ -400,16 +400,18 @@ onUnmounted(() => {
   left: 0;
 }
 
-/* PC端侧边栏折叠状态 */
-.sidebar-collapsed {
-  width: 0;
-  min-width: 0;
-  border-right: none;
+/* PC端侧边栏折叠状态 - 提高CSS优先级 */
+.sidebar.sidebar-collapsed {
+  width: 0 !important;
+  min-width: 0 !important;
+  border-right: none !important;
+  overflow: hidden;
 }
 
-.sidebar-collapsed .sidebar-content {
+.sidebar.sidebar-collapsed .sidebar-content {
   opacity: 0;
   pointer-events: none;
+  transform: translateX(-100%);
 }
 
 .sidebar-content {
