@@ -15,9 +15,9 @@ class ProcessManager {
     // HLS输出目录
     this.hlsOutputDir = process.env.HLS_OUTPUT_DIR || '/var/www/hls';
 
-    // HLS配置
-    this.hlsSegmentTime = parseInt(process.env.HLS_SEGMENT_TIME) || 2;
-    this.hlsListSize = parseInt(process.env.HLS_LIST_SIZE) || 6;
+    // HLS配置 - 低延迟优化
+    this.hlsSegmentTime = parseInt(process.env.HLS_SEGMENT_TIME) || 1; // 减少到1秒
+    this.hlsListSize = parseInt(process.env.HLS_LIST_SIZE) || 3; // 减少到3个分片
 
     // CPU优化配置 - 限制最大并发进程数
     this.maxConcurrentStreams = parseInt(process.env.MAX_CONCURRENT_STREAMS) || 4; // 限制最多4个并发流
@@ -60,41 +60,60 @@ class ProcessManager {
     const outputFile = path.join(outputDir, 'playlist.m3u8');
 
     return [
-      // 输入配置 - 优化连接参数
+      // 输入配置 - 低延迟优化
+      '-fflags', '+nobuffer+flush_packets',
+      '-flags', 'low_delay',
+      '-strict', 'experimental',
       '-i', rtmpUrl,
-      '-fflags', '+genpts',
       '-avoid_negative_ts', 'make_zero',
+      '-copyts',
+      '-start_at_zero',
       
-      // 连接优化参数
+      // 低延迟连接参数 - 减少重连延迟
       '-reconnect', '1',
       '-reconnect_at_eof', '1',
       '-reconnect_streamed', '1',
-      '-reconnect_delay_max', '2',
+      '-reconnect_delay_max', '1', // 减少重连延迟从2秒到1秒
+      '-timeout', '5000000', // 5秒超时
+      '-rw_timeout', '5000000', // 读写超时5秒
       
-      // 视频编码配置 - 优化CPU占用
+      // 视频编码配置 - 极低延迟优化
       '-c:v', 'libx264',
-      '-preset', 'superfast', // 从ultrafast改为superfast，平衡质量和性能
-      '-tune', 'zerolatency',
+      '-preset', 'ultrafast', // 使用最快预设减少编码延迟
+      '-tune', 'zerolatency', // 零延迟调优
       '-profile:v', 'baseline',
       '-level', '3.0',
-      '-g', '60', // 增加GOP大小，减少关键帧频率
-      '-keyint_min', '30', // 相应调整最小关键帧间隔
-      '-threads', '2', // 限制每个进程使用的线程数
-      '-crf', '28', // 添加CRF控制，降低编码质量以减少CPU占用
+      '-g', '30', // 减少GOP大小，增加关键帧频率以减少延迟
+      '-keyint_min', '15', // 减少最小关键帧间隔
+      '-sc_threshold', '0', // 禁用场景切换检测
+      '-threads', '2',
+      '-crf', '23', // 提高编码质量，减少延迟
+      '-maxrate', '2000k', // 限制最大码率
+      '-bufsize', '1000k', // 减少缓冲区大小
+      '-x264opts', 'no-scenecut:force-cfr:no-mbtree:sliced-threads:sync-lookahead=0:bframes=0:rc-lookahead=0',
       
-      // 音频编码配置
+      // 音频编码配置 - 低延迟
       '-c:a', 'aac',
-      '-b:a', '96k',
+      '-b:a', '128k',
       '-ac', '2',
       '-ar', '44100',
+      '-aac_coder', 'fast',
       
-      // HLS输出配置 - 与手动测试保持一致
+      // HLS输出配置 - 极低延迟设置
       '-f', 'hls',
-      '-hls_time', this.hlsSegmentTime.toString(),
-      '-hls_list_size', this.hlsListSize.toString(),
+      '-hls_time', '1', // 减少分片时间到1秒
+      '-hls_list_size', '3', // 减少播放列表大小到3个分片
       '-hls_segment_filename', path.join(outputDir, 'segment%03d.ts'),
-      '-hls_flags', 'delete_segments+round_durations+independent_segments',
+      '-hls_flags', 'delete_segments+round_durations+independent_segments+program_date_time',
       '-hls_allow_cache', '0',
+      '-hls_segment_type', 'mpegts',
+      '-start_number', '0',
+      '-hls_base_url', '',
+      
+      // 低延迟流控制
+      '-flush_packets', '1',
+      '-max_delay', '0',
+      '-max_interleave_delta', '0',
       
       // 输出文件
       outputFile
