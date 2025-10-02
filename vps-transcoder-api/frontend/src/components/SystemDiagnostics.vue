@@ -1,7 +1,7 @@
 <template>
   <div class="system-diagnostics">
     <!-- 系统状态概览 -->
-    <el-row :gutter="20" class="status-overview">
+    <el-row :gutter="20" class="status-overview" style="margin-bottom: 15px;">
       <el-col :span="6">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
@@ -68,14 +68,13 @@
     </el-row>
 
     <!-- 操作按钮 -->
-    <el-row :gutter="20" class="action-buttons">
+    <el-row :gutter="20" class="action-buttons" style="margin-bottom: 15px;">
       <el-col :span="24">
-        <el-card shadow="never">
-          <template #header>
-            <h3>系统操作</h3>
-          </template>
-          <div class="button-group">
+        <el-card shadow="never" style="padding: 10px;">
+          <div class="button-group" style="display: flex; gap: 10px; align-items: center;">
+            <span style="font-weight: 600; margin-right: 10px;">系统操作:</span>
             <el-button
+              size="small"
               type="primary"
               :icon="Refresh"
               @click="refreshSystemStatus"
@@ -84,6 +83,7 @@
               刷新状态
             </el-button>
             <el-button
+              size="small"
               type="warning"
               :icon="Delete"
               @click="clearCache"
@@ -92,6 +92,7 @@
               清理缓存
             </el-button>
             <el-button
+              size="small"
               type="info"
               :icon="Download"
               @click="reloadStreamsConfig"
@@ -100,6 +101,7 @@
               重载配置
             </el-button>
             <el-button
+              size="small"
               type="success"
               :icon="Monitor"
               @click="checkVpsHealth"
@@ -116,7 +118,7 @@
     <el-row :gutter="20">
       <!-- 缓存统计 -->
       <el-col :span="12">
-        <el-card shadow="never" style="height: 400px;">
+        <el-card shadow="never" style="height: 450px;">
           <template #header>
             <div class="card-header">
               <h3>缓存统计</h3>
@@ -174,7 +176,7 @@
 
       <!-- 系统诊断 -->
       <el-col :span="12">
-        <el-card shadow="never" style="height: 400px;">
+        <el-card shadow="never" style="height: 450px;">
           <template #header>
             <div class="card-header">
               <h3>系统诊断</h3>
@@ -226,7 +228,7 @@
     <!-- 日志查看器 -->
     <el-row style="margin-top: 20px;">
       <el-col :span="24">
-        <el-card shadow="never" style="height: 300px;">
+        <el-card shadow="never" style="height: 350px;">
           <template #header>
             <div class="card-header">
               <h3>系统日志</h3>
