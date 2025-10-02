@@ -92,9 +92,10 @@
         <!-- 视频播放器区域 -->
         <div class="video-section" v-if="selectedStream">
           <VideoPlayer 
-            :stream="selectedStream" 
+            :hls-url="selectedStream.hlsUrl" 
+            :stream-name="selectedStream.name"
             :key="selectedStream.id"
-            @fullscreen-change="handleFullscreenChange"
+            @error="handlePlayerError"
           />
         </div>
 
@@ -199,12 +200,30 @@ const handleTouchEnd = () => {
 }
 
 // 流选择处理
-const handleStreamSelect = (stream) => {
-  selectedStream.value = stream
-  // 移动端选择流后自动关闭侧边栏
-  if (isMobile.value) {
-    closeSidebar()
+const handleStreamSelect = async (stream) => {
+  try {
+    // 调用播放流API获取HLS URL
+    const hlsUrl = await streamsStore.playStream(stream.id)
+    selectedStream.value = {
+      ...stream,
+      hlsUrl: hlsUrl
+    }
+    ElMessage.success(`正在播放: ${stream.name}`)
+    
+    // 移动端选择流后自动关闭侧边栏
+    if (isMobile.value) {
+      closeSidebar()
+    }
+  } catch (error) {
+    ElMessage.error(error.message || '播放失败')
+    console.error('播放流失败:', error)
   }
+}
+
+// 播放器错误处理
+const handlePlayerError = (error) => {
+  ElMessage.error('视频播放出错: ' + error.message)
+  console.error('视频播放错误:', error)
 }
 
 // 全屏处理
