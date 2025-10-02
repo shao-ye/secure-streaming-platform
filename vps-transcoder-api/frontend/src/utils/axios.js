@@ -70,12 +70,18 @@ instance.interceptors.response.use(
           // 清除本地存储的认证信息
           localStorage.removeItem('auth_token')
           localStorage.removeItem('user_info')
-          // 延迟跳转，避免路由循环
-          setTimeout(() => {
-            if (router.currentRoute.value.path !== '/login') {
-              router.push('/login')
-            }
-          }, 1000)
+          // 清除用户状态
+          if (window.userStore) {
+            window.userStore.logout()
+          }
+          // 立即跳转到登录页面，避免延迟
+          if (router.currentRoute.value.path !== '/login') {
+            router.replace('/login').catch(err => {
+              console.warn('路由跳转失败:', err)
+              // 如果路由跳转失败，使用原生方法跳转
+              window.location.href = '/login'
+            })
+          }
           break
         case 403:
           message = '权限不足，无法访问该资源'
