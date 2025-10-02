@@ -13,22 +13,35 @@
       </div>
     </div>
 
-    <div class="player-container">
-      <video 
-        ref="videoRef"
-        class="video-element"
-        controls
-        autoplay
-        muted
-        playsinline
-        @loadstart="handleLoadStart"
-        @loadeddata="handleLoadedData"
-        @canplay="handleCanPlay"
-        @ended="handleEnded"
-        @error="handleError"
+    <div 
+      class="player-container"
+      ref="containerRef"
+      @touchstart="handleTouchStart"
+      @touchmove="handleTouchMove"
+      @touchend="handleTouchEnd"
+      @wheel="handleWheel"
+    >
+      <div 
+        class="video-wrapper"
+        :style="videoTransformStyle"
+        @dblclick="handleDoubleClick"
       >
-        您的浏览器不支持视频播放
-      </video>
+        <video 
+          ref="videoRef"
+          class="video-element"
+          controls
+          autoplay
+          muted
+          playsinline
+          @loadstart="handleLoadStart"
+          @loadeddata="handleLoadedData"
+          @canplay="handleCanPlay"
+          @ended="handleEnded"
+          @error="handleError"
+        >
+          您的浏览器不支持视频播放
+        </video>
+      </div>
 
       <div v-if="loading" class="loading-overlay">
         <el-loading
@@ -83,12 +96,23 @@ const props = defineProps({
 const emit = defineEmits(['error', 'ready', 'playing', 'ended'])
 
 const videoRef = ref(null)
+const containerRef = ref(null)
 const hls = ref(null)
 const loading = ref(true)
 const error = ref('')
 const status = ref('准备中')
 const retryCount = ref(0)
 const retryTimer = ref(null)
+
+// 缩放相关状态
+const scale = ref(1)
+const translateX = ref(0)
+const translateY = ref(0)
+const lastTouchDistance = ref(0)
+const lastTouchCenter = ref({ x: 0, y: 0 })
+const touches = ref([])
+const isDragging = ref(false)
+const lastPanPoint = ref({ x: 0, y: 0 })
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -97,6 +121,15 @@ const statusType = computed(() => {
     case '错误': return 'danger'
     case '重试中': return 'warning'
     default: return 'info'
+  }
+})
+
+// 视频变换样式
+const videoTransformStyle = computed(() => {
+  return {
+    transform: `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value})`,
+    transformOrigin: 'center center',
+    transition: isDragging.value ? 'none' : 'transform 0.3s ease-out'
   }
 })
 
@@ -365,6 +398,145 @@ onMounted(() => {
   }
 })
 
+// 触摸事件处理 - 双指缩放功能
+const getTouchDistance = (touch1, touch2) => {
+  const dx = touch1.clientX - touch2.clientX
+  const dy = touch1.clientY - touch2.clientY
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+const getTouchCenter = (touch1, touch2) => {
+  return {
+    x: (touch1.clientX + touch2.clientX) / 2,
+    y: (touch1.clientY + touch2.clientY) / 2
+  }
+}
+
+const handleTouchStart = (event) => {
+  event.preventDefault()
+  touches.value = Array.from(event.touches)
+  
+  if (touches.value.length === 1) {
+    // 单指拖拽
+    isDragging.value = true
+    lastPanPoint.value = {
+      x: touches.value[0].clientX,
+      y: touches.value[0].clientY
+    }
+  } else if (touches.value.length === 2) {
+    // 双指缩放
+    isDragging.value = false
+    lastTouchDistance.value = getTouchDistance(touches.value[0], touches.value[1])
+    lastTouchCenter.value = getTouchCenter(touches.value[0], touches.value[1])
+  }
+}
+
+const handleTouchMove = (event) => {
+  event.preventDefault()
+  touches.value = Array.from(event.touches)
+  
+  if (touches.value.length === 1 && isDragging.value && scale.value > 1) {
+    // 单指拖拽 - 只在缩放时允许拖拽
+    const deltaX = touches.value[0].clientX - lastPanPoint.value.x
+    const deltaY = touches.value[0].clientY - lastPanPoint.value.y
+    
+    translateX.value += deltaX
+    translateY.value += deltaY
+    
+    lastPanPoint.value = {
+      x: touches.value[0].clientX,
+      y: touches.value[0].clientY
+    }
+  } else if (touches.value.length === 2) {
+    // 双指缩放
+    const currentDistance = getTouchDistance(touches.value[0], touches.value[1])
+    const currentCenter = getTouchCenter(touches.value[0], touches.value[1])
+    
+    if (lastTouchDistance.value > 0) {
+      const scaleChange = currentDistance / lastTouchDistance.value
+      const newScale = Math.max(0.5, Math.min(3, scale.value * scaleChange))
+      
+      // 以触摸中心点为缩放中心
+      const containerRect = containerRef.value.getBoundingClientRect()
+      const centerX = currentCenter.x - containerRect.left - containerRect.width / 2
+      const centerY = currentCenter.y - containerRect.top - containerRect.height / 2
+      
+      // 调整平移以保持缩放中心点不变
+      const scaleDiff = newScale - scale.value
+      translateX.value -= centerX * scaleDiff / scale.value
+      translateY.value -= centerY * scaleDiff / scale.value
+      
+      scale.value = newScale
+    }
+    
+    lastTouchDistance.value = currentDistance
+    lastTouchCenter.value = currentCenter
+  }
+}
+
+const handleTouchEnd = (event) => {
+  event.preventDefault()
+  touches.value = Array.from(event.touches)
+  
+  if (touches.value.length === 0) {
+    isDragging.value = false
+    lastTouchDistance.value = 0
+    
+    // 如果缩放比例接近1，自动重置
+    if (scale.value < 1.1 && scale.value > 0.9) {
+      resetZoom()
+    }
+  } else if (touches.value.length === 1) {
+    // 从双指变为单指，重新开始拖拽
+    isDragging.value = true
+    lastPanPoint.value = {
+      x: touches.value[0].clientX,
+      y: touches.value[0].clientY
+    }
+    lastTouchDistance.value = 0
+  }
+}
+
+// 鼠标滚轮缩放支持
+const handleWheel = (event) => {
+  event.preventDefault()
+  
+  const delta = event.deltaY > 0 ? 0.9 : 1.1
+  const newScale = Math.max(0.5, Math.min(3, scale.value * delta))
+  
+  // 以鼠标位置为缩放中心
+  const containerRect = containerRef.value.getBoundingClientRect()
+  const centerX = event.clientX - containerRect.left - containerRect.width / 2
+  const centerY = event.clientY - containerRect.top - containerRect.height / 2
+  
+  const scaleDiff = newScale - scale.value
+  translateX.value -= centerX * scaleDiff / scale.value
+  translateY.value -= centerY * scaleDiff / scale.value
+  
+  scale.value = newScale
+  
+  // 如果缩放比例接近1，自动重置
+  if (scale.value < 1.1 && scale.value > 0.9) {
+    resetZoom()
+  }
+}
+
+// 重置缩放
+const resetZoom = () => {
+  scale.value = 1
+  translateX.value = 0
+  translateY.value = 0
+}
+
+// 双击重置缩放
+const handleDoubleClick = () => {
+  if (scale.value === 1) {
+    scale.value = 2
+  } else {
+    resetZoom()
+  }
+}
+
 onUnmounted(() => {
   debugLog('VideoPlayer组件卸载')
   destroyHls()
@@ -414,6 +586,22 @@ onUnmounted(() => {
   /* 限制最大高度避免溢出 */
   max-height: calc(100vh - 200px);
   flex-shrink: 0;
+  overflow: hidden;
+  touch-action: none; /* 禁用默认触摸行为 */
+  user-select: none; /* 禁用文本选择 */
+}
+
+.video-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+
+.video-wrapper:active {
+  cursor: grabbing;
 }
 
 .video-element {
