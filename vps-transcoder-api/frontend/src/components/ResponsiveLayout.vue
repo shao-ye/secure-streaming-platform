@@ -400,18 +400,19 @@ onUnmounted(() => {
   left: 0;
 }
 
-/* PC端侧边栏折叠状态 - 提高CSS优先级 */
-.sidebar.sidebar-collapsed {
+/* PC端侧边栏折叠状态 - 使用更高优先级选择器 */
+.responsive-layout .main-container .sidebar.sidebar-collapsed {
   width: 0 !important;
   min-width: 0 !important;
   border-right: none !important;
-  overflow: hidden;
+  overflow: hidden !important;
+  transform: translateX(-100%) !important;
 }
 
-.sidebar.sidebar-collapsed .sidebar-content {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-100%);
+.responsive-layout .main-container .sidebar.sidebar-collapsed .sidebar-content {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
 }
 
 .sidebar-content {
