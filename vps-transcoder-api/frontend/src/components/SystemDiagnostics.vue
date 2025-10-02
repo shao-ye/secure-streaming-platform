@@ -895,20 +895,114 @@ onUnmounted(() => {
 }
 
 @media (max-width: 768px) {
+  .system-diagnostics {
+    padding: 10px 0;
+  }
+
+  /* 状态卡片移动端优化 */
   .status-overview .el-col {
     margin-bottom: 10px;
   }
-
-  .button-group {
-    justify-content: center;
+  
+  .status-overview {
+    margin-bottom: 15px;
+  }
+  
+  .status-item {
+    padding: 15px;
+  }
+  
+  .status-value {
+    font-size: 20px;
+  }
+  
+  .status-label {
+    font-size: 12px;
   }
 
+  /* 按钮组移动端优化 */
+  .button-group {
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+  
+  .button-group .el-button {
+    width: 100%;
+    margin: 0;
+  }
+  
+  .button-group span {
+    margin-bottom: 8px;
+    text-align: center;
+  }
+
+  /* 卡片布局移动端优化 */
+  .el-row .el-col {
+    margin-bottom: 15px;
+  }
+  
+  .el-card {
+    margin-bottom: 15px;
+  }
+  
+  /* 表格移动端优化 */
+  .el-table {
+    font-size: 12px;
+  }
+  
+  .el-table .el-table__cell {
+    padding: 8px 4px;
+  }
+
+  /* 日志查看器移动端优化 */
+  .log-viewer {
+    font-size: 11px;
+  }
+  
   .log-time {
-    width: 120px;
+    width: 100px;
+    font-size: 10px;
   }
 
   .log-level {
-    width: 50px;
+    width: 40px;
+    font-size: 10px;
+  }
+  
+  .log-message {
+    font-size: 11px;
+  }
+  
+  /* 诊断项目移动端优化 */
+  .diagnostic-item {
+    padding: 8px 0;
+  }
+  
+  .diagnostic-header {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  
+  .diagnostic-name {
+    font-size: 14px;
+  }
+  
+  /* 登录日志移动端优化 */
+  .login-log-item {
+    padding: 6px 0 !important;
+  }
+  
+  .login-log-item > div {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 4px;
+  }
+  
+  /* 缓存键标签移动端优化 */
+  .cache-key-tag {
+    font-size: 11px;
+    margin: 1px 2px;
   }
 }
 </style>
