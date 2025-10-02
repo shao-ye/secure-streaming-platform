@@ -368,6 +368,8 @@ onUnmounted(() => {
   flex-direction: column;
   transition: transform 0.3s ease;
   z-index: 1000;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar-content {
@@ -432,7 +434,8 @@ onUnmounted(() => {
 
 .stream-list-container {
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* 主内容区域 */
@@ -449,6 +452,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 20px;
+  max-height: 100vh;
 }
 
 .empty-state {
@@ -540,6 +545,28 @@ onUnmounted(() => {
 @media (min-width: 1200px) {
   .sidebar {
     width: 320px;
+  }
+}
+
+/* PC端专用样式优化 */
+@media (min-width: 768px) {
+  .video-section {
+    padding: 16px;
+    max-height: calc(100vh - 32px);
+  }
+  
+  .content-area {
+    padding: 0;
+  }
+  
+  .stream-list-container {
+    max-height: calc(100vh - 120px);
+    padding-bottom: 16px;
+  }
+  
+  /* 确保侧边栏完整显示 */
+  .sidebar-content {
+    min-height: 100vh;
   }
 }
 

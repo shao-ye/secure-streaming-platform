@@ -58,10 +58,6 @@
         <span class="label">状态:</span>
         <el-tag :type="statusType" size="small">{{ status }}</el-tag>
       </div>
-      <div class="info-item">
-        <span class="label">播放地址:</span>
-        <span class="value">{{ hlsUrl }}</span>
-      </div>
     </div>
   </div>
 </template>
@@ -378,10 +374,10 @@ onUnmounted(() => {
 <style scoped>
 .video-player {
   width: 100%;
-  height: 100%;
   display: flex;
   flex-direction: column;
   background-color: #000;
+  max-height: calc(100vh - 120px);
 }
 
 .player-header {
