@@ -19,6 +19,10 @@ class ProcessManager {
     this.hlsSegmentTime = parseInt(process.env.HLS_SEGMENT_TIME) || 2;
     this.hlsListSize = parseInt(process.env.HLS_LIST_SIZE) || 6;
 
+    // CPU优化配置 - 限制最大并发进程数
+    this.maxConcurrentStreams = parseInt(process.env.MAX_CONCURRENT_STREAMS) || 4; // 限制最多4个并发流
+    this.cpuThreshold = parseFloat(process.env.CPU_THRESHOLD) || 80.0; // CPU使用率阈值
+
     // 确保输出目录存在
     this.ensureOutputDirectory();
 
@@ -67,14 +71,16 @@ class ProcessManager {
       '-reconnect_streamed', '1',
       '-reconnect_delay_max', '2',
       
-      // 视频编码配置 - 基于成功的手动测试优化
+      // 视频编码配置 - 优化CPU占用
       '-c:v', 'libx264',
-      '-preset', 'ultrafast',
+      '-preset', 'superfast', // 从ultrafast改为superfast，平衡质量和性能
       '-tune', 'zerolatency',
       '-profile:v', 'baseline',
       '-level', '3.0',
-      '-g', '30',
-      '-keyint_min', '15',
+      '-g', '60', // 增加GOP大小，减少关键帧频率
+      '-keyint_min', '30', // 相应调整最小关键帧间隔
+      '-threads', '2', // 限制每个进程使用的线程数
+      '-crf', '28', // 添加CRF控制，降低编码质量以减少CPU占用
       
       // 音频编码配置
       '-c:a', 'aac',
@@ -106,6 +112,12 @@ class ProcessManager {
       // 验证输入参数
       if (!streamId || !rtmpUrl) {
         throw new Error('streamId and rtmpUrl are required');
+      }
+
+      // 检查并发进程数限制
+      if (this.runningStreams.size >= this.maxConcurrentStreams) {
+        logger.warn(`Maximum concurrent streams (${this.maxConcurrentStreams}) reached. Current: ${this.runningStreams.size}`);
+        throw new Error(`Maximum concurrent streams limit (${this.maxConcurrentStreams}) reached. Please stop some streams first.`);
       }
 
       // 如果流已经在运行，先停止旧的进程
