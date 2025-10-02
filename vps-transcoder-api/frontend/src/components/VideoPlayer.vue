@@ -88,7 +88,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import Hls from 'hls.js'
@@ -469,6 +469,31 @@ onMounted(() => {
   if (props.hlsUrl) {
     initHls()
   }
+  
+  // 确保事件监听器正确绑定 - 修复拖动无法移动问题
+  nextTick(() => {
+    if (containerRef.value) {
+      debugLog('手动确保触摸事件监听器绑定')
+      
+      // 验证事件监听器是否正确绑定
+      const container = containerRef.value
+      
+      // 添加调试日志来验证事件绑定
+      const originalHandlers = {
+        touchstart: handleTouchStart,
+        touchmove: handleTouchMove,
+        touchend: handleTouchEnd,
+        wheel: handleWheel
+      }
+      
+      // 确保事件监听器正确绑定
+      Object.entries(originalHandlers).forEach(([event, handler]) => {
+        container.removeEventListener(event, handler)
+        container.addEventListener(event, handler, { passive: false })
+        debugLog(`重新绑定事件监听器: ${event}`)
+      })
+    }
+  })
   
   // 跨平台全屏状态监听
   const deviceInfo = getDeviceInfo()
