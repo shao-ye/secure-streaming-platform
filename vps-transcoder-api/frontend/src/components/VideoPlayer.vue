@@ -38,6 +38,7 @@
           @canplay="handleCanPlay"
           @ended="handleEnded"
           @error="handleError"
+          @click="handleVideoClick"
         >
           您的浏览器不支持视频播放
         </video>
@@ -716,6 +717,18 @@ const resetZoom = () => {
   scale.value = 1
   translateX.value = 0
   translateY.value = 0
+}
+
+// 处理视频点击事件 - 禁用暂停功能
+const handleVideoClick = (event) => {
+  // 阻止默认的点击暂停行为
+  event.preventDefault()
+  event.stopPropagation()
+  
+  debugLog('视频点击事件被拦截，已禁用暂停功能')
+  
+  // 如果需要，可以在这里添加其他点击逻辑
+  // 比如显示控制栏等
 }
 
 // 双击重置缩放

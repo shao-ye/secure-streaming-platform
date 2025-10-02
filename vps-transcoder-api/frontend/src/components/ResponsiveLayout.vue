@@ -44,13 +44,24 @@
       <!-- 侧边栏 -->
       <aside 
         class="sidebar" 
-        :class="{ 'sidebar-hidden': isMobile && !sidebarOpen }"
+        :class="{ 
+          'sidebar-hidden': isMobile && !sidebarOpen,
+          'sidebar-collapsed': !isMobile && !sidebarOpen
+        }"
         ref="sidebarRef"
       >
         <div class="sidebar-content">
           <!-- 桌面端标题 -->
           <div v-if="!isMobile" class="desktop-header">
-            <h1 class="app-title">YOYO流媒体平台</h1>
+            <div class="header-top">
+              <h1 class="app-title">YOYO流媒体平台</h1>
+              <button class="collapse-button" @click="toggleSidebar" :aria-label="sidebarOpen ? '收起侧边栏' : '展开侧边栏'">
+                <el-icon size="18">
+                  <DArrowLeft v-if="sidebarOpen" />
+                  <DArrowRight v-else />
+                </el-icon>
+              </button>
+            </div>
             <div class="user-info" v-if="userStore.isLoggedIn">
               <span class="welcome-text">欢迎, {{ userStore.isAdmin ? 'admin' : '用户' }}</span>
               <el-button-group size="small">
@@ -86,6 +97,13 @@
           </div>
         </div>
       </aside>
+
+      <!-- PC端折叠时的浮动展开按钮 -->
+      <div v-if="!isMobile && !sidebarOpen" class="floating-expand-button" @click="toggleSidebar">
+        <el-icon size="20">
+          <DArrowRight />
+        </el-icon>
+      </div>
 
       <!-- 主内容区域 -->
       <main class="content-area">
@@ -125,7 +143,9 @@ import {
   Close, 
   User, 
   VideoCamera, 
-  Refresh 
+  Refresh,
+  DArrowLeft,
+  DArrowRight
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import StreamList from './StreamList.vue'
@@ -371,10 +391,22 @@ onUnmounted(() => {
   border-right: 1px solid #e4e7ed;
   display: flex;
   flex-direction: column;
-  transition: transform 0.3s ease;
+  transition: all 0.3s ease;
   z-index: 1000;
   height: 100vh;
   overflow: hidden;
+}
+
+/* PC端侧边栏折叠状态 */
+.sidebar-collapsed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+}
+
+.sidebar-collapsed .sidebar-content {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-content {
@@ -392,11 +424,71 @@ onUnmounted(() => {
   color: white;
 }
 
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
 .desktop-header .app-title {
   font-size: 24px;
   font-weight: 700;
-  margin: 0 0 12px 0;
+  margin: 0;
   letter-spacing: 1px;
+  flex: 1;
+}
+
+.collapse-button {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  transition: background-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+}
+
+.collapse-button:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  opacity: 1;
+}
+
+.collapse-button:active {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* PC端浮动展开按钮 */
+.floating-expand-button {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  width: 44px;
+  height: 44px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: all 0.3s ease;
+  z-index: 1001;
+}
+
+.floating-expand-button:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.floating-expand-button:active {
+  transform: scale(0.95);
 }
 
 .user-info {
