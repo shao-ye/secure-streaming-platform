@@ -9,7 +9,7 @@ const router = express.Router();
 // 导入子路由
 const streamRoutes = require('./stream');
 const statusRoutes = require('./status');
-const ondemandRoutes = require('./ondemand');
+const ondemandRoutes = require('./ondemand-complete');
 
 // API密钥验证中间件
 const apiKeyAuth = (req, res, next) => {
@@ -52,6 +52,6 @@ router.get('/status', (req, res) => {
 // 挂载子路由
 router.use('/', streamRoutes);  // 流处理路由: /api/start-stream, /api/stop-stream, /api/streams
 router.use('/', statusRoutes);  // 系统状态路由: /api/system/status 等
-router.use('/ondemand', ondemandRoutes);  // 按需转码路由: /api/ondemand/* (实现FR-9按需播放功能)
+router.use('/ondemand', ondemandRoutes);  // 完整按需转码路由: /api/ondemand/* (实现FR-9按需播放功能，包含观看者管理和自动清理)
 
 module.exports = router;

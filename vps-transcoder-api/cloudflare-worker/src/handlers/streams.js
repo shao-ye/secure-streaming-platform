@@ -147,7 +147,7 @@ export const handleStreams = {
   },
 
   /**
-   * 请求播放指定流
+   * 请求播放指定流 - 使用按需转码API
    */
   async playStream(request, env, ctx) {
     try {
@@ -179,35 +179,57 @@ export const handleStreams = {
           return errorResponse('VPS server is not available', 'VPS_UNAVAILABLE', 503, request);
         }
 
-        // 调用VPS API启动转码
-        const transcoderResponse = await callTranscoderAPI(env, 'start-stream', 'POST', {
-          streamId: streamConfig.id,
-          rtmpUrl: streamConfig.rtmpUrl
+        // 步骤1：配置频道（如果尚未配置）
+        try {
+          await callTranscoderAPI(env, 'ondemand/configure-channel', 'POST', {
+            channelId: streamId,
+            name: streamConfig.name,
+            rtmpUrl: streamConfig.rtmpUrl
+          });
+        } catch (configError) {
+          // 如果频道已配置，忽略错误继续
+          logInfo(env, 'Channel configuration result', {
+            streamId,
+            error: configError.message
+          });
+        }
+
+        // 步骤2：开始观看（按需启动转码）
+        const watchResponse = await callTranscoderAPI(env, 'ondemand/start-watching', 'POST', {
+          channelId: streamId,
+          userId: auth.user.username,
+          clientInfo: {
+            userAgent: request.headers.get('User-Agent') || 'Unknown',
+            ip: request.headers.get('CF-Connecting-IP') || 'Unknown'
+          }
         });
 
         const responseTime = Date.now() - startTime;
 
-        logStreamEvent(env, 'play_success', streamId, auth.user.username, request, {
+        logStreamEvent(env, 'play_success_ondemand', streamId, auth.user.username, request, {
           responseTime: `${responseTime}ms`,
-          processId: transcoderResponse.data?.processId
+          sessionId: watchResponse.data?.sessionId,
+          isFirstViewer: watchResponse.data?.isFirstViewer
         });
 
-        // 返回HLS播放地址（修复文件名匹配问题）
+        // 返回HLS播放地址和观看会话信息
         const hlsUrl = `/hls/${streamId}/playlist.m3u8`;
 
         return successResponse({
           streamId,
           streamName: streamConfig.name,
           hlsUrl,
-          transcoderInfo: {
-            processId: transcoderResponse.data?.processId,
-            status: transcoderResponse.status
+          onDemandInfo: {
+            sessionId: watchResponse.data?.sessionId,
+            isFirstViewer: watchResponse.data?.isFirstViewer,
+            viewerCount: watchResponse.data?.viewerCount,
+            status: watchResponse.status
           },
           responseTime
-        }, `Stream '${streamConfig.name}' started successfully`, request);
+        }, `Stream '${streamConfig.name}' started successfully (on-demand)`, request);
 
       } catch (transcoderError) {
-        logStreamEvent(env, 'play_failed', streamId, auth.user.username, request, {
+        logStreamEvent(env, 'play_failed_ondemand', streamId, auth.user.username, request, {
           error: transcoderError.message,
           responseTime: Date.now() - startTime
         });
@@ -244,7 +266,7 @@ export const handleStreams = {
   },
 
   /**
-   * 停止指定流（可选功能）
+   * 停止指定流 - 使用按需转码API
    */
   async stopStream(request, env, ctx) {
     try {
@@ -274,26 +296,33 @@ export const handleStreams = {
           return errorResponse('VPS server is not available', 'VPS_UNAVAILABLE', 503, request);
         }
 
-        // 调用VPS API停止转码
-        const transcoderResponse = await callTranscoderAPI(env, 'stop-stream', 'POST', {
-          streamId: streamId
+        // 调用按需转码API停止观看
+        const transcoderResponse = await callTranscoderAPI(env, 'ondemand/stop-watching', 'POST', {
+          channelId: streamId,
+          userId: auth.user.username,
+          clientInfo: {
+            userAgent: request.headers.get('User-Agent') || 'Unknown',
+            ip: request.headers.get('CF-Connecting-IP') || 'Unknown'
+          }
         });
 
-        logStreamEvent(env, 'stop_success', streamId, auth.user.username, request, {
-          processId: transcoderResponse.data?.processId
+        logStreamEvent(env, 'stop_success_ondemand', streamId, auth.user.username, request, {
+          sessionId: transcoderResponse.data?.sessionId,
+          remainingViewers: transcoderResponse.data?.remainingViewers
         });
 
         return successResponse({
           streamId,
           streamName: streamConfig.name,
-          transcoderInfo: {
-            processId: transcoderResponse.data?.processId,
+          onDemandInfo: {
+            sessionId: transcoderResponse.data?.sessionId,
+            remainingViewers: transcoderResponse.data?.remainingViewers,
             status: transcoderResponse.status
           }
-        }, `Stream '${streamConfig.name}' stopped successfully`, request);
+        }, `Stream '${streamConfig.name}' stopped successfully (on-demand)`, request);
 
       } catch (transcoderError) {
-        logStreamEvent(env, 'stop_failed', streamId, auth.user.username, request, {
+        logStreamEvent(env, 'stop_failed_ondemand', streamId, auth.user.username, request, {
           error: transcoderError.message
         });
 
