@@ -276,7 +276,12 @@ const refreshStreams = async () => {
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   // 初始化侧边栏状态
-  handleResize()
+  if (isMobile.value) {
+    // 手机端首次加载时默认展开播放列表
+    sidebarOpen.value = true
+  } else {
+    sidebarOpen.value = true
+  }
   // 加载流列表
   streamsStore.fetchStreams()
 })
@@ -436,6 +441,26 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 隐藏滚动条但保持滚动功能 */
+  scrollbar-width: thin;
+  scrollbar-color: #c1c1c1 transparent;
+}
+
+.stream-list-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.stream-list-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.stream-list-container::-webkit-scrollbar-thumb {
+  background-color: #c1c1c1;
+  border-radius: 3px;
+}
+
+.stream-list-container::-webkit-scrollbar-thumb:hover {
+  background-color: #a1a1a1;
 }
 
 /* 主内容区域 */
@@ -452,8 +477,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: 20px;
-  max-height: 100vh;
+  padding: 0;
+  height: 100vh;
 }
 
 .empty-state {
@@ -551,8 +576,8 @@ onUnmounted(() => {
 /* PC端专用样式优化 */
 @media (min-width: 768px) {
   .video-section {
-    padding: 16px;
-    max-height: calc(100vh - 32px);
+    padding: 0;
+    height: 100vh;
   }
   
   .content-area {
