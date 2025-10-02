@@ -395,6 +395,9 @@ onUnmounted(() => {
   z-index: 1000;
   height: 100vh;
   overflow: hidden;
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 
 /* PC端侧边栏折叠状态 */
@@ -549,6 +552,24 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   background-color: #f5f7fa;
+  transition: all 0.3s ease;
+}
+
+/* PC端侧边栏折叠时的布局调整 */
+@media (min-width: 768px) {
+  .main-container {
+    position: relative;
+  }
+  
+  .content-area {
+    margin-left: 300px;
+    width: calc(100% - 300px);
+  }
+  
+  .sidebar-collapsed ~ .content-area {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 
 .video-section {

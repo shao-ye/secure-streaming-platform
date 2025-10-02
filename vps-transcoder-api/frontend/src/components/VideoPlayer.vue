@@ -721,14 +721,19 @@ const resetZoom = () => {
 
 // 处理视频点击事件 - 禁用暂停功能
 const handleVideoClick = (event) => {
-  // 阻止默认的点击暂停行为
+  // 强制阻止默认的点击暂停行为
   event.preventDefault()
   event.stopPropagation()
+  event.stopImmediatePropagation()
+  
+  // 确保视频继续播放
+  if (videoRef.value && videoRef.value.paused) {
+    videoRef.value.play()
+  }
   
   debugLog('视频点击事件被拦截，已禁用暂停功能')
   
-  // 如果需要，可以在这里添加其他点击逻辑
-  // 比如显示控制栏等
+  return false
 }
 
 // 双击重置缩放
