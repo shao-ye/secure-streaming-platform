@@ -20,7 +20,7 @@ export const config = {
   // API配置
   api: {
     baseURL: getEnvVar('VITE_API_BASE_URL', 'http://localhost:8787'),
-    timeout: 10000,
+    timeout: 30000, // 增加到30秒，适应FFmpeg启动时间
     withCredentials: true,
   },
 

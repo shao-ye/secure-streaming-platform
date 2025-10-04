@@ -311,8 +311,8 @@ class SimpleStreamManager {
       }
     });
     
-    // 等待流准备就绪
-    await this.waitForStreamReady(channelId, 15000);
+    // 等待流准备就绪 - 减少等待时间，提高响应速度
+    await this.waitForStreamReady(channelId, 10000);
     
     logger.info('FFmpeg process started successfully', { channelId, pid: ffmpegProcess.pid });
     return ffmpegProcess;
