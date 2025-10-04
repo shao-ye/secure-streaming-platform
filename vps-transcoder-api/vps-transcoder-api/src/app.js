@@ -46,8 +46,8 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 
-// 信任代理配置 - 修复Rate-Limit问题
-app.set('trust proxy', 1);
+// 信任代理配置 - 在VPS直连环境下禁用，避免rate limiting安全警告
+app.set('trust proxy', false);
 
 // CORS配置
 app.use(cors({
@@ -68,23 +68,23 @@ if (NODE_ENV !== 'test') {
     }));
 }
 
-// 速率限制 - 针对VPS环境优化
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15分钟
-    max: NODE_ENV === 'development' ? 1000 : 100,
-    message: {
-        error: 'Too many requests from this IP, please try again later.'
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    // 移除trustProxy配置，使用全局app.set('trust proxy', 1)设置
-    skip: (req) => {
-        // 跳过本地请求的速率限制
-        return req.ip === '127.0.0.1' || req.ip === '::1';
-    }
-});
+// 速率限制 - 临时禁用以排除配置问题
+// const limiter = rateLimit({
+//     windowMs: 15 * 60 * 1000, // 15分钟
+//     max: NODE_ENV === 'development' ? 1000 : 100,
+//     message: {
+//         error: 'Too many requests from this IP, please try again later.'
+//     },
+//     standardHeaders: true,
+//     legacyHeaders: false,
+//     trustProxy: false,
+//     skip: (req) => {
+//         const clientIp = req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip;
+//         return clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1';
+//     }
+// });
 
-app.use('/api/', limiter);
+// app.use('/api/', limiter);
 
 // 静态文件服务 - HLS文件
 app.use('/hls', express.static(hlsDir, {
@@ -112,6 +112,11 @@ app.get('/health', (req, res) => {
 
 // API路由
 try {
+    // 使用新的简化流管理API
+    const { router: simpleStreamRoutes } = require('./routes/simple-stream');
+    app.use('/api/simple-stream', simpleStreamRoutes);
+    
+    // 保留原有API路由（向后兼容）
     const apiRoutes = require('./routes/api');
     app.use('/api', apiRoutes);
 } catch (error) {
@@ -122,7 +127,8 @@ try {
         res.json({
             status: 'running',
             message: 'VPS Transcoder API is operational',
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            version: '2.0.0'
         });
     });
 }

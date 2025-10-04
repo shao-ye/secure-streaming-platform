@@ -74,8 +74,6 @@ class ProcessManager {
       '-reconnect_at_eof', '1',
       '-reconnect_streamed', '1',
       '-reconnect_delay_max', '1', // 减少重连延迟从2秒到1秒
-      '-timeout', '5000000', // 5秒超时
-      '-rw_timeout', '5000000', // 读写超时5秒
       
       // 视频编码配置 - 极低延迟优化
       '-c:v', 'libx264',
