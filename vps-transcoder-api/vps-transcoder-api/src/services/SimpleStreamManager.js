@@ -21,6 +21,9 @@ class SimpleStreamManager {
     // 频道到进程的映射 Map<channelId, processInfo>
     this.activeStreams = new Map();
 
+    // RTMP源到进程的映射 Map<rtmpUrl, processInfo> - 实现RTMP源复用
+    this.rtmpProcessMap = new Map();
+
     // 频道心跳时间 Map<channelId, lastHeartbeatTime>
     this.channelHeartbeats = new Map();
 
@@ -112,7 +115,36 @@ class SimpleStreamManager {
         return existingChannel.hlsUrl;
       }
       
-      // 频道未在处理，启动新的FFmpeg进程
+      // 🔥 新增：检查是否已有相同RTMP源的进程（RTMP源复用）
+      const existingRtmpProcess = this.rtmpProcessMap.get(rtmpUrl);
+      if (existingRtmpProcess) {
+        logger.info('Reusing existing RTMP process for new channel', { 
+          channelId, 
+          rtmpUrl, 
+          existingChannelId: existingRtmpProcess.channelId 
+        });
+        
+        // 为新频道创建HLS符号链接，复用现有进程
+        await this.createHLSSymlink(existingRtmpProcess.channelId, channelId);
+        
+        // 创建频道映射
+        const channelProcessInfo = {
+          channelId: channelId,
+          rtmpUrl: rtmpUrl,
+          hlsUrl: `https://yoyo-vps.5202021.xyz/hls/${channelId}/playlist.m3u8`,
+          startTime: Date.now(),
+          process: existingRtmpProcess.process,
+          isSharedProcess: true,
+          masterChannelId: existingRtmpProcess.channelId
+        };
+        
+        this.activeStreams.set(channelId, channelProcessInfo);
+        this.channelHeartbeats.set(channelId, Date.now());
+        
+        return channelProcessInfo.hlsUrl;
+      }
+      
+      // 频道未在处理且无可复用的RTMP进程，启动新的FFmpeg进程
       return await this.startNewStream(channelId, rtmpUrl);
       
     } catch (error) {
@@ -142,6 +174,12 @@ class SimpleStreamManager {
       
       // 保存进程信息
       this.activeStreams.set(channelId, processInfo);
+      
+      // 🔥 新增：保存RTMP源映射，支持后续复用
+      this.rtmpProcessMap.set(rtmpUrl, processInfo);
+      
+      // 设置心跳
+      this.channelHeartbeats.set(channelId, Date.now());
       
       logger.info('Started new FFmpeg process', { channelId, rtmpUrl });
       return processInfo.hlsUrl;
@@ -197,13 +235,49 @@ class SimpleStreamManager {
     if (!processInfo) return;
     
     try {
-      // 停止FFmpeg进程
-      await this.stopFFmpegProcess(channelId);
+      // 🔥 新增：检查是否为共享进程
+      if (processInfo.isSharedProcess) {
+        // 共享进程，只清理符号链接，不停止FFmpeg进程
+        await this.cleanupChannelHLS(channelId);
+        this.activeStreams.delete(channelId);
+        
+        logger.info('Shared process channel stopped, symlink removed', { 
+          channelId, 
+          masterChannelId: processInfo.masterChannelId 
+        });
+        return;
+      }
+      
+      // 独立进程，检查是否有其他频道在使用同一RTMP源
+      const rtmpUrl = processInfo.rtmpUrl;
+      const channelsUsingRtmp = Array.from(this.activeStreams.values())
+        .filter(info => info.rtmpUrl === rtmpUrl && info.channelId !== channelId);
+      
+      if (channelsUsingRtmp.length > 0) {
+        // 有其他频道在使用，将进程转移给其他频道
+        const newMasterChannel = channelsUsingRtmp[0];
+        this.rtmpProcessMap.set(rtmpUrl, newMasterChannel);
+        
+        logger.info('Process ownership transferred to another channel', {
+          channelId,
+          newMasterChannelId: newMasterChannel.channelId,
+          rtmpUrl
+        });
+      } else {
+        // 没有其他频道使用，可以安全停止进程
+        await this.stopFFmpegProcess(channelId);
+        this.rtmpProcessMap.delete(rtmpUrl);
+        
+        logger.info('FFmpeg process stopped, no other channels using RTMP source', {
+          channelId,
+          rtmpUrl
+        });
+      }
       
       // 清理HLS文件
       await this.cleanupChannelHLS(channelId);
       
-      // 移除进程映射
+      // 移除频道映射
       this.activeStreams.delete(channelId);
       
       logger.info('Channel stopped successfully', { channelId });
@@ -459,6 +533,53 @@ class SimpleStreamManager {
       message: 'Stopped watching successfully',
       data: { channelId }
     };
+  }
+
+  /**
+   * 创建HLS符号链接，实现RTMP源复用
+   * @param {string} masterChannelId - 主频道ID（已有FFmpeg进程）
+   * @param {string} slaveChannelId - 从频道ID（需要复用进程）
+   */
+  async createHLSSymlink(masterChannelId, slaveChannelId) {
+    const fs = require('fs').promises;
+    const path = require('path');
+    
+    try {
+      const masterDir = path.join(this.hlsOutputDir, masterChannelId);
+      const slaveDir = path.join(this.hlsOutputDir, slaveChannelId);
+      
+      // 检查主频道目录是否存在
+      try {
+        await fs.access(masterDir);
+      } catch (error) {
+        throw new Error(`Master channel directory does not exist: ${masterDir}`);
+      }
+      
+      // 删除从频道目录（如果存在）
+      try {
+        await fs.rm(slaveDir, { recursive: true, force: true });
+      } catch (error) {
+        // 忽略删除错误
+      }
+      
+      // 创建符号链接
+      await fs.symlink(masterDir, slaveDir);
+      
+      logger.info('Created HLS symlink for RTMP source reuse', {
+        masterChannelId,
+        slaveChannelId,
+        masterDir,
+        slaveDir
+      });
+      
+    } catch (error) {
+      logger.error('Failed to create HLS symlink', {
+        masterChannelId,
+        slaveChannelId,
+        error: error.message
+      });
+      throw error;
+    }
   }
 
   /**
