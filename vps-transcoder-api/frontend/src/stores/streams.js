@@ -30,7 +30,13 @@ export const useStreamsStore = defineStore('streams', () => {
       // 如果当前有正在播放的流，先停止它
       if (currentStream.value && currentStream.value.channelId !== streamId) {
         await stopStream()
+        
+        // 🔥 新增：等待2秒确保停止操作完全完成，避免资源竞争
+        console.log('等待停止操作完成...')
+        await new Promise(resolve => setTimeout(resolve, 2000))
       }
+      
+      console.log('启动新频道:', streamId)
       
       // 使用新的SimpleStreamManager API - 只需要channelId
       const response = await axios.post('/api/simple-stream/start-watching', {

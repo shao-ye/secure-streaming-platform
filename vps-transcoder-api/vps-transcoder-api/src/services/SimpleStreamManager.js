@@ -471,6 +471,16 @@ class SimpleStreamManager {
         try {
           const content = fs.readFileSync(playlistFile, 'utf8');
           
+          // 🔥 优化：只要playlist文件存在且有内容就认为准备就绪
+          if (content.length > 50) {
+            logger.info('Stream ready - playlist file exists with content', { 
+              channelId, 
+              contentLength: content.length,
+              elapsed: Date.now() - startTime 
+            });
+            return;
+          }
+          
           // 检查是否有分片文件
           const segments = content.match(/segment\d+\.ts/g) || [];
           
@@ -483,8 +493,8 @@ class SimpleStreamManager {
               const stats = fs.statSync(segmentPath);
               const segmentAge = Date.now() - stats.mtime.getTime();
               
-              // 分片文件应该是最近5秒内生成的
-              if (segmentAge < 5000) {
+              // 分片文件应该是最近10秒内生成的（放宽限制）
+              if (segmentAge < 10000) {
                 logger.info('Stream ready with segments', { 
                   channelId, 
                   segmentCount: segments.length,
@@ -499,7 +509,8 @@ class SimpleStreamManager {
         }
       }
       
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // 🔥 优化：减少检查间隔，提高响应速度
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
     throw new Error(`Stream not ready within ${timeout}ms`);
