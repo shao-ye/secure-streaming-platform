@@ -27,26 +27,32 @@ export const useStreamsStore = defineStore('streams', () => {
 
   const playStream = async (streamId) => {
     try {
-      const response = await axios.post(`/api/play/${streamId}`)
+      // 使用新的SimpleStreamManager API - 只需要channelId
+      const response = await axios.post('/api/simple-stream/start-watching', {
+        channelId: streamId
+      })
+      
       if (response.data.status === 'success') {
-        // 从正确的数据结构中获取HLS URL
-        let hlsUrl = response.data.data.hlsUrl
+        // 从SimpleStreamManager响应中获取数据
+        const data = response.data.data
+        let hlsUrl = data.hlsUrl
+        
         if (hlsUrl.startsWith('/hls/')) {
           // 构建完整的HLS代理URL
           hlsUrl = `${config.api.baseURL}${hlsUrl}`
-          
-          // 添加session token作为查询参数以解决HLS代理认证问题
-          const userStore = useUserStore()
-          if (userStore.token) {
-            const separator = hlsUrl.includes('?') ? '&' : '?'
-            hlsUrl = `${hlsUrl}${separator}token=${encodeURIComponent(userStore.token)}`
-          }
         }
         
         currentStream.value = {
           id: streamId,
-          hlsUrl: hlsUrl
+          channelId: streamId, // 使用channelId替代sessionId
+          hlsUrl: hlsUrl,
+          channelName: data.channelName || `频道 ${streamId}`,
+          totalViewers: data.totalViewers || 0
         }
+        
+        // 启动心跳保持频道活跃
+        startHeartbeat(streamId)
+        
         return hlsUrl
       }
       throw new Error(response.data.message)
@@ -56,7 +62,52 @@ export const useStreamsStore = defineStore('streams', () => {
     }
   }
 
-  const stopStream = () => {
+  // 心跳定时器
+  let heartbeatTimer = null
+  
+  const startHeartbeat = (channelId) => {
+    // 清除之前的定时器
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+    }
+    
+    // 每30秒发送一次心跳
+    heartbeatTimer = setInterval(async () => {
+      try {
+        await axios.post('/api/simple-stream/heartbeat', {
+          channelId: channelId
+        })
+      } catch (error) {
+        console.error('心跳失败:', error)
+        // 如果心跳失败，可能需要重新启动观看
+        console.warn('心跳失败，频道可能已被清理')
+      }
+    }, 30000)
+  }
+
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+  }
+
+  const stopStream = async () => {
+    if (currentStream.value && currentStream.value.channelId) {
+      try {
+        // 停止观看频道
+        await axios.post('/api/simple-stream/stop-watching', {
+          channelId: currentStream.value.channelId
+        })
+      } catch (error) {
+        console.error('停止观看失败:', error)
+      }
+    }
+    
+    // 停止心跳
+    stopHeartbeat()
+    
+    // 清除当前流
     currentStream.value = null
   }
 
@@ -147,6 +198,7 @@ export const useStreamsStore = defineStore('streams', () => {
     fetchStreams,
     playStream,
     stopStream,
+    stopHeartbeat,
     fetchAdminStreams,
     addStream,
     updateStream,

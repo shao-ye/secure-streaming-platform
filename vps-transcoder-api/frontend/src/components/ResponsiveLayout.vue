@@ -308,6 +308,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  // 停止当前流和心跳
+  streamsStore.stopStream()
 })
 </script>
 
