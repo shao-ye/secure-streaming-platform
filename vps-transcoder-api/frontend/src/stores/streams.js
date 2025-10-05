@@ -97,18 +97,26 @@ export const useStreamsStore = defineStore('streams', () => {
       clearInterval(heartbeatTimer)
     }
     
-    // 每30秒发送一次心跳
-    heartbeatTimer = setInterval(async () => {
-      try {
-        await axios.post('/api/simple-stream/heartbeat', {
-          channelId: channelId
-        })
-      } catch (error) {
-        console.error('心跳失败:', error)
-        // 如果心跳失败，可能需要重新启动观看
-        console.warn('心跳失败，频道可能已被清理')
-      }
+    // 立即发送一次心跳
+    sendHeartbeat(channelId)
+    
+    // 每30秒发送一次心跳（严格按照设计）
+    heartbeatTimer = setInterval(() => {
+      sendHeartbeat(channelId)
     }, 30000)
+    
+    console.log(`💓 开始心跳: ${channelId}`)
+  }
+
+  const sendHeartbeat = async (channelId) => {
+    try {
+      await axios.post('/api/simple-stream/heartbeat', {
+        channelId: channelId
+      })
+      console.log(`💓 心跳发送: ${channelId}`)
+    } catch (error) {
+      console.error('心跳发送失败:', error)
+    }
   }
 
   const stopHeartbeat = () => {
@@ -119,22 +127,17 @@ export const useStreamsStore = defineStore('streams', () => {
   }
 
   const stopStream = async () => {
-    if (currentStream.value && currentStream.value.channelId) {
-      try {
-        // 停止观看频道
-        await axios.post('/api/simple-stream/stop-watching', {
-          channelId: currentStream.value.channelId
-        })
-      } catch (error) {
-        console.error('停止观看失败:', error)
-      }
-    }
+    // 🔥 修复：根据频道级心跳设计，只需要停止心跳即可
+    // VPS会在60秒无心跳后自动清理转码进程
+    // 不调用stop-watching API，避免影响其他用户观看
     
     // 停止心跳
     stopHeartbeat()
     
     // 清除当前流
     currentStream.value = null
+    
+    console.log('🛑 停止观看，心跳已停止')
   }
 
   // 管理员功能

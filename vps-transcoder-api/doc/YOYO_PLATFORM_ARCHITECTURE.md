@@ -1491,6 +1491,91 @@ hlsUrl: `/hls/${channelId}/playlist.m3u8?t=${timestamp}&fresh=true`
 
 ## 🔧 2025-10-05 重要修复记录
 
+### 🎯 SimpleStreamManager架构简化 (17:15)
+
+#### 问题背景
+原有的RTMP源复用机制过于复杂，导致以下问题：
+- 频道RTMP地址更新后视频画面不立即生效
+- 多个频道共享RTMP源时产生进程冲突
+- 测试场景下多频道使用相同RTMP导致意外复用
+
+#### 解决方案：频道独立转码架构
+
+##### 1. 核心设计原则调整
+**修改前**：
+- 复杂的RTMP源复用机制（`rtmpProcessMap`）
+- 多频道共享同一FFmpeg进程
+- 符号链接实现HLS文件复用
+- 进程转移和引用计数管理
+
+**修改后**：
+- **频道独立**：每个频道ID对应独立的FFmpeg转码进程
+- **RTMP变更检测**：自动检测RTMP地址变更并重启进程
+- **极简映射**：`activeStreams Map<channelId, processInfo>`
+- **无复用冲突**：测试时多频道使用相同RTMP也不会冲突
+
+##### 2. 架构流程优化
+```mermaid
+graph TD
+    A[管理员修改频道RTMP地址] --> B[Cloudflare Workers更新KV配置]
+    B --> C[用户点击播放频道]
+    C --> D[VPS检查频道是否已存在]
+    D --> E{RTMP地址是否变更?}
+    E -->|是| F[停止旧FFmpeg进程]
+    F --> G[启动新FFmpeg进程]
+    E -->|否| H[返回现有HLS URL]
+    G --> I[返回新HLS URL]
+    H --> J[视频播放]
+    I --> J
+```
+
+##### 3. 代码修改详情
+
+**SimpleStreamManager.js**：
+- ✅ 移除 `rtmpProcessMap` 映射
+- ✅ 删除 `createHLSSymlink` 方法
+- ✅ 简化 `stopChannel` 方法逻辑
+- ✅ 移除 `startNewStream` 中的RTMP源映射
+
+**simple-stream.js**：
+- ✅ 移除 `force-restart` API端点
+
+**admin.js**：
+- ✅ 回退 `callTranscoderAPI` 函数
+- ✅ 简化 `updateStream` 方法
+
+##### 4. 架构优势
+
+**性能优势**：
+- ✅ **最大进程数限制**：VPS上最多同时运行8个FFmpeg进程（对应8个配置频道）
+- ✅ **按需启动**：只有被观看的频道才会启动转码进程
+- ✅ **智能清理**：无用户观看时自动停止转码进程
+- ✅ **频道级复用**：多用户观看同一频道共享该频道的FFmpeg进程
+
+**用户体验优势**：
+- ✅ **立即生效**：频道RTMP地址更新后视频画面立即更新
+- ✅ **无冲突**：不同频道使用相同RTMP源也不会产生冲突
+- ✅ **简化维护**：无复杂的进程共享和符号链接逻辑
+
+**实际运行场景**：
+```
+频道配置：8个频道 (stream_A, stream_B, ..., stream_H)
+用户场景：
+- 100个用户观看频道A → VPS上只有1个FFmpeg进程处理频道A
+- 50个用户观看频道B → VPS上只有1个FFmpeg进程处理频道B  
+- 其他6个频道无人观看 → VPS上无对应进程
+
+总计：VPS上最多8个FFmpeg进程，实际按需运行
+```
+
+##### 5. 部署状态
+- ✅ **VPS转码服务**：SimpleStreamManager.js已部署并重启
+- ✅ **Cloudflare Workers**：admin.js修改已部署
+- ✅ **代码同步**：所有修改已提交到Git仓库
+- ✅ **服务验证**：VPS和Workers API健康检查正常
+
+---
+
 ### 频道切换7秒延迟问题完整解决方案
 
 #### 问题现象
