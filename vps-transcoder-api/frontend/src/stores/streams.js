@@ -48,10 +48,20 @@ export const useStreamsStore = defineStore('streams', () => {
         const data = response.data.data
         let hlsUrl = data.hlsUrl
         
-        if (hlsUrl.startsWith('/hls/')) {
-          // 构建完整的HLS代理URL
-          hlsUrl = `${config.api.baseURL}${hlsUrl}`
+        // 🔥 修复：使用Cloudflare Workers HLS代理，避免CORS问题
+        if (hlsUrl && hlsUrl.includes('yoyo-vps.5202021.xyz')) {
+          // 将VPS直接URL转换为Workers代理URL
+          const streamPath = hlsUrl.match(/\/hls\/([^\/]+\/[^\/]+)$/);
+          if (streamPath) {
+            hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}`;
+          }
         }
+        
+        console.log('🔥 HLS URL处理结果:', { 
+          original: data.hlsUrl, 
+          processed: hlsUrl,
+          channelId: streamId 
+        });
         
         currentStream.value = {
           id: streamId,

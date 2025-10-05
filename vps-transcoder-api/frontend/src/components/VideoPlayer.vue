@@ -345,14 +345,41 @@ const retryPlayback = () => {
 const destroyHls = () => {
   if (hls.value) {
     debugLog('销毁HLS实例')
+    
+    // 🔥 关键修复：移除所有事件监听器
+    hls.value.off(Hls.Events.MANIFEST_PARSED)
+    hls.value.off(Hls.Events.MEDIA_ATTACHED)
+    hls.value.off(Hls.Events.FRAG_LOADING)
+    hls.value.off(Hls.Events.FRAG_LOADED)
+    hls.value.off(Hls.Events.ERROR)
+    hls.value.off(Hls.Events.BUFFER_APPENDING)
+    hls.value.off(Hls.Events.BUFFER_APPENDED)
+    
+    // 🔥 关键修复：停止加载并分离媒体
+    hls.value.stopLoad()
+    hls.value.detachMedia()
+    
+    // 销毁HLS实例
     hls.value.destroy()
     hls.value = null
+  }
+
+  // 🔥 关键修复：重置视频元素
+  if (videoRef.value) {
+    videoRef.value.pause()
+    videoRef.value.src = ''
+    videoRef.value.load()
   }
 
   if (retryTimer.value) {
     clearTimeout(retryTimer.value)
     retryTimer.value = null
   }
+  
+  // 重置状态
+  loading.value = false
+  error.value = ''
+  status.value = '准备中'
 }
 
 const reloadStream = () => {
