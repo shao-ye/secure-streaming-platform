@@ -338,5 +338,147 @@ export const handleStreams = {
       logError(env, 'Stop stream handler error', error, { streamId: request.params?.id });
       return errorResponse('Failed to stop stream', 'STOP_ERROR', 500, request);
     }
+  },
+
+  /**
+   * 🔥 新增：SimpleStreamManager API - 开始观看
+   */
+  async startWatching(request, env, ctx) {
+    try {
+      // 验证用户会话
+      const auth = await validateSession(request, env);
+      if (!auth.valid) {
+        return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
+      }
+
+      // 解析请求体
+      const body = await request.json();
+      const { channelId } = body;
+
+      if (!channelId) {
+        return errorResponse('channelId is required', 'MISSING_CHANNEL_ID', 400, request);
+      }
+
+      // 从KV获取频道配置
+      const streamConfig = await getStreamConfig(env, channelId);
+      if (!streamConfig) {
+        return errorResponse('Channel not found', 'CHANNEL_NOT_FOUND', 404, request);
+      }
+
+      // 调用VPS SimpleStreamManager API
+      const vpsResponse = await callTranscoderAPI(env, 'simple-stream/start-watching', 'POST', {
+        channelId: channelId,
+        rtmpUrl: streamConfig.rtmpUrl
+      });
+
+      logStreamEvent(env, 'start_watching_success', channelId, auth.user.username, request, {
+        hlsUrl: vpsResponse.data?.hlsUrl
+      });
+
+      return successResponse({
+        channelId,
+        channelName: streamConfig.name,
+        hlsUrl: vpsResponse.data?.hlsUrl,
+        timestamp: vpsResponse.data?.timestamp
+      }, 'Started watching successfully', request);
+
+    } catch (error) {
+      logError(env, 'Start watching error', error, { channelId: body?.channelId });
+      return errorResponse('Failed to start watching', 'START_WATCHING_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 🔥 新增：SimpleStreamManager API - 停止观看
+   */
+  async stopWatching(request, env, ctx) {
+    try {
+      // 验证用户会话
+      const auth = await validateSession(request, env);
+      if (!auth.valid) {
+        return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
+      }
+
+      // 解析请求体
+      const body = await request.json();
+      const { channelId } = body;
+
+      if (!channelId) {
+        return errorResponse('channelId is required', 'MISSING_CHANNEL_ID', 400, request);
+      }
+
+      // 调用VPS SimpleStreamManager API
+      const vpsResponse = await callTranscoderAPI(env, 'simple-stream/stop-watching', 'POST', {
+        channelId: channelId
+      });
+
+      logStreamEvent(env, 'stop_watching_success', channelId, auth.user.username, request);
+
+      return successResponse({
+        channelId,
+        message: vpsResponse.message
+      }, 'Stopped watching successfully', request);
+
+    } catch (error) {
+      logError(env, 'Stop watching error', error, { channelId: body?.channelId });
+      return errorResponse('Failed to stop watching', 'STOP_WATCHING_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 🔥 新增：SimpleStreamManager API - 心跳
+   */
+  async heartbeat(request, env, ctx) {
+    try {
+      // 验证用户会话
+      const auth = await validateSession(request, env);
+      if (!auth.valid) {
+        return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
+      }
+
+      // 解析请求体
+      const body = await request.json();
+      const { channelId } = body;
+
+      if (!channelId) {
+        return errorResponse('channelId is required', 'MISSING_CHANNEL_ID', 400, request);
+      }
+
+      // 调用VPS SimpleStreamManager API
+      const vpsResponse = await callTranscoderAPI(env, 'simple-stream/heartbeat', 'POST', {
+        channelId: channelId
+      });
+
+      return successResponse({
+        channelId,
+        timestamp: Date.now()
+      }, 'Heartbeat sent successfully', request);
+
+    } catch (error) {
+      logError(env, 'Heartbeat error', error, { channelId: body?.channelId });
+      return errorResponse('Failed to send heartbeat', 'HEARTBEAT_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 🔥 新增：SimpleStreamManager API - 系统状态
+   */
+  async getSystemStatus(request, env, ctx) {
+    try {
+      // 验证用户会话
+      const auth = await validateSession(request, env);
+      if (!auth.valid) {
+        return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
+      }
+
+      // 调用VPS SimpleStreamManager API
+      const vpsResponse = await callTranscoderAPI(env, 'simple-stream/system/status', 'GET');
+
+      return successResponse(vpsResponse.data, 'System status retrieved successfully', request);
+
+    } catch (error) {
+      logError(env, 'Get system status error', error);
+      return errorResponse('Failed to get system status', 'SYSTEM_STATUS_ERROR', 500, request);
+    }
   }
 };

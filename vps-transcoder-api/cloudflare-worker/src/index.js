@@ -345,6 +345,12 @@ export default {
       router.get('/api/stream/:id/status', (req, env, ctx) => handleStreams.getStreamStatus(req, env, ctx));
       router.get('/api/streams/status', (req, env, ctx) => handleStreams.getAllStreamsStatus(req, env, ctx));
 
+      // 🔥 新增：SimpleStreamManager API路由
+      router.post('/api/simple-stream/start-watching', (req, env, ctx) => handleStreams.startWatching(req, env, ctx));
+      router.post('/api/simple-stream/stop-watching', (req, env, ctx) => handleStreams.stopWatching(req, env, ctx));
+      router.post('/api/simple-stream/heartbeat', (req, env, ctx) => handleStreams.heartbeat(req, env, ctx));
+      router.get('/api/simple-stream/system/status', (req, env, ctx) => handleStreams.getSystemStatus(req, env, ctx));
+
       // 管理员功能API - 注意路由顺序，更具体的路由要放在前面
       router.get('/api/admin/streams', (req, env, ctx) => handleAdmin.getStreams(req, env, ctx));
       router.post('/api/admin/streams', (req, env, ctx) => handleAdmin.createStream(req, env, ctx));
