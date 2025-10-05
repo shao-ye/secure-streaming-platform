@@ -343,34 +343,48 @@ const retryPlayback = () => {
 }
 
 const destroyHls = () => {
+  debugLog('开始销毁HLS实例')
+  
   if (hls.value) {
-    debugLog('销毁HLS实例')
-    
-    // 🔥 关键修复：移除所有事件监听器
-    hls.value.off(Hls.Events.MANIFEST_PARSED)
-    hls.value.off(Hls.Events.MEDIA_ATTACHED)
-    hls.value.off(Hls.Events.FRAG_LOADING)
-    hls.value.off(Hls.Events.FRAG_LOADED)
-    hls.value.off(Hls.Events.ERROR)
-    hls.value.off(Hls.Events.BUFFER_APPENDING)
-    hls.value.off(Hls.Events.BUFFER_APPENDED)
-    
-    // 🔥 关键修复：停止加载并分离媒体
-    hls.value.stopLoad()
-    hls.value.detachMedia()
-    
-    // 销毁HLS实例
-    hls.value.destroy()
+    try {
+      // 🔥 关键修复：移除所有事件监听器
+      hls.value.off(Hls.Events.MANIFEST_PARSED)
+      hls.value.off(Hls.Events.MEDIA_ATTACHED)
+      hls.value.off(Hls.Events.FRAG_LOADING)
+      hls.value.off(Hls.Events.FRAG_LOADED)
+      hls.value.off(Hls.Events.ERROR)
+      hls.value.off(Hls.Events.BUFFER_APPENDING)
+      hls.value.off(Hls.Events.BUFFER_APPENDED)
+      
+      // 🔥 关键修复：强制停止所有网络请求
+      hls.value.stopLoad()
+      hls.value.detachMedia()
+      
+      // 销毁HLS实例
+      hls.value.destroy()
+    } catch (error) {
+      debugLog('销毁HLS实例时出错:', error)
+    }
     hls.value = null
   }
 
-  // 🔥 关键修复：重置视频元素
+  // 🔥 关键修复：强制重置视频元素
   if (videoRef.value) {
-    videoRef.value.pause()
-    videoRef.value.src = ''
-    videoRef.value.load()
+    try {
+      videoRef.value.pause()
+      videoRef.value.removeAttribute('src')
+      videoRef.value.load()
+      
+      // 清除所有缓冲区
+      if (videoRef.value.buffered && videoRef.value.buffered.length > 0) {
+        debugLog('清除视频缓冲区')
+      }
+    } catch (error) {
+      debugLog('重置视频元素时出错:', error)
+    }
   }
-
+  
+  // 清除重试定时器
   if (retryTimer.value) {
     clearTimeout(retryTimer.value)
     retryTimer.value = null
@@ -379,7 +393,8 @@ const destroyHls = () => {
   // 重置状态
   loading.value = false
   error.value = ''
-  status.value = '准备中'
+  status.value = '等待'
+  retryCount.value = 0
 }
 
 const reloadStream = () => {
@@ -424,10 +439,22 @@ const handleEnded = () => {
 }
 
 // 监听URL变化
-watch(() => props.hlsUrl, (newUrl) => {
-  if (newUrl) {
-    debugLog('HLS URL变化:', newUrl)
-    initHls()
+watch(() => props.hlsUrl, (newUrl, oldUrl) => {
+  if (newUrl !== oldUrl) {
+    debugLog('HLS URL变化:', { old: oldUrl, new: newUrl })
+    
+    // 🔥 关键修复：URL变化时立即销毁旧实例
+    if (oldUrl && newUrl !== oldUrl) {
+      destroyHls()
+      // 短暂延迟确保清理完成
+      setTimeout(() => {
+        if (newUrl) {
+          initHls()
+        }
+      }, 100)
+    } else if (newUrl) {
+      initHls()
+    }
   }
 }, { immediate: true })
 

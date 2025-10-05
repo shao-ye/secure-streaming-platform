@@ -29,11 +29,14 @@ export const useStreamsStore = defineStore('streams', () => {
     try {
       // 如果当前有正在播放的流，先停止它
       if (currentStream.value && currentStream.value.channelId !== streamId) {
+        // 🔥 关键修复：立即清除当前流状态，强制VideoPlayer重置
+        currentStream.value = null
+        
         await stopStream()
         
-        // 🔥 新增：等待2秒确保停止操作完全完成，避免资源竞争
+        // 🔥 新增：等待1秒确保HLS播放器完全重置
         console.log('等待停止操作完成...')
-        await new Promise(resolve => setTimeout(resolve, 2000))
+        await new Promise(resolve => setTimeout(resolve, 1000))
       }
       
       console.log('启动新频道:', streamId)
