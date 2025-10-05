@@ -313,20 +313,28 @@ const handleEdit = async () => {
   editLoading.value = true
 
   try {
+    console.log('🔧 开始更新频道:', editForm)
+    
     const result = await streamsStore.updateStream(editForm.id, {
       name: editForm.name,
       rtmpUrl: editForm.rtmpUrl,
       sortOrder: editForm.sortOrder
     })
 
+    console.log('🔧 更新结果:', result)
+
     if (result.success) {
       ElMessage.success('频道更新成功')
       editDialogVisible.value = false
+      // 刷新频道列表
+      await streamsStore.fetchAdminStreams()
     } else {
       ElMessage.error(result.message || '更新失败')
+      console.error('🔧 更新失败:', result)
     }
   } catch (error) {
-    ElMessage.error('更新失败，请稍后重试')
+    console.error('🔧 更新异常:', error)
+    ElMessage.error(`更新失败: ${error.message || '请稍后重试'}`)
   } finally {
     editLoading.value = false
   }
