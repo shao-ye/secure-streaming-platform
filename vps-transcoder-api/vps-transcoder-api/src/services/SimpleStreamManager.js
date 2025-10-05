@@ -333,10 +333,13 @@ class SimpleStreamManager {
       // 基本输入配置
       '-i', rtmpUrl,
       
-      // 视频编码 - 简化配置
+      // 视频编码 - 超低延迟配置
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-tune', 'zerolatency',
+      '-g', '15',  // 强制关键帧间隔15帧 (0.5秒@30fps)
+      '-keyint_min', '15',  // 最小关键帧间隔
+      '-sc_threshold', '0',  // 禁用场景切换检测
       
       // 音频编码 - 简化配置
       '-c:a', 'aac',
