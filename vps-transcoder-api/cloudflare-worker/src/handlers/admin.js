@@ -197,7 +197,9 @@ export const handleAdmin = {
       const { auth, error } = await requireAdmin(request, env);
       if (error) return error;
 
-      const { id: streamId } = request.params;
+      const url = new URL(request.url);
+      const streamId = url.pathname.split('/').pop();
+      
       if (!streamId) {
         return errorResponse('Stream ID is required', 'MISSING_STREAM_ID', 400, request);
       }

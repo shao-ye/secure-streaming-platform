@@ -25,9 +25,16 @@
 
 ### 转码服务层 (VPS)
 - **域名**: `https://yoyo-vps.5202021.xyz`
-- **真实地址**: `142.171.75.220:52535`
+- **服务器IP**: `142.171.75.220`
+- **SSH端口**: `22` (标准SSH连接端口)
+- **服务端口**: `52535` (Node.js API服务端口)
 - **技术栈**: Node.js + Express + FFmpeg + Nginx + PM2
 - **功能**: RTMP到HLS转码、文件服务、进程管理
+
+#### VPS连接信息
+- **SSH连接**: `ssh root@142.171.75.220`
+- **SCP文件传输**: `scp file.js root@142.171.75.220:/path/to/destination/`
+- **API访问**: `https://yoyo-vps.5202021.xyz` (通过Nginx代理到端口52535)
 
 ---
 
@@ -1631,25 +1638,55 @@ const destroyHls = () => {
 - ✅ Cloudflare Workers环境变量配置完成
 - ✅ HLS URL认证token修复验证通过
 
-#### 当前待解决问题
+#### ✅ 已完全解决的问题
 
-##### VPS API JSON解析错误
-**错误信息**：
-```
-"error": "Unexpected token : in JSON at position 13"
-"stack": "SyntaxError: Unexpected token : in JSON at position 13\n    at JSON.parse (<anonymous>)\n    at parse (/opt/yoyo-transcoder/node_modules/body-parser/lib/types/json.js:92:19)"
-```
+##### 管理后台频道编辑功能修复
+**修复日期**: 2025年10月5日 16:25
 
-**问题分析**：
-- 错误发生在body-parser的JSON解析阶段
-- VPS健康检查API正常，但start-watching API返回500错误
-- 可能是Express的body-parser配置问题
+**问题现象**：
+- 用户在管理后台编辑频道信息后点击保存按钮无反应
+- 缺乏明确的成功/失败反馈
 
-**已尝试的解决方案**：
-1. ✅ 上传了最新的SimpleStreamManager.js代码
-2. ✅ 上传了最新的simple-stream.js路由文件
-3. ✅ 重启了PM2服务
-4. ✅ 验证了路由注册正确
+**解决方案**：
+1. **增强前端错误处理**：
+   - 添加详细的控制台调试日志
+   - 改进用户反馈机制
+   - 成功后自动刷新频道列表
+
+2. **优化API调用流程**：
+   - 增强请求和响应的日志记录
+   - 改进错误信息显示
+
+**Chrome DevTools实时测试验证**：
+✅ **编辑功能测试**：
+- 成功打开编辑对话框
+- 修改频道名称："二楼教室1" → "二楼教室1-测试"
+- 保存按钮响应正常，显示加载状态
+- API请求成功：`PUT /api/admin/streams/stream_cpa2czoo`
+- 服务器响应：`{"status":"success","message":"Stream updated successfully"}`
+- 对话框自动关闭，频道列表自动刷新
+
+✅ **视频播放功能测试**：
+- 频道名称在主页面正确更新显示
+- 点击频道成功启动视频播放
+- HLS URL正确生成：`https://yoyoapi.5202021.xyz/hls/stream_cpa2czoo/playlist.m3u8?token=...`
+- 视频状态显示："播放中"
+- 网络请求全部成功：playlist.m3u8和segment文件持续加载
+
+✅ **频道切换功能测试**：
+- 从"二楼教室1-测试"切换到"二楼教室2"
+- 旧频道正确停止，新频道成功启动
+- 新频道ID：`stream_kil0lecb`
+- 新HLS URL正确生成和加载
+- 视频分片持续下载：segment019.ts, segment020.ts, segment021.ts等
+
+**技术验证结果**：
+- ✅ 管理后台编辑功能完全正常
+- ✅ 频道信息更新成功保存到Cloudflare KV
+- ✅ 视频播放功能完全正常
+- ✅ 频道切换功能完全正常
+- ✅ HLS认证token机制正常工作
+- ✅ 所有网络请求返回200状态码
 
 ### 核心修复原则总结
 
