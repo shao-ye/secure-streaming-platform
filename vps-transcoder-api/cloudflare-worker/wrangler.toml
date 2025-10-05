@@ -7,6 +7,11 @@ binding = "YOYO_USER_DB"
 id = "edafbcf1042147f9b52f0fc4b5c37543"
 preview_id = "f36b78f5fd4d493aa567f9e8abf68348"
 
+# R2存储桶配置 - 登录日志存储
+[[r2_buckets]]
+binding = "LOGIN_LOGS_BUCKET"
+bucket_name = "yoyo-login-logs"
+
 # 路由配置
 [[routes]]
 pattern = "yoyoapi.5202021.xyz/*"
@@ -39,3 +44,6 @@ VPS_API_KEY = "85da076ae24b028b3d1ea1884e6b13c5afe34488be0f8d39a05fbbf26d23e938"
 [[env.production.kv_namespaces]]
 binding = "YOYO_USER_DB"
 id = "edafbcf1042147f9b52f0fc4b5c37543"
+[[env.production.r2_buckets]]
+binding = "LOGIN_LOGS_BUCKET"
+bucket_name = "yoyo-login-logs"

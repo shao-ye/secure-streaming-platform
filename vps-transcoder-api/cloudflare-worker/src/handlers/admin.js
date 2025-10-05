@@ -14,6 +14,7 @@ import { errorResponse, successResponse } from '../utils/cors.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { generateRandomString } from '../utils/crypto.js';
 import { getCacheStats, clearCache } from '../utils/cache.js';
+import { R2LoginLogger } from '../utils/r2-logger.js';
 
 /**
  * 验证管理员权限
@@ -574,14 +575,24 @@ export const handleAdmin = {
         }
       };
 
-      // 测试KV可用性
+      // 🎯 优化：简化KV可用性检查，避免频繁读写操作
       try {
-        await env.YOYO_USER_DB.put('health_check', 'ok', { expirationTtl: 60 });
-        const testValue = await env.YOYO_USER_DB.get('health_check');
-        diagnostics.kv.available = testValue === 'ok';
-        diagnostics.kv.testResult = 'success';
+        // 只检查KV绑定是否存在，不进行实际的读写测试
+        diagnostics.kv.available = !!env.YOYO_USER_DB;
+        diagnostics.kv.testResult = 'binding_available';
+        
+        // 可选：只在必要时进行实际测试（比如每小时一次）
+        // const now = Date.now();
+        // const lastTest = cache.get('kv_last_test') || 0;
+        // if (now - lastTest > 3600000) { // 1小时
+        //   await env.YOYO_USER_DB.put('health_check', 'ok', { expirationTtl: 60 });
+        //   const testValue = await env.YOYO_USER_DB.get('health_check');
+        //   diagnostics.kv.available = testValue === 'ok';
+        //   cache.set('kv_last_test', now);
+        // }
       } catch (kvError) {
         console.error('KV health check failed:', kvError);
+        diagnostics.kv.available = false;
         diagnostics.kv.testResult = kvError.message;
       }
 
@@ -682,58 +693,98 @@ export const handleAdmin = {
         return authResult.error;
       }
 
-      // 从KV获取登录日志（实际实现）
-      let loginLogs = [];
-      try {
-        const logsData = await env.YOYO_USER_DB.get('login_logs');
-        if (logsData) {
-          loginLogs = JSON.parse(logsData);
+      // 解析查询参数
+      const url = new URL(request.url);
+      const startDate = url.searchParams.get('startDate') || 
+                       new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const endDate = url.searchParams.get('endDate') || 
+                     new Date().toISOString().split('T')[0];
+      const limit = parseInt(url.searchParams.get('limit') || '100');
+      const offset = parseInt(url.searchParams.get('offset') || '0');
+
+      console.log('Login logs query params:', { startDate, endDate, limit, offset });
+
+      // 🎯 优先使用R2存储查询
+      if (env.LOGIN_LOGS_BUCKET) {
+        try {
+          const logger = new R2LoginLogger(env.LOGIN_LOGS_BUCKET);
+          const result = await logger.getLoginLogs(
+            new Date(startDate), 
+            new Date(endDate), 
+            limit, 
+            offset
+          );
+
+          console.log('Login logs retrieved from R2:', { 
+            count: result.logs.length, 
+            total: result.total,
+            hasMore: result.hasMore 
+          });
+
+          return successResponse({
+            logs: result.logs,
+            total: result.total,
+            hasMore: result.hasMore,
+            pagination: { limit, offset },
+            dateRange: { startDate, endDate },
+            source: 'R2',
+            timestamp: new Date().toISOString()
+          }, 'Login logs retrieved successfully from R2', request);
+
+        } catch (r2Error) {
+          console.error('Failed to get login logs from R2, falling back to mock data:', r2Error);
+          // 继续执行降级逻辑
         }
-      } catch (kvError) {
-        console.warn('Failed to get login logs from KV:', kvError);
       }
 
-      // 如果没有数据，返回模拟数据
-      if (loginLogs.length === 0) {
-        loginLogs = [
-          {
-            id: '1',
-            username: 'admin',
-            ip: '192.168.1.100',
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            timestamp: new Date(Date.now() - 3600000).toISOString(),
-            status: 'success',
-            location: '中国 北京'
-          },
-          {
-            id: '2', 
-            username: 'user1',
-            ip: '192.168.1.101',
-            userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            timestamp: new Date(Date.now() - 7200000).toISOString(),
-            status: 'success',
-            location: '中国 上海'
-          },
-          {
-            id: '3',
-            username: 'unknown',
-            ip: '192.168.1.102',
-            userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            timestamp: new Date(Date.now() - 10800000).toISOString(),
-            status: 'failed',
-            location: '中国 广州'
-          }
-        ];
-      }
+      // 🔄 降级方案：返回示例数据（用于开发和测试）
+      console.log('Using fallback mock data for login logs');
+      const mockLogs = [
+        {
+          id: 'mock_001',
+          username: 'admin',
+          ip: '192.168.1.100',
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          timestamp: new Date(Date.now() - 3600000).toISOString(),
+          status: 'success',
+          location: '中国 北京',
+          details: { source: 'mock_data' }
+        },
+        {
+          id: 'mock_002',
+          username: 'admin',
+          ip: '192.168.1.101',
+          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+          timestamp: new Date(Date.now() - 7200000).toISOString(),
+          status: 'success',
+          location: '中国 上海',
+          details: { source: 'mock_data' }
+        },
+        {
+          id: 'mock_003',
+          username: 'unknown',
+          ip: '192.168.1.102',
+          userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+          timestamp: new Date(Date.now() - 10800000).toISOString(),
+          status: 'failed',
+          location: '中国 广州',
+          details: { source: 'mock_data', reason: 'invalid_credentials' }
+        }
+      ];
 
-      // 按时间倒序排列
-      loginLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      // 按时间倒序排列并分页
+      mockLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      const paginatedLogs = mockLogs.slice(offset, offset + limit);
       
       return successResponse({
-        logs: loginLogs.slice(0, 100), // 最多返回100条
-        total: loginLogs.length,
+        logs: paginatedLogs,
+        total: mockLogs.length,
+        hasMore: mockLogs.length > offset + limit,
+        pagination: { limit, offset },
+        dateRange: { startDate, endDate },
+        source: 'Mock',
         timestamp: new Date().toISOString()
-      }, 'Login logs retrieved successfully', request);
+      }, 'Login logs retrieved successfully (mock data)', request);
 
     } catch (error) {
       console.error('Admin get login logs error:', error);

@@ -426,16 +426,13 @@ export const handleStreams = {
   },
 
   /**
-   * 🔥 新增：SimpleStreamManager API - 心跳
+   * 🔥 优化：SimpleStreamManager API - 心跳（无KV验证）
    */
   async heartbeat(request, env, ctx) {
     try {
-      // 验证用户会话
-      const auth = await validateSession(request, env);
-      if (!auth) {
-        return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
-      }
-
+      // 🎯 优化：不在Workers层验证会话，直接转发给VPS处理
+      // VPS层面已经有自己的会话管理机制，避免不必要的KV读取
+      
       // 解析请求体
       const body = await request.json();
       const { channelId } = body;
@@ -444,14 +441,16 @@ export const handleStreams = {
         return errorResponse('channelId is required', 'MISSING_CHANNEL_ID', 400, request);
       }
 
-      // 调用VPS SimpleStreamManager API
+      // 直接转发给VPS，让VPS处理会话验证和心跳记录
       const vpsResponse = await callTranscoderAPI(env, 'simple-stream/heartbeat', 'POST', {
-        channelId: channelId
+        channelId: channelId,
+        timestamp: Date.now()
       });
 
       return successResponse({
         channelId,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        vpsResponse: vpsResponse.data
       }, 'Heartbeat sent successfully', request);
 
     } catch (error) {

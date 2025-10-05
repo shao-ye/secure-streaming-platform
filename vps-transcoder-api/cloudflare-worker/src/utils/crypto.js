@@ -76,47 +76,30 @@ export async function hashPassword(password, salt) {
  * 验证密码（支持两种哈希方式）
  */
 export async function verifyPassword(password, salt, hashedPassword) {
-  console.log('=== PASSWORD VERIFICATION DEBUG ===');
-  console.log('Input password:', password);
-  console.log('Input salt:', salt);
-  console.log('Expected hash:', hashedPassword);
-  
   // 先尝试简单SHA-256验证（用于现有测试数据）
   if (salt === 'randomsalt123') {
-    console.log('Using simple SHA-256 verification for test data');
-    
     // 尝试 password + salt
     const simpleHash1 = await simpleHashPassword(password, salt);
-    console.log('Hash (password + salt):', simpleHash1);
     if (simpleHash1 === hashedPassword) {
-      console.log('✅ Password verification successful (password + salt)');
       return true;
     }
     
     // 尝试 salt + password
     const simpleHash2 = await simpleHashPasswordReverse(password, salt);
-    console.log('Hash (salt + password):', simpleHash2);
     if (simpleHash2 === hashedPassword) {
-      console.log('✅ Password verification successful (salt + password)');
       return true;
     }
     
     // 尝试只用password（不加salt）
     const simpleHash3 = await hashPasswordOnly(password);
-    console.log('Hash (password only):', simpleHash3);
     if (simpleHash3 === hashedPassword) {
-      console.log('✅ Password verification successful (password only)');
       return true;
     }
   }
 
   // 然后尝试PBKDF2验证
-  console.log('Trying PBKDF2 verification');
   const pbkdf2Hash = await hashPassword(password, salt);
-  console.log('PBKDF2 hash:', pbkdf2Hash);
-  const result = pbkdf2Hash === hashedPassword;
-  console.log('PBKDF2 verification result:', result);
-  return result;
+  return pbkdf2Hash === hashedPassword;
 }
 
 /**

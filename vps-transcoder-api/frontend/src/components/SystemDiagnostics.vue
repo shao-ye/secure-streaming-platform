@@ -282,46 +282,80 @@
 
       <!-- 登录日志 -->
       <el-col :span="12">
-        <el-card shadow="never" style="height: 400px;">
+        <el-card shadow="never" style="height: 500px;">
           <template #header>
             <div class="card-header">
               <h3>登录日志</h3>
-              <el-button
-                size="small"
-                :icon="Refresh"
-                @click="refreshLoginLogs"
-                :loading="loading.loginLogs"
-              />
+              <div class="header-controls" style="display: flex; gap: 8px; align-items: center;">
+                <el-date-picker
+                  v-model="dateRange"
+                  type="daterange"
+                  size="small"
+                  range-separator="至"
+                  start-placeholder="开始日期"
+                  end-placeholder="结束日期"
+                  @change="refreshLoginLogs"
+                  style="width: 240px;"
+                />
+                <el-button
+                  size="small"
+                  :icon="Refresh"
+                  @click="refreshLoginLogs"
+                  :loading="loading.loginLogs"
+                />
+              </div>
             </div>
           </template>
 
-          <div style="max-height: 320px; overflow-y: auto;">
-            <div v-if="loginLogs.length > 0">
-              <div
-                v-for="log in loginLogs.slice(0, 10)"
-                :key="log.id"
-                class="login-log-item"
-                style="border-bottom: 1px solid #eee; padding: 8px 0;"
-              >
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                  <div>
-                    <el-tag :type="log.status === 'success' ? 'success' : 'danger'" size="small">
-                      {{ log.username }}
-                    </el-tag>
-                    <span style="margin-left: 8px; font-size: 12px; color: #666;">
-                      {{ log.ip }} - {{ log.location }}
-                    </span>
+          <div class="logs-container" style="height: 380px; display: flex; flex-direction: column;">
+            <div style="flex: 1; overflow-y: auto; margin-bottom: 10px;">
+              <div v-if="loginLogs.length > 0">
+                <div
+                  v-for="log in loginLogs"
+                  :key="log.id"
+                  class="login-log-item"
+                  style="border-bottom: 1px solid #eee; padding: 8px 0;"
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                      <el-tag :type="log.status === 'success' ? 'success' : 'danger'" size="small">
+                        {{ log.username }}
+                      </el-tag>
+                      <span style="margin-left: 8px; font-size: 12px; color: #666;">
+                        {{ log.ip }} - {{ log.location }}
+                      </span>
+                      <el-tag v-if="log.details?.source" size="small" type="info" style="margin-left: 8px;">
+                        {{ log.details.source === 'R2' ? 'R2' : log.details.source === 'Mock' ? '模拟' : 'KV' }}
+                      </el-tag>
+                    </div>
+                    <div style="font-size: 12px; color: #999;">
+                      {{ formatTime(log.timestamp) }}
+                    </div>
                   </div>
-                  <div style="font-size: 12px; color: #999;">
-                    {{ formatTime(log.timestamp) }}
+                  <div style="font-size: 11px; color: #999; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    {{ log.userAgent }}
                   </div>
-                </div>
-                <div style="font-size: 11px; color: #999; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                  {{ log.userAgent }}
+                  <div v-if="log.details?.reason" style="font-size: 11px; color: #f56c6c; margin-top: 2px;">
+                    失败原因: {{ log.details.reason }}
+                  </div>
                 </div>
               </div>
+              <el-empty v-else description="暂无登录日志数据" />
             </div>
-            <el-empty v-else description="点击刷新按钮获取登录日志" />
+            
+            <!-- 分页组件 -->
+            <div v-if="loginLogsPagination.total > 0" style="display: flex; justify-content: center;">
+              <el-pagination
+                v-model:current-page="loginLogsPagination.current"
+                v-model:page-size="loginLogsPagination.pageSize"
+                :total="loginLogsPagination.total"
+                :page-sizes="[10, 20, 50]"
+                layout="total, sizes, prev, pager, next"
+                @size-change="refreshLoginLogs"
+                @current-change="refreshLoginLogs"
+                small
+              />
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -425,6 +459,15 @@ const trafficStats = reactive({
 })
 
 const loginLogs = ref([])
+const dateRange = ref([
+  new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+  new Date()
+])
+const loginLogsPagination = reactive({
+  current: 1,
+  pageSize: 20,
+  total: 0
+})
 
 const loading = reactive({
   system: false,
@@ -686,10 +729,29 @@ const refreshTrafficStats = async () => {
 const refreshLoginLogs = async () => {
   loading.loginLogs = true
   try {
-    const response = await axios.get('/api/admin/login/logs')
+    const [startDate, endDate] = dateRange.value || [
+      new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      new Date()
+    ]
+    
+    const params = new URLSearchParams({
+      startDate: startDate.toISOString().split('T')[0],
+      endDate: endDate.toISOString().split('T')[0],
+      limit: loginLogsPagination.pageSize.toString(),
+      offset: ((loginLogsPagination.current - 1) * loginLogsPagination.pageSize).toString()
+    })
+
+    const response = await axios.get(`/api/admin/login/logs?${params}`)
     if (response.data.status === 'success') {
       loginLogs.value = response.data.data.logs
-      infoLog('登录日志刷新成功')
+      loginLogsPagination.total = response.data.data.total
+      
+      const source = response.data.data.source || 'Unknown'
+      infoLog(`登录日志刷新成功 (数据源: ${source})`)
+      
+      if (source === 'Mock') {
+        ElMessage.warning('当前显示的是模拟数据，请检查R2存储桶配置')
+      }
     }
   } catch (error) {
     errorLog('获取登录日志失败:', error)

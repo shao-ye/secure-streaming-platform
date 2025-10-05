@@ -6,12 +6,44 @@ import { getUser, createSession, getSession, deleteSession } from '../utils/kv.j
 import { verifyPassword, generateSessionId } from '../utils/crypto.js';
 import { errorResponse, successResponse } from '../utils/cors.js';
 import { logAuthEvent, logError, logInfo } from '../utils/logger.js';
+import { R2LoginLogger } from '../utils/r2-logger.js';
 
 /**
- * 记录登录日志到KV存储
+ * 记录登录日志到R2存储（优先）和KV存储（降级）
  */
 async function recordLoginLog(env, username, request, success, details = {}) {
   try {
+    // 🎯 优先使用R2存储
+    if (env.LOGIN_LOGS_BUCKET) {
+      const logger = new R2LoginLogger(env.LOGIN_LOGS_BUCKET);
+      const logEntry = R2LoginLogger.createLogEntry(username, request, success, details);
+      
+      try {
+        await logger.recordLogin(logEntry);
+        console.log('Login log recorded to R2:', { username, success });
+        return; // R2记录成功，直接返回
+      } catch (r2Error) {
+        console.error('Failed to record login log to R2, falling back to KV:', r2Error);
+        // 继续执行KV降级逻辑
+      }
+    }
+    
+    // 🔄 降级到KV存储
+    await recordLoginLogToKV(env, username, request, success, details);
+  } catch (error) {
+    console.error('Failed to record login log:', error);
+    // 不抛出错误，避免影响登录流程
+  }
+}
+
+/**
+ * 记录登录日志到KV存储（降级方案）
+ */
+async function recordLoginLogToKV(env, username, request, success, details = {}) {
+  try {
+    const timestamp = Date.now();
+    const logKey = `login_log:${timestamp}:${username || 'unknown'}`;
+    
     // 获取客户端信息
     const clientIP = request.headers.get('CF-Connecting-IP') || 
                      request.headers.get('X-Forwarded-For') || 
@@ -24,7 +56,7 @@ async function recordLoginLog(env, username, request, success, details = {}) {
     
     // 创建登录日志条目
     const logEntry = {
-      id: generateSessionId(), // 使用随机ID
+      id: generateSessionId(),
       username: username || '未知',
       ip: clientIP,
       userAgent: userAgent,
@@ -34,32 +66,13 @@ async function recordLoginLog(env, username, request, success, details = {}) {
       details: details
     };
 
-    // 获取现有登录日志
-    let loginLogs = [];
-    try {
-      const existingLogs = await env.YOYO_USER_DB.get('login_logs');
-      if (existingLogs) {
-        loginLogs = JSON.parse(existingLogs);
-      }
-    } catch (error) {
-      console.warn('Failed to get existing login logs:', error);
-    }
-
-    // 添加新日志条目
-    loginLogs.unshift(logEntry);
+    await env.YOYO_USER_DB.put(logKey, JSON.stringify(logEntry), {
+      expirationTtl: 604800 // 7天自动过期
+    });
     
-    // 保持最多1000条记录
-    if (loginLogs.length > 1000) {
-      loginLogs = loginLogs.slice(0, 1000);
-    }
-
-    // 保存到KV
-    await env.YOYO_USER_DB.put('login_logs', JSON.stringify(loginLogs));
-    
-    console.log('Login log recorded:', { username, success, ip: clientIP });
+    console.log('Login log recorded to KV (fallback):', { username, success, logKey });
   } catch (error) {
-    console.error('Failed to record login log:', error);
-    // 不抛出错误，避免影响登录流程
+    console.error('Failed to record login log to KV:', error);
   }
 }
 
