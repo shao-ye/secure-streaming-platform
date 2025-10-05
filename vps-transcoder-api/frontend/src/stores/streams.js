@@ -53,7 +53,9 @@ export const useStreamsStore = defineStore('streams', () => {
           // 将VPS直接URL转换为Workers代理URL
           const streamPath = hlsUrl.match(/\/hls\/([^\/]+\/[^\/]+)$/);
           if (streamPath) {
-            hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}`;
+            // 添加认证token作为查询参数
+            const token = localStorage.getItem('auth_token');
+            hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}${token ? `?token=${token}` : ''}`;
           }
         }
         

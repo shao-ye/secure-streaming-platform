@@ -347,7 +347,7 @@ export const handleStreams = {
     try {
       // 验证用户会话
       const auth = await validateSession(request, env);
-      if (!auth.valid) {
+      if (!auth) {
         return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
       }
 
@@ -395,7 +395,7 @@ export const handleStreams = {
     try {
       // 验证用户会话
       const auth = await validateSession(request, env);
-      if (!auth.valid) {
+      if (!auth) {
         return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
       }
 
@@ -432,7 +432,7 @@ export const handleStreams = {
     try {
       // 验证用户会话
       const auth = await validateSession(request, env);
-      if (!auth.valid) {
+      if (!auth) {
         return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
       }
 
@@ -467,7 +467,7 @@ export const handleStreams = {
     try {
       // 验证用户会话
       const auth = await validateSession(request, env);
-      if (!auth.valid) {
+      if (!auth) {
         return errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request);
       }
 
