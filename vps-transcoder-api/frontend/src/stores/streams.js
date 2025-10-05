@@ -172,16 +172,29 @@ export const useStreamsStore = defineStore('streams', () => {
 
   const updateStream = async (id, stream) => {
     try {
+      console.log('🔧 发送更新请求:', { id, stream })
+      
       const response = await axios.put(`/api/admin/streams/${id}`, stream)
+      
+      console.log('🔧 API响应:', response.data)
+      
       if (response.data.status === 'success') {
         await fetchAdminStreams()
         return { success: true }
       }
       return { success: false, message: response.data.message }
     } catch (error) {
+      console.error('🔧 更新请求失败:', error)
+      console.error('🔧 错误详情:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      })
+      
       return { 
         success: false, 
-        message: error.response?.data?.message || '更新频道失败' 
+        message: error.response?.data?.message || error.message || '更新频道失败' 
       }
     }
   }
