@@ -59,6 +59,10 @@
           <el-tab-pane label="系统诊断" name="diagnostics">
             <SystemDiagnostics />
           </el-tab-pane>
+
+          <el-tab-pane label="隧道优化" name="tunnel">
+            <TunnelConfig />
+          </el-tab-pane>
         </el-tabs>
       </el-main>
     </el-container>
@@ -74,6 +78,7 @@ import { useUserStore } from '../stores/user'
 import { useStreamsStore } from '../stores/streams'
 import StreamManager from '../components/StreamManager.vue'
 import SystemDiagnostics from '../components/SystemDiagnostics.vue'
+import TunnelConfig from '../components/admin/TunnelConfig.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
