@@ -56,9 +56,10 @@ export const useStreamsStore = defineStore('streams', () => {
           // 将VPS直接URL转换为Workers代理URL
           const streamPath = hlsUrl.match(/\/hls\/([^\/]+\/[^\/]+)$/);
           if (streamPath) {
-            // 添加认证token作为查询参数
-            const token = localStorage.getItem('auth_token');
-            hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}${token ? `?token=${token}` : ''}`;
+            // 🎯 使用视频观看专用JWT Token，完全避免KV读取！
+            const videoToken = localStorage.getItem('video_token');
+            hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}${videoToken ? `?token=${videoToken}` : ''}`;
+            console.log('🎯 使用JWT Token进行HLS认证 (无KV读取)');
           }
         }
         
