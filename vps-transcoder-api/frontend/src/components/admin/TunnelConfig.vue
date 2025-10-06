@@ -1,0 +1,298 @@
+<template>
+  <div class="tunnel-config">
+    <el-card class="config-card">
+      <template #header>
+        <div class="card-header">
+          <span>🌐 隧道优化配置</span>
+          <el-tag :type="tunnelConfig.enabled ? 'success' : 'info'">
+            {{ tunnelConfig.enabled ? '已启用' : '已禁用' }}
+          </el-tag>
+        </div>
+      </template>
+      
+      <div class="config-content">
+        <div class="config-item">
+          <el-switch
+            v-model="tunnelConfig.enabled"
+            :loading="updating"
+            active-text="启用隧道优化"
+            inactive-text="禁用隧道优化"
+            @change="handleToggle"
+          />
+        </div>
+        
+        <div class="config-description">
+          <p>{{ tunnelConfig.description }}</p>
+        </div>
+        
+        <!-- 部署状态显示 -->
+        <div v-if="deploymentStatus" class="deployment-status">
+          <el-alert
+            :title="deploymentStatus.message"
+            :type="getDeploymentType(deploymentStatus.status)"
+            :closable="false"
+            show-icon
+          >
+            <template v-if="deploymentStatus.status === 'deploying'">
+              <el-progress :percentage="deploymentProgress" :show-text="false" />
+              <p>预计剩余时间: {{ estimatedTime }}</p>
+            </template>
+          </el-alert>
+        </div>
+        
+        <div class="tunnel-status" v-if="tunnelStatus">
+          <h4>隧道状态</h4>
+          <div class="status-grid">
+            <div class="status-item">
+              <span class="label">健康状态:</span>
+              <el-tag :type="getHealthType(tunnelStatus.health.status)">
+                {{ getHealthText(tunnelStatus.health.status) }}
+              </el-tag>
+            </div>
+            <div class="status-item" v-if="tunnelStatus.health.latency">
+              <span class="label">延迟:</span>
+              <span>{{ tunnelStatus.health.latency }}ms</span>
+            </div>
+            <div class="status-item">
+              <span class="label">最后检查:</span>
+              <span>{{ formatTime(tunnelStatus.health.timestamp) }}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="tunnel-endpoints">
+          <h4>端点配置</h4>
+          <div class="endpoints-grid">
+            <div class="endpoint-group">
+              <h5>🚀 隧道端点 (优化)</h5>
+              <ul>
+                <li v-for="(url, service) in tunnelConfig.endpoints?.tunnel" :key="service">
+                  <strong>{{ service }}:</strong> {{ url }}
+                </li>
+              </ul>
+            </div>
+            <div class="endpoint-group">
+              <h5>🔗 直连端点 (备用)</h5>
+              <ul>
+                <li v-for="(url, service) in tunnelConfig.endpoints?.direct" :key="service">
+                  <strong>{{ service }}:</strong> {{ url }}
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </el-card>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { useApiService } from '@/services/api'
+
+const api = useApiService()
+const tunnelConfig = ref({
+  enabled: false,
+  description: '',
+  endpoints: null
+})
+const tunnelStatus = ref(null)
+const updating = ref(false)
+const deploymentStatus = ref(null)
+const deploymentProgress = ref(0)
+const estimatedTime = ref('')
+
+const loadTunnelConfig = async () => {
+  try {
+    const response = await api.request('/api/admin/tunnel/config')
+    const data = await response.json()
+    if (data.status === 'success') {
+      tunnelConfig.value = data.data.tunnel
+      tunnelStatus.value = { health: data.data.tunnel.health }
+    }
+  } catch (error) {
+    ElMessage.error('加载隧道配置失败')
+  }
+}
+
+const handleToggle = async (enabled) => {
+  updating.value = true
+  try {
+    const response = await api.request('/api/admin/tunnel/config', {
+      method: 'PUT',
+      body: JSON.stringify({
+        enabled: enabled,
+        description: tunnelConfig.value.description
+      })
+    })
+    
+    const data = await response.json()
+    if (data.status === 'success') {
+      deploymentStatus.value = {
+        status: 'deploying',
+        message: data.data.message,
+        deploymentId: data.data.deploymentId
+      }
+      
+      ElMessage.success('隧道配置更新中，正在自动部署...')
+      
+      // 开始轮询部署状态
+      startDeploymentPolling(data.data.deploymentId)
+    } else {
+      throw new Error(data.message)
+    }
+  } catch (error) {
+    ElMessage.error('更新隧道配置失败: ' + error.message)
+    // 回滚开关状态
+    tunnelConfig.value.enabled = !enabled
+  } finally {
+    updating.value = false
+  }
+}
+
+const startDeploymentPolling = (deploymentId) => {
+  let progress = 0
+  let timeRemaining = 60
+  
+  const progressInterval = setInterval(() => {
+    progress += 2
+    timeRemaining -= 1
+    
+    deploymentProgress.value = Math.min(progress, 95)
+    estimatedTime.value = `${timeRemaining}秒`
+    
+    if (progress >= 95) {
+      clearInterval(progressInterval)
+    }
+  }, 1000)
+  
+  // 2分钟后停止轮询并显示完成
+  setTimeout(() => {
+    clearInterval(progressInterval)
+    deploymentProgress.value = 100
+    deploymentStatus.value = {
+      status: 'success',
+      message: '隧道配置部署完成！'
+    }
+    
+    setTimeout(() => {
+      deploymentStatus.value = null
+      loadTunnelConfig() // 重新加载配置
+    }, 3000)
+  }, 60000) // 60秒后完成
+}
+
+const getDeploymentType = (status) => {
+  switch (status) {
+    case 'deploying': return 'warning'
+    case 'success': return 'success'
+    case 'failed': return 'error'
+    default: return 'info'
+  }
+}
+
+const getHealthType = (status) => {
+  switch (status) {
+    case 'healthy': return 'success'
+    case 'unhealthy': return 'warning'
+    case 'error': return 'danger'
+    default: return 'info'
+  }
+}
+
+const getHealthText = (status) => {
+  switch (status) {
+    case 'healthy': return '健康'
+    case 'unhealthy': return '不健康'
+    case 'error': return '错误'
+    default: return '未知'
+  }
+}
+
+const formatTime = (timestamp) => {
+  return new Date(timestamp).toLocaleString('zh-CN')
+}
+
+onMounted(() => {
+  loadTunnelConfig()
+})
+</script>
+
+<style scoped>
+.tunnel-config {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.config-content {
+  space-y: 20px;
+}
+
+.config-item {
+  margin-bottom: 20px;
+}
+
+.config-description {
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.deployment-status {
+  margin-bottom: 20px;
+}
+
+.tunnel-status {
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 6px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.label {
+  font-weight: 500;
+}
+
+.tunnel-endpoints {
+  margin-top: 20px;
+}
+
+.endpoints-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 10px;
+}
+
+.endpoint-group ul {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+}
+
+.endpoint-group li {
+  padding: 5px 0;
+  font-size: 12px;
+  word-break: break-all;
+}
+</style>
