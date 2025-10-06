@@ -56,9 +56,17 @@ export const useStreamsStore = defineStore('streams', () => {
           // 将VPS直接URL转换为Workers代理URL
           const streamPath = hlsUrl.match(/\/hls\/([^\/]+\/[^\/]+)$/);
           if (streamPath) {
-            // 添加认证token作为查询参数
-            const token = localStorage.getItem('auth_token');
-            hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}${token ? `?token=${token}` : ''}`;
+            // 🎯 使用JWT Token进行HLS认证，完全避免KV读取！
+            const videoToken = localStorage.getItem('video_token');
+            if (videoToken) {
+              hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}?token=${videoToken}`;
+              console.log('🎯 使用JWT Token进行HLS认证 (零KV读取)');
+            } else {
+              // 降级到会话token
+              const authToken = localStorage.getItem('auth_token');
+              hlsUrl = `${config.api.baseURL}/hls/${streamPath[1]}${authToken ? `?token=${authToken}` : ''}`;
+              console.log('⚠️ JWT Token不存在，降级到会话token');
+            }
           }
         }
         
