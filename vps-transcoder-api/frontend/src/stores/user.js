@@ -4,8 +4,7 @@ import axios from '../utils/axios'
 
 export const useUserStore = defineStore('user', () => {
   const user = ref(null)
-  const token = ref(null) // 管理后台使用的会话token
-  const videoToken = ref(null) // 🎯 视频观看专用JWT Token（无KV依赖）
+  const token = ref(null) // 不在初始化时直接从localStorage获取，避免响应式触发
   const isChecking = ref(false)
   const isInitialized = ref(false) // 添加初始化标志
 
@@ -22,11 +21,9 @@ export const useUserStore = defineStore('user', () => {
       if (response.data.status === 'success') {
         user.value = response.data.data.user
         token.value = response.data.data.token
-        videoToken.value = response.data.data.videoToken // 🎯 保存视频观看Token
         
         // 保存token到localStorage
         localStorage.setItem('auth_token', token.value)
-        localStorage.setItem('video_token', videoToken.value) // 🎯 保存视频Token
         localStorage.setItem('user', JSON.stringify(user.value))
         
         return { success: true }
@@ -50,9 +47,7 @@ export const useUserStore = defineStore('user', () => {
       // 清除本地存储
       user.value = null
       token.value = null
-      videoToken.value = null // 🎯 清除视频Token
       localStorage.removeItem('auth_token')
-      localStorage.removeItem('video_token') // 🎯 清除视频Token
       localStorage.removeItem('user')
     }
   }
@@ -83,7 +78,6 @@ export const useUserStore = defineStore('user', () => {
       // 让路由守卫处理重定向
       user.value = null
       token.value = null
-      videoToken.value = null // 🎯 清除视频Token
       // 不在这里清除localStorage，避免触发响应式更新导致路由循环
       throw error // 抛出错误让路由守卫处理
     } finally {
@@ -95,17 +89,14 @@ export const useUserStore = defineStore('user', () => {
   const initFromStorage = () => {
     const storedUser = localStorage.getItem('user')
     const storedToken = localStorage.getItem('auth_token')
-    const storedVideoToken = localStorage.getItem('video_token') // 🎯 恢复视频Token
     
     if (storedUser && storedToken) {
       try {
         user.value = JSON.parse(storedUser)
         token.value = storedToken
-        videoToken.value = storedVideoToken // 🎯 恢复视频Token
       } catch (error) {
         console.error('恢复用户信息失败:', error)
         localStorage.removeItem('auth_token')
-        localStorage.removeItem('video_token') // 🎯 清除视频Token
         localStorage.removeItem('user')
       }
     }
@@ -122,7 +113,6 @@ export const useUserStore = defineStore('user', () => {
   return {
     user,
     token,
-    videoToken, // 🎯 导出视频Token
     isChecking,
     isInitialized,
     isLoggedIn,
