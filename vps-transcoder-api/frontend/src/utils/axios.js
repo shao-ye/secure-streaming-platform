@@ -25,11 +25,11 @@ instance.interceptors.request.use(
       }
     }
     
-    // 认证通过cookies自动处理，无需手动添加Authorization header
-    // const token = localStorage.getItem('auth_token')
-    // if (token) {
-    //   config.headers.Authorization = `Bearer ${token}`
-    // }
+    // 添加Authorization header用于用户管理API
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
     
     return config
   },
