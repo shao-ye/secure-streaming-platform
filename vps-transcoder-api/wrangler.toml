@@ -1,0 +1,8 @@
+# Cloudflare Pages 构建配置
+[build]
+  command = "npm run build"
+  publish = "frontend/dist"
+
+[build.environment_variables]
+  NODE_VERSION = "20"
+  NPM_VERSION = "9"
