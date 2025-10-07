@@ -181,6 +181,8 @@ const connectionModeText = computed(() => {
     case 'smart-fallback': return '智能切换'
     case 'direct-fallback': return '故障切换'
     case 'direct': return '直连模式'
+    case 'detecting': return '检测中'
+    case 'unknown': return '未知模式'
     default: return '检测中'
   }
 })
@@ -277,13 +279,26 @@ const setupHlsEventListeners = () => {
 
   // 清单加载完成 - 检测连接模式
   hls.value.on(Hls.Events.MANIFEST_LOADED, (event, data) => {
-    debugLog('HLS清单加载完成，检测连接模式')
+    debugLog('HLS清单加载完成，检测连接模式', data)
     
     // 检测响应头中的路由信息
-    if (data.networkDetails && data.networkDetails.response) {
-      const response = data.networkDetails.response
-      const routeVia = response.headers?.get?.('x-route-via') || response.headers?.['x-route-via']
-      const responseTimeHeader = response.headers?.get?.('x-response-time') || response.headers?.['x-response-time']
+    if (data && data.networkDetails) {
+      debugLog('网络详情:', data.networkDetails)
+      const response = data.networkDetails.response || data.networkDetails
+      
+      // 尝试多种方式获取响应头
+      let routeVia = null
+      let responseTimeHeader = null
+      
+      if (response.headers) {
+        if (typeof response.headers.get === 'function') {
+          routeVia = response.headers.get('x-route-via')
+          responseTimeHeader = response.headers.get('x-response-time')
+        } else if (typeof response.headers === 'object') {
+          routeVia = response.headers['x-route-via'] || response.headers['X-Route-Via']
+          responseTimeHeader = response.headers['x-response-time'] || response.headers['X-Response-Time']
+        }
+      }
       
       if (routeVia) {
         connectionMode.value = routeVia
@@ -294,6 +309,20 @@ const setupHlsEventListeners = () => {
         responseTime.value = responseTimeHeader
         debugLog('检测到响应时间:', responseTimeHeader)
       }
+    }
+    
+    // 如果没有检测到，尝试手动获取
+    if (!connectionMode.value) {
+      debugLog('未检测到连接模式，尝试手动获取')
+      // 设置默认值，表示正在检测
+      connectionMode.value = 'detecting'
+      
+      // 延迟一段时间后再次尝试检测
+      setTimeout(() => {
+        if (connectionMode.value === 'detecting') {
+          connectionMode.value = 'unknown'
+        }
+      }, 2000)
     }
   })
 
