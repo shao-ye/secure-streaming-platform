@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0-fix-connection-mode",
+  "timestamp": "2025-10-07T20:05:00Z",
+  "commit": "17ceb95e",
+  "features": [
+    "connection-mode-display",
+    "fetchConnectionMode-function",
+    "tunnel-optimization-status"
+  ],
+  "buildInfo": {
+    "nodeVersion": "20.x",
+    "buildCommand": "npm run build",
+    "publishDir": "frontend/dist"
+  }
+}
