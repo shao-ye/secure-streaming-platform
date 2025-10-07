@@ -23,6 +23,10 @@
             <StreamManager />
           </el-tab-pane>
 
+          <el-tab-pane label="用户管理" name="users">
+            <UserManager />
+          </el-tab-pane>
+
           <el-tab-pane label="系统状态" name="system">
             <div class="system-status">
               <el-alert
@@ -77,6 +81,7 @@ import { Back, SwitchButton } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useStreamsStore } from '../stores/streams'
 import StreamManager from '../components/StreamManager.vue'
+import UserManager from '../components/UserManager.vue'
 import SystemDiagnostics from '../components/SystemDiagnostics.vue'
 import TunnelConfig from '../components/admin/TunnelConfig.vue'
 
