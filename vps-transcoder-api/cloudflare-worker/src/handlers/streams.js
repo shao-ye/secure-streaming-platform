@@ -4,28 +4,33 @@
 
 import { getStreamsConfig, getStreamConfig } from '../utils/kv.js';
 import { validateSession } from './auth.js';
-import { errorResponse, successResponse } from '../utils/cors.js';
+import { errorResponse, successResponse, getCorsHeaders } from '../utils/cors.js';
 import { logStreamEvent, logError, logInfo } from '../utils/logger.js';
+import { TunnelRouter } from '../utils/tunnel-router.js';
 
 /**
  * 调用VPS转码API
  */
 async function callTranscoderAPI(env, endpoint, method = 'GET', data = null) {
   try {
-    const vpsApiUrl = env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz';
+    // 🚀 使用隧道路由构建API URL，支持地理路由
+    const { url, routing } = await TunnelRouter.buildVPSUrl(env, `/api/${endpoint}`, 'API');
     const apiKey = env.VPS_API_KEY;
 
     if (!apiKey) {
       throw new Error('VPS API key not configured');
     }
 
-    const url = `${vpsApiUrl}/api/${endpoint}`;
+    console.log(`🌐 API调用路由: ${routing.type} - ${routing.reason}`);
+
     const options = {
       method,
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': apiKey,
-        'User-Agent': 'Cloudflare-Worker/1.0'
+        'User-Agent': 'YOYO-Tunnel-API/1.0',
+        'X-Route-Type': routing.type,
+        'X-Tunnel-Optimized': routing.type === 'tunnel' ? 'true' : 'false'
       }
     };
 
@@ -37,10 +42,32 @@ async function callTranscoderAPI(env, endpoint, method = 'GET', data = null) {
       url,
       method,
       endpoint,
+      routeType: routing.type,
       hasData: !!data
     });
 
-    const response = await fetch(url, options);
+    // API调用 (带故障转移)
+    let response;
+    try {
+      response = await fetch(url, options);
+    } catch (error) {
+      // 故障转移到直连
+      console.warn(`⚠️ API主路由失败，切换直连: ${error.message}`);
+      const directRouting = TunnelRouter.getDirectEndpoints();
+      const directUrl = `${directRouting.endpoints.API}/api/${endpoint}`;
+      
+      const fallbackOptions = {
+        ...options,
+        headers: {
+          ...options.headers,
+          'User-Agent': 'YOYO-Fallback-API/1.0',
+          'X-Route-Type': 'direct-fallback',
+          'X-Failover': 'true'
+        }
+      };
+      
+      response = await fetch(directUrl, fallbackOptions);
+    }
     const responseText = await response.text();
 
     let responseData;
@@ -107,6 +134,8 @@ export const handleStreams = {
    */
   async getStreams(request, env, ctx) {
     try {
+      const startTime = Date.now();
+      
       // 验证用户认证
       const auth = await validateSession(request, env);
       if (!auth) {
@@ -135,10 +164,27 @@ export const handleStreams = {
         streamsCount: publicStreams.length
       });
 
-      return successResponse({
-        streams: publicStreams,
-        count: publicStreams.length
-      }, 'Streams retrieved successfully', request);
+      // 获取路由信息用于响应头，支持地理路由
+      const routing = await TunnelRouter.getOptimalEndpoints(env, request);
+      
+      return new Response(JSON.stringify({
+        status: 'success',
+        message: 'Streams retrieved successfully',
+        data: {
+          streams: publicStreams,
+          count: publicStreams.length
+        },
+        timestamp: new Date().toISOString()
+      }, null, 2), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Route-Via': routing.type,
+          'X-Tunnel-Optimized': routing.type === 'tunnel' ? 'true' : 'false',
+          'X-Response-Time': `${Date.now() - startTime}ms`,
+          ...getCorsHeaders(request)
+        }
+      });
 
     } catch (error) {
       logError(env, 'Get streams handler error', error);

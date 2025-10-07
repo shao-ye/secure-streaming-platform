@@ -1,0 +1,45 @@
+# Cloudflare Tunnel配置文件
+tunnel: yoyo-streaming
+credentials-file: /root/.cloudflared/yoyo-streaming.json
+
+# 入口规则配置
+ingress:
+  # API服务隧道 - 端口3000
+  - hostname: tunnel-api.yoyo-vps.5202021.xyz
+    service: http://localhost:3000
+    originRequest:
+      httpHostHeader: yoyo-vps.5202021.xyz
+      connectTimeout: 30s
+      tlsTimeout: 10s
+      keepAliveTimeout: 30s
+      keepAliveConnections: 10
+      
+  # HLS文件服务隧道 - 端口8080  
+  - hostname: tunnel-hls.yoyo-vps.5202021.xyz
+    service: http://localhost:8080
+    originRequest:
+      httpHostHeader: yoyo-vps.5202021.xyz
+      connectTimeout: 30s
+      tlsTimeout: 10s
+      keepAliveTimeout: 30s
+      keepAliveConnections: 10
+      
+  # 健康检查端点
+  - hostname: tunnel-health.yoyo-vps.5202021.xyz
+    service: http://localhost:3000/health
+    originRequest:
+      httpHostHeader: yoyo-vps.5202021.xyz
+      
+  # 默认规则 - 返回404
+  - service: http_status:404
+
+# 隧道配置选项
+tunnel-options:
+  # 启用HTTP/2
+  http2-origin: true
+  # 启用压缩
+  compression: gzip
+  # 连接超时
+  proxy-connect-timeout: 30s
+  # 保持连接
+  proxy-keepalive-timeout: 30s

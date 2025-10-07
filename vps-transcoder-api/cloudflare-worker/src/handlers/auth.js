@@ -9,27 +9,27 @@ import { logAuthEvent, logError, logInfo } from '../utils/logger.js';
 import { R2LoginLogger } from '../utils/r2-logger.js';
 
 /**
- * 记录登录日志到R2存储（优先）和KV存储（降级）
+ * 记录登录日志到R2存储（仅R2，避免KV写入限制）
  */
 async function recordLoginLog(env, username, request, success, details = {}) {
   try {
-    // 🎯 优先使用R2存储
+    // 🚨 紧急优化：仅使用R2存储，完全避免KV写入
     if (env.LOGIN_LOGS_BUCKET) {
       const logger = new R2LoginLogger(env.LOGIN_LOGS_BUCKET);
       const logEntry = R2LoginLogger.createLogEntry(username, request, success, details);
       
       try {
         await logger.recordLogin(logEntry);
-        console.log('Login log recorded to R2:', { username, success });
+        console.log('✅ 登录日志已记录到R2存储 (避免KV写入限制):', { username, success });
         return; // R2记录成功，直接返回
       } catch (r2Error) {
-        console.error('Failed to record login log to R2, falling back to KV:', r2Error);
-        // 继续执行KV降级逻辑
+        console.error('❌ R2登录日志记录失败:', r2Error);
+        // 🚨 不再降级到KV存储，避免触发写入限制
+        console.log('🚨 为避免KV写入限制，不降级到KV存储');
       }
+    } else {
+      console.log('⚠️ R2存储不可用，跳过登录日志记录 (避免KV写入)');
     }
-    
-    // 🔄 降级到KV存储
-    await recordLoginLogToKV(env, username, request, success, details);
   } catch (error) {
     console.error('Failed to record login log:', error);
     // 不抛出错误，避免影响登录流程
@@ -224,7 +224,8 @@ export const handleAuth = {
 
       // 验证输入
       if (!username || !password) {
-        logAuthEvent(env, 'login_attempt', username || 'unknown', request, false, { reason: 'missing_credentials' });
+        // 🚨 暂时移除logAuthEvent，避免额外KV写入
+        // logAuthEvent(env, 'login_attempt', username || 'unknown', request, false, { reason: 'missing_credentials' });
         await recordLoginLog(env, username || 'unknown', request, false, { reason: 'missing_credentials' });
         return errorResponse('Username and password are required', 'MISSING_CREDENTIALS', 400, request);
       }
@@ -232,7 +233,8 @@ export const handleAuth = {
       // 获取用户数据
       const user = await getUser(env, username);
       if (!user) {
-        logAuthEvent(env, 'login_attempt', username, request, false, { reason: 'user_not_found' });
+        // 🚨 暂时移除logAuthEvent，避免额外KV写入
+        // logAuthEvent(env, 'login_attempt', username, request, false, { reason: 'user_not_found' });
         await recordLoginLog(env, username, request, false, { reason: 'user_not_found' });
         return errorResponse('Invalid username or password', 'INVALID_CREDENTIALS', 401, request);
       }
@@ -240,28 +242,40 @@ export const handleAuth = {
       // 验证密码
       const isValidPassword = await verifyPassword(password, user.salt, user.hashedPassword);
       if (!isValidPassword) {
-        logAuthEvent(env, 'login_attempt', username, request, false, { reason: 'invalid_password' });
+        // 🚨 暂时移除logAuthEvent，避免额外KV写入
+        // logAuthEvent(env, 'login_attempt', username, request, false, { reason: 'invalid_password' });
         await recordLoginLog(env, username, request, false, { reason: 'invalid_password' });
         return errorResponse('Invalid username or password', 'INVALID_CREDENTIALS', 401, request);
       }
 
-      // 创建会话
+      // 🚨 优化会话创建：延长会话时间，减少重复登录的KV写入
       const sessionId = generateSessionId();
-      const sessionTimeout = parseInt(env.SESSION_TIMEOUT) || 86400000; // 默认24小时
+      const sessionTimeout = parseInt(env.SESSION_TIMEOUT) || 172800000; // 延长到48小时，减少重复登录
       const session = await createSession(env, sessionId, username, sessionTimeout);
 
-      // 记录成功登录
-      logAuthEvent(env, 'login_success', username, request, true, {
-        sessionId,
-        role: user.role,
-        responseTime: Date.now() - startTime
-      });
+      // 🚨 暂时移除logAuthEvent，避免额外KV写入
+      // logAuthEvent(env, 'login_success', username, request, true, {
+      //   sessionId,
+      //   role: user.role,
+      //   responseTime: Date.now() - startTime
+      // });
       
-      // 记录登录日志到KV存储
+      // 🎯 使用简化的视频Token：sessionId + 用户信息编码
+      // 避免复杂JWT实现，但提供基本的用户信息传递
+      const videoTokenData = {
+        sessionId,
+        username: user.username,
+        role: user.role,
+        exp: Date.now() + sessionTimeout
+      };
+      const videoToken = btoa(JSON.stringify(videoTokenData)); // 简单Base64编码
+
+      // 🚨 紧急优化：仅使用R2存储登录日志，避免KV写入限制
       await recordLoginLog(env, username, request, true, {
         sessionId,
         role: user.role,
-        responseTime: Date.now() - startTime
+        responseTime: Date.now() - startTime,
+        jwtTokenGenerated: false
       });
 
       // 创建响应数据
@@ -275,7 +289,8 @@ export const handleAuth = {
           sessionId: session.sessionId,
           expiresAt: new Date(session.expiresAt).toISOString()
         },
-        token: sessionId // 返回token供前端使用Authorization header
+        token: sessionId,        // 管理后台使用
+        videoToken: videoToken   // 🎯 视频播放Token（JWT或会话token）
       };
 
       // 创建响应并设置Cookie

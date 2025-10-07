@@ -40,6 +40,12 @@ VPS_API_URL = "https://yoyo-vps.5202021.xyz"
 VPS_HLS_URL = "https://yoyo-vps.5202021.xyz"
 VPS_ENABLED = "true"
 VPS_API_KEY = "85da076ae24b028b3d1ea1884e6b13c5afe34488be0f8d39a05fbbf26d23e938"
+# 隧道优化配置
+TUNNEL_ENABLED = "true"
+# 隧道优化部署配置 (需要配置API凭据以启用自动部署)
+CLOUDFLARE_ACCOUNT_ID = "788ac44febb9c425b4e5f14bff8bab1d"
+CLOUDFLARE_API_TOKEN = "18ENKstNPG2_8-3tJFEzzo_YLZly698Y_rRtmpWq"
+WORKER_NAME = "yoyo-streaming-worker-production"
 
 [[env.production.kv_namespaces]]
 binding = "YOYO_USER_DB"

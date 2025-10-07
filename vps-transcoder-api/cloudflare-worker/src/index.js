@@ -13,6 +13,8 @@ import { handleStreams } from './handlers/streams';
 import { handleAdmin } from './handlers/admin';
 import { handleProxy } from './handlers/proxy';
 import { handlePages } from './handlers/pages';
+import { handleVerify } from './handlers/verify';
+import { deploymentHandlers } from './handlers/deployment.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -163,6 +165,7 @@ export default {
       // 初始化管理员用户端点（修复登录页面持续刷新问题）
       router.post('/api/init-admin', async (req, env, ctx) => {
         try {
+          console.log('Init admin request received');
           // 导入密码哈希函数
           const { hashPassword, generateRandomString } = await import('./utils/crypto.js');
           
@@ -282,6 +285,17 @@ export default {
       
       // 登录日志API
       router.get('/api/admin/login/logs', (req, env, ctx) => handleAdmin.getLoginLogs(req, env, ctx));
+      
+      // 隧道管理API路由
+      router.get('/api/admin/tunnel/config', (req, env, ctx) => deploymentHandlers.getTunnelConfig(req, env, ctx));
+      router.put('/api/admin/tunnel/config', (req, env, ctx) => deploymentHandlers.updateTunnelConfig(req, env, ctx));
+      router.get('/api/admin/tunnel/status', (req, env, ctx) => deploymentHandlers.checkTunnelHealth(req, env, ctx));
+      
+      // 系统验证API - 用于验证KV优化效果和系统功能
+      router.get('/api/verify/kv-optimization', (req, env, ctx) => handleVerify.verifyKVOptimization(req, env, ctx));
+      router.get('/api/verify/login-function', (req, env, ctx) => handleVerify.verifyLoginFunction(req, env, ctx));
+      router.get('/api/verify/system-health', (req, env, ctx) => handleVerify.systemHealthCheck(req, env, ctx));
+      router.get('/api/verify/reset-admin', (req, env, ctx) => handleVerify.resetAdminUser(req, env, ctx));
       
       // 其他管理功能
       router.post('/api/admin/streams/reload', (req, env, ctx) => handleAdmin.reloadStreamsConfig(req, env, ctx));

@@ -31,21 +31,22 @@ const ALLOWED_ORIGINS = [
  * 获取CORS headers
  */
 export function getCorsHeaders(request = null) {
-  let origin = '*';
+  let origin = 'https://yoyo.5202021.xyz'; // 默认使用生产域名，避免通配符
 
   if (request && request.headers) {
     const requestOrigin = request.headers.get('Origin');
     if (requestOrigin && ALLOWED_ORIGINS.includes(requestOrigin)) {
       origin = requestOrigin;
     } else if (ALLOWED_ORIGINS.length > 0) {
-      origin = ALLOWED_ORIGINS[0];
+      // 优先使用生产域名
+      origin = 'https://yoyo.5202021.xyz';
     }
   }
 
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, CF-Connecting-IP, CF-Ray',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, CF-Connecting-IP, CF-Ray, X-Tunnel-Optimized, X-Client-Type',
     'Access-Control-Expose-Headers': 'Set-Cookie',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400', // 24小时
@@ -70,9 +71,10 @@ export function createCorsResponse(body, options = {}) {
   const { status = 200, headers = {}, request } = options;
 
   const corsHeaders = request ? getCorsHeaders(request) : {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': 'https://yoyo.5202021.xyz',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Tunnel-Optimized, X-Client-Type',
+    'Access-Control-Allow-Credentials': 'true'
   };
 
   return new Response(body, {
