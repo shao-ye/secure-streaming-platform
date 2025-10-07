@@ -10,7 +10,8 @@
       
       <el-table-column prop="displayName" label="显示名称" width="150" />
       
-      <el-table-column prop="email" label="邮箱" width="200" />
+      <!-- 邮箱列暂时隐藏，用不上 -->
+      <!-- <el-table-column prop="email" label="邮箱" width="200" /> -->
       
       <el-table-column prop="role" label="角色" width="100">
         <template #default="{ row }">
