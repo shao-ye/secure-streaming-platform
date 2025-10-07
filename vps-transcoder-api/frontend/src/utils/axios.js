@@ -25,11 +25,11 @@ instance.interceptors.request.use(
       }
     }
     
-    // 自动添加Authorization header
-    const token = localStorage.getItem('auth_token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
+    // 认证通过cookies自动处理，无需手动添加Authorization header
+    // const token = localStorage.getItem('auth_token')
+    // if (token) {
+    //   config.headers.Authorization = `Bearer ${token}`
+    // }
     
     return config
   },
@@ -67,7 +67,7 @@ instance.interceptors.response.use(
           break
         case 401:
           message = '登录已失效，正在跳转到登录页面...'
-          // 清除本地存储的认证信息
+          // 清除本地存储的认证信息（保留以防有其他用途）
           localStorage.removeItem('auth_token')
           localStorage.removeItem('user_info')
           localStorage.removeItem('video_token')
@@ -124,7 +124,7 @@ instance.interceptors.response.use(
         // 检查是否需要跳转到登录页
         const currentPath = router.currentRoute.value.path
         if (currentPath !== '/login') {
-          // 清除认证信息
+          // 清除认证信息（保留以防有其他用途）
           localStorage.removeItem('auth_token')
           localStorage.removeItem('user_info')
           localStorage.removeItem('video_token')
@@ -140,16 +140,11 @@ instance.interceptors.response.use(
         // 管理API的网络错误，可能是认证问题
         warnLog('管理API网络错误，检查认证状态:', error.config.url)
         
-        // 尝试验证当前认证状态
-        const token = localStorage.getItem('auth_token')
-        if (!token) {
-          ElMessage.error('登录已失效，正在跳转到登录页面...')
-          router.replace('/login').catch(() => {
-            window.location.href = '/login'
-          })
-        } else {
-          ElMessage.error('网络连接异常，请稍后重试')
-        }
+        // 由于认证通过cookies处理，直接显示网络错误
+        ElMessage.error('网络连接异常，请稍后重试')
+        
+        // 如果是认证相关的网络错误，可能需要重新登录
+        // 但由于使用cookies认证，这里不检查localStorage token
       } else {
         // 普通网络错误
         ElMessage.error('网络错误，请检查网络连接')
