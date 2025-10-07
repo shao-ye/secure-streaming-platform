@@ -40,7 +40,8 @@ export const useUserManagementStore = defineStore('userManagement', {
       this.loading = true
       try {
         const response = await userApi.getUsers()
-        this.users = response.data.users || []
+        // 修复数据结构解析 - API返回的是 response.data.data.users
+        this.users = response.data.data?.users || []
         return this.users
       } catch (error) {
         console.error('获取用户列表失败:', error)
