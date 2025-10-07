@@ -83,6 +83,19 @@
         <span class="label">状态:</span>
         <el-tag :type="statusType" size="small">{{ status }}</el-tag>
       </div>
+      <div class="info-item" v-if="connectionMode">
+        <span class="label">连接:</span>
+        <el-tag :type="connectionModeType" size="small">
+          <el-icon style="margin-right: 4px;">
+            <component :is="connectionModeIcon" />
+          </el-icon>
+          {{ connectionModeText }}
+        </el-tag>
+      </div>
+      <div class="info-item" v-if="responseTime">
+        <span class="label">延迟:</span>
+        <el-tag type="info" size="small">{{ responseTime }}</el-tag>
+      </div>
     </div>
   </div>
 </template>
@@ -90,7 +103,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Connection, Link } from '@element-plus/icons-vue'
 import Hls from 'hls.js'
 import { config, debugLog, errorLog, warnLog } from '../utils/config'
 
@@ -116,6 +129,10 @@ const status = ref('准备中')
 const retryCount = ref(0)
 const retryTimer = ref(null)
 
+// 连接模式状态
+const connectionMode = ref('')
+const responseTime = ref('')
+
 // 缩放相关状态
 const scale = ref(1)
 const translateX = ref(0)
@@ -134,6 +151,37 @@ const statusType = computed(() => {
     case '错误': return 'danger'
     case '重试中': return 'warning'
     default: return 'info'
+  }
+})
+
+// 连接模式相关计算属性
+const connectionModeType = computed(() => {
+  switch (connectionMode.value) {
+    case 'tunnel': return 'success'
+    case 'smart-fallback': return 'warning'
+    case 'direct-fallback': return 'warning'
+    case 'direct': return 'info'
+    default: return 'info'
+  }
+})
+
+const connectionModeIcon = computed(() => {
+  switch (connectionMode.value) {
+    case 'tunnel': return Connection
+    case 'smart-fallback': return Link
+    case 'direct-fallback': return Link
+    case 'direct': return Link
+    default: return Connection
+  }
+})
+
+const connectionModeText = computed(() => {
+  switch (connectionMode.value) {
+    case 'tunnel': return '隧道优化'
+    case 'smart-fallback': return '智能切换'
+    case 'direct-fallback': return '故障切换'
+    case 'direct': return '直连模式'
+    default: return '检测中'
   }
 })
 
@@ -224,6 +272,28 @@ const setupHlsEventListeners = () => {
         warnLog('自动播放失败:', e)
         ElMessage.warning('自动播放失败，请手动点击播放按钮')
       })
+    }
+  })
+
+  // 清单加载完成 - 检测连接模式
+  hls.value.on(Hls.Events.MANIFEST_LOADED, (event, data) => {
+    debugLog('HLS清单加载完成，检测连接模式')
+    
+    // 检测响应头中的路由信息
+    if (data.networkDetails && data.networkDetails.response) {
+      const response = data.networkDetails.response
+      const routeVia = response.headers?.get?.('x-route-via') || response.headers?.['x-route-via']
+      const responseTimeHeader = response.headers?.get?.('x-response-time') || response.headers?.['x-response-time']
+      
+      if (routeVia) {
+        connectionMode.value = routeVia
+        debugLog('检测到连接模式:', routeVia)
+      }
+      
+      if (responseTimeHeader) {
+        responseTime.value = responseTimeHeader
+        debugLog('检测到响应时间:', responseTimeHeader)
+      }
     }
   })
 
