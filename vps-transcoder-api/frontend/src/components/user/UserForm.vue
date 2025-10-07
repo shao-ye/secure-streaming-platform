@@ -34,13 +34,14 @@
         />
       </el-form-item>
       
-      <el-form-item label="邮箱" prop="email">
+      <!-- 邮箱字段暂时隐藏，用不上 -->
+      <!-- <el-form-item label="邮箱" prop="email">
         <el-input 
           v-model="formData.email" 
           placeholder="请输入邮箱地址"
           type="email"
         />
-      </el-form-item>
+      </el-form-item> -->
       
       <el-form-item label="角色" prop="role">
         <el-select v-model="formData.role" placeholder="请选择角色" disabled>
@@ -133,10 +134,11 @@ const rules = {
     { required: true, message: '请输入显示名称', trigger: 'blur' },
     { min: 1, max: 50, message: '显示名称长度为1-50个字符', trigger: 'blur' }
   ],
-  email: [
-    { required: true, message: '请输入邮箱地址', trigger: 'blur' },
-    { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }
-  ],
+  // 邮箱验证规则暂时注释，用不上
+  // email: [
+  //   { required: true, message: '请输入邮箱地址', trigger: 'blur' },
+  //   { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }
+  // ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
     { min: 6, max: 50, message: '密码长度为6-50个字符', trigger: 'blur' }
@@ -206,7 +208,7 @@ const handleSubmit = async () => {
     const submitData = {
       username: formData.value.username,
       displayName: formData.value.displayName,
-      email: formData.value.email,
+      // email: formData.value.email, // 邮箱字段暂时不提交
       role: 'user'
     }
     
