@@ -30,9 +30,11 @@ declare module 'vue' {
     ElLoading: typeof import('element-plus/es')['ElLoading']
     ElMain: typeof import('element-plus/es')['ElMain']
     ElPagination: typeof import('element-plus/es')['ElPagination']
+    ElProgress: typeof import('element-plus/es')['ElProgress']
     ElResult: typeof import('element-plus/es')['ElResult']
     ElRow: typeof import('element-plus/es')['ElRow']
     ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
+    ElSwitch: typeof import('element-plus/es')['ElSwitch']
     ElTable: typeof import('element-plus/es')['ElTable']
     ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
     ElTabPane: typeof import('element-plus/es')['ElTabPane']
@@ -48,6 +50,7 @@ declare module 'vue' {
     StreamList: typeof import('./src/components/StreamList.vue')['default']
     StreamManager: typeof import('./src/components/StreamManager.vue')['default']
     SystemDiagnostics: typeof import('./src/components/SystemDiagnostics.vue')['default']
+    TunnelConfig: typeof import('./src/components/admin/TunnelConfig.vue')['default']
     VideoPlayer: typeof import('./src/components/VideoPlayer.vue')['default']
   }
   export interface ComponentCustomProperties {
