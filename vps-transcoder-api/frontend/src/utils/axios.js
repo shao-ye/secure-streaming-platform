@@ -70,6 +70,8 @@ instance.interceptors.response.use(
           // 清除本地存储的认证信息
           localStorage.removeItem('auth_token')
           localStorage.removeItem('user_info')
+          localStorage.removeItem('video_token')
+          localStorage.removeItem('user')
           // 清除用户状态
           if (window.userStore) {
             window.userStore.logout()
@@ -113,8 +115,45 @@ instance.interceptors.response.use(
 
       ElMessage.error(message)
     } else if (error.request) {
-      // 网络错误
-      ElMessage.error('网络错误，请检查网络连接')
+      // 网络错误处理 - 区分CORS错误和真正的网络错误
+      if (error.message && error.message.includes('CORS')) {
+        // CORS错误，可能是认证相关问题
+        warnLog('CORS错误，可能是认证问题:', error.message)
+        ElMessage.error('访问权限错误，请重新登录')
+        
+        // 检查是否需要跳转到登录页
+        const currentPath = router.currentRoute.value.path
+        if (currentPath !== '/login') {
+          // 清除认证信息
+          localStorage.removeItem('auth_token')
+          localStorage.removeItem('user_info')
+          localStorage.removeItem('video_token')
+          localStorage.removeItem('user')
+          
+          // 跳转到登录页
+          router.replace('/login').catch(err => {
+            console.warn('路由跳转失败:', err)
+            window.location.href = '/login'
+          })
+        }
+      } else if (error.code === 'ERR_NETWORK' && error.config?.url?.includes('/api/admin/')) {
+        // 管理API的网络错误，可能是认证问题
+        warnLog('管理API网络错误，检查认证状态:', error.config.url)
+        
+        // 尝试验证当前认证状态
+        const token = localStorage.getItem('auth_token')
+        if (!token) {
+          ElMessage.error('登录已失效，正在跳转到登录页面...')
+          router.replace('/login').catch(() => {
+            window.location.href = '/login'
+          })
+        } else {
+          ElMessage.error('网络连接异常，请稍后重试')
+        }
+      } else {
+        // 普通网络错误
+        ElMessage.error('网络错误，请检查网络连接')
+      }
     } else {
       // 其他错误
       ElMessage.error(error.message || '未知错误')
