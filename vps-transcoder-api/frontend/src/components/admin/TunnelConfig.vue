@@ -37,6 +37,16 @@
               <el-progress :percentage="deploymentProgress" :show-text="false" />
               <p>预计剩余时间: {{ estimatedTime }}</p>
             </template>
+            <template v-else-if="deploymentStatus.status === 'manual_required'">
+              <div class="manual-deployment">
+                <p><strong>{{ deploymentStatus.note }}</strong></p>
+                <ol class="manual-steps">
+                  <li v-for="step in deploymentStatus.manualSteps" :key="step">
+                    {{ step }}
+                  </li>
+                </ol>
+              </div>
+            </template>
           </el-alert>
         </div>
         
@@ -106,7 +116,7 @@ const estimatedTime = ref('')
 const loadTunnelConfig = async () => {
   try {
     const response = await api.request('/api/admin/tunnel/config')
-    const data = await response.json()
+    const data = response.data
     if (data.status === 'success') {
       tunnelConfig.value = data.data.tunnel
       tunnelStatus.value = { health: data.data.tunnel.health }
@@ -127,18 +137,35 @@ const handleToggle = async (enabled) => {
       })
     })
     
-    const data = await response.json()
+    const data = response.data
     if (data.status === 'success') {
-      deploymentStatus.value = {
-        status: 'deploying',
-        message: data.data.message,
-        deploymentId: data.data.deploymentId
+      // 检查是否需要手动部署
+      if (data.data.status === 'manual_deployment_required') {
+        ElMessage.warning({
+          message: data.data.message,
+          duration: 8000
+        })
+        // 显示手动部署步骤
+        deploymentStatus.value = {
+          status: 'manual_required',
+          message: data.data.message,
+          note: data.data.note,
+          manualSteps: data.data.manualSteps
+        }
+        // 更新配置状态
+        tunnelConfig.value.enabled = data.data.enabled
+      } else {
+        deploymentStatus.value = {
+          status: 'deploying',
+          message: data.data.message,
+          deploymentId: data.data.deploymentId
+        }
+        
+        ElMessage.success('隧道配置更新中，正在自动部署...')
+        
+        // 开始轮询部署状态
+        startDeploymentPolling(data.data.deploymentId)
       }
-      
-      ElMessage.success('隧道配置更新中，正在自动部署...')
-      
-      // 开始轮询部署状态
-      startDeploymentPolling(data.data.deploymentId)
     } else {
       throw new Error(data.message)
     }
@@ -188,6 +215,7 @@ const getDeploymentType = (status) => {
     case 'deploying': return 'warning'
     case 'success': return 'success'
     case 'failed': return 'error'
+    case 'manual_required': return 'warning'
     default: return 'info'
   }
 }
@@ -294,5 +322,23 @@ onMounted(() => {
   padding: 5px 0;
   font-size: 12px;
   word-break: break-all;
+}
+
+.manual-deployment {
+  margin-top: 15px;
+}
+
+.manual-steps {
+  margin: 10px 0;
+  padding-left: 20px;
+}
+
+.manual-steps li {
+  margin: 8px 0;
+  font-family: 'Courier New', monospace;
+  background: #f5f5f5;
+  padding: 8px 12px;
+  border-radius: 4px;
+  border-left: 3px solid #409eff;
 }
 </style>
