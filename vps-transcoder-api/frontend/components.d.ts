@@ -29,10 +29,12 @@ declare module 'vue' {
     ElInputNumber: typeof import('element-plus/es')['ElInputNumber']
     ElLoading: typeof import('element-plus/es')['ElLoading']
     ElMain: typeof import('element-plus/es')['ElMain']
+    ElOption: typeof import('element-plus/es')['ElOption']
     ElPagination: typeof import('element-plus/es')['ElPagination']
     ElProgress: typeof import('element-plus/es')['ElProgress']
     ElResult: typeof import('element-plus/es')['ElResult']
     ElRow: typeof import('element-plus/es')['ElRow']
+    ElSelect: typeof import('element-plus/es')['ElSelect']
     ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
     ElSwitch: typeof import('element-plus/es')['ElSwitch']
     ElTable: typeof import('element-plus/es')['ElTable']
@@ -51,6 +53,10 @@ declare module 'vue' {
     StreamManager: typeof import('./src/components/StreamManager.vue')['default']
     SystemDiagnostics: typeof import('./src/components/SystemDiagnostics.vue')['default']
     TunnelConfig: typeof import('./src/components/admin/TunnelConfig.vue')['default']
+    UserForm: typeof import('./src/components/user/UserForm.vue')['default']
+    UserFormFixed: typeof import('./src/components/user/UserForm-fixed.vue')['default']
+    UserList: typeof import('./src/components/user/UserList.vue')['default']
+    UserManager: typeof import('./src/components/UserManager.vue')['default']
     VideoPlayer: typeof import('./src/components/VideoPlayer.vue')['default']
   }
   export interface ComponentCustomProperties {
