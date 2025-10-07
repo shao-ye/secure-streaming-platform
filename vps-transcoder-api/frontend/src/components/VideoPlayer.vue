@@ -314,15 +314,8 @@ const setupHlsEventListeners = () => {
     // 如果没有检测到，尝试手动获取
     if (!connectionMode.value) {
       debugLog('未检测到连接模式，尝试手动获取')
-      // 设置默认值，表示正在检测
-      connectionMode.value = 'detecting'
-      
-      // 延迟一段时间后再次尝试检测
-      setTimeout(() => {
-        if (connectionMode.value === 'detecting') {
-          connectionMode.value = 'unknown'
-        }
-      }, 2000)
+      // 手动发起请求获取连接模式信息
+      fetchConnectionMode()
     }
   })
 
@@ -500,6 +493,48 @@ const reloadStream = () => {
   debugLog('手动重新加载流')
   retryCount.value = 0
   initHls()
+}
+
+// 获取连接模式信息
+const fetchConnectionMode = async () => {
+  try {
+    debugLog('手动获取连接模式信息')
+    const response = await fetch(props.hlsUrl, { 
+      method: 'HEAD',  // 只获取头信息，不下载内容
+      cache: 'no-cache'
+    })
+    
+    const routeVia = response.headers.get('x-route-via')
+    const responseTimeHeader = response.headers.get('x-response-time')
+    const country = response.headers.get('x-country')
+    const routeReason = response.headers.get('x-route-reason')
+    
+    if (routeVia) {
+      connectionMode.value = routeVia
+      debugLog('手动获取到连接模式:', routeVia)
+    }
+    
+    if (responseTimeHeader) {
+      responseTime.value = responseTimeHeader
+      debugLog('手动获取到响应时间:', responseTimeHeader)
+    }
+    
+    if (country) {
+      debugLog('检测到用户地区:', country)
+    }
+    
+    if (routeReason) {
+      debugLog('路由原因:', routeReason)
+    }
+    
+    // 如果仍然没有获取到，设置为未知
+    if (!connectionMode.value) {
+      connectionMode.value = 'unknown'
+    }
+  } catch (error) {
+    debugLog('获取连接模式失败:', error)
+    connectionMode.value = 'error'
+  }
 }
 
 // 视频元素事件处理
