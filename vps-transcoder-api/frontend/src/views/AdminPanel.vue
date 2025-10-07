@@ -18,17 +18,17 @@
       </el-header>
 
       <el-main>
-        <el-tabs v-model="activeTab" class="admin-tabs">
+        <el-tabs v-model="activeTab" class="admin-tabs" @tab-change="handleTabChange">
           <el-tab-pane label="频道管理" name="streams">
-            <StreamManager />
+            <StreamManager v-if="loadedTabs.has('streams')" />
           </el-tab-pane>
 
           <el-tab-pane label="用户管理" name="users">
-            <UserManager />
+            <UserManager v-if="loadedTabs.has('users')" />
           </el-tab-pane>
 
           <el-tab-pane label="系统状态" name="system">
-            <div class="system-status">
+            <div v-if="loadedTabs.has('system')" class="system-status">
               <el-alert
                 title="系统运行正常"
                 type="success"
@@ -61,11 +61,11 @@
           </el-tab-pane>
 
           <el-tab-pane label="系统诊断" name="diagnostics">
-            <SystemDiagnostics />
+            <SystemDiagnostics v-if="loadedTabs.has('diagnostics')" />
           </el-tab-pane>
 
           <el-tab-pane label="隧道优化" name="tunnel">
-            <TunnelConfig />
+            <TunnelConfig v-if="loadedTabs.has('tunnel')" />
           </el-tab-pane>
         </el-tabs>
       </el-main>
@@ -90,6 +90,15 @@ const userStore = useUserStore()
 const streamsStore = useStreamsStore()
 
 const activeTab = ref('streams')
+const loadedTabs = ref(new Set(['streams'])) // 默认加载频道管理标签页
+
+const handleTabChange = (tabName) => {
+  // 当切换到新标签页时，将其添加到已加载的标签页集合中
+  if (!loadedTabs.value.has(tabName)) {
+    loadedTabs.value.add(tabName)
+    console.log(`懒加载标签页: ${tabName}`)
+  }
+}
 
 const handleLogout = async () => {
   try {
