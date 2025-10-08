@@ -805,6 +805,9 @@ const ffmpegArgs = [
 2. **禁用特定命令**: 不要使用 `pm2 logs vps-transcoder-api --lines XX` 命令，会导致对话卡死
 3. 不要使用任何包含 & 、nohup 或其他后台运行的命令，这些会让会话卡死
 4. **代码修改流程**: 调试VPS上的程序时，要先修改本地代码，再将代码上传到VPS上，再执行，不要直接在VPS上修改代码，保证项目代码是最新有效的
+5. **分支开发流程**: 新功能必须在feature分支开发，通过临时合并策略在生产环境测试
+6. **生产测试规范**: 每次合并到master前，确保功能在本地环境基本可用
+7. **回滚准备**: 重要功能测试前，记录当前稳定的commit ID以备回滚
 
 ### 文档维护规范
 5. **架构文档更新**: 每次会话完成后，如果产生重要的配置信息或项目重要信息，要同步更新到本文档中
@@ -812,6 +815,37 @@ const ffmpegArgs = [
 
 
 ### 代码同步流程
+
+#### 分支开发策略（临时合并策略）
+```bash
+# 1. 创建功能分支进行开发
+git checkout -b feature/功能名称
+# ... 开发代码 ...
+git add .
+git commit -m "功能描述"
+
+# 2. 需要生产环境测试时，临时合并到master
+git checkout master
+git merge feature/功能名称
+git push origin master
+# 触发Cloudflare Pages自动部署，进行生产测试
+
+# 3. 测试完成后，如果有问题需要修复
+git checkout feature/功能名称
+# ... 修复问题 ...
+git add .
+git commit -m "修复问题描述"
+
+# 4. 再次合并测试
+git checkout master
+git merge feature/功能名称
+git push origin master
+
+# 5. 测试通过后，保持master状态，删除功能分支
+git branch -d feature/功能名称
+```
+
+#### VPS转码服务部署流程
 ```bash
 # 正确的开发流程
 1. 本地修改代码
@@ -819,16 +853,33 @@ const ffmpegArgs = [
 3. 上传到VPS: scp local_file root@142.171.75.220:/opt/yoyo-transcoder/
 4. 重启服务: ssh root@142.171.75.220 "pm2 restart vps-transcoder-api"
 5. 验证部署结果
+```
 
-# Cloudflare Workers部署流程
+#### Cloudflare Workers部署流程
+```bash
+# 独立部署，不依赖Git分支
 1. 修改cloudflare-worker目录下的代码
 2. 运行: wrangler deploy --env production
 3. 验证API端点响应
+```
 
-# 前端部署流程  
-1. 修改frontend目录下的代码
-2. Git提交并推送到仓库
-3. Cloudflare Pages自动构建部署
+#### 前端部署流程（Cloudflare Pages）
+```bash
+# 只有master分支会触发自动部署
+1. 功能分支开发: git checkout -b feature/xxx
+2. 开发完成后合并到master: git merge feature/xxx
+3. 推送到远程: git push origin master
+4. Cloudflare Pages自动构建部署
+5. 在 https://yoyo.5202021.xyz 验证功能
+```
+
+#### 紧急回滚流程
+```bash
+# 如果生产测试发现严重问题
+1. 记录当前问题commit: git log --oneline -1
+2. 回滚到稳定版本: git reset --hard <stable-commit-id>
+3. 强制推送: git push --force-with-lease origin master
+4. 验证回滚结果
 ```
 
 ### 重要技术细节
@@ -838,6 +889,13 @@ const ffmpegArgs = [
 - **最大并发转码进程**: 根据服务器资源动态调整
 - **API认证**: 使用X-API-Key头部认证
 - **CORS配置**: 支持跨域访问HLS文件
+
+### 分支管理规范
+- **master分支**: 生产环境分支，只接受经过测试的稳定代码
+- **feature/xxx分支**: 功能开发分支，用于新功能开发和测试
+- **部署策略**: 使用临时合并策略，功能分支合并到master进行生产测试
+- **回滚策略**: 出现问题时立即回滚到上一个稳定commit
+- **分支命名**: feature/功能描述，例如 feature/user-proxy-config
 
 ### 安全配置
 - **API密钥保护**: 所有VPS API调用需要X-API-Key认证
