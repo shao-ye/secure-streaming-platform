@@ -62,8 +62,12 @@ export class ProxyHandler {
         return await this.getProxyStatus(env, corsHeaders);
       }
       
+      if (path === '/api/admin/proxy/test' && method === 'POST') {
+        return await this.testProxy(request, env, corsHeaders);
+      }
+      
       if (path.match(/^\/api\/admin\/proxy\/test\/[^/]+$/) && method === 'POST') {
-        return await this.testProxy(env, path, corsHeaders);
+        return await this.testProxyById(env, path, corsHeaders);
       }
       
       if (path === '/api/admin/proxy/control' && method === 'POST') {
@@ -201,6 +205,34 @@ export class ProxyHandler {
       });
     } catch (error) {
       throw new Error(`创建代理失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 测试代理连接
+   */
+  async testProxy(request, env, corsHeaders) {
+    try {
+      const proxyData = await request.json();
+      
+      // 调用VPS测试代理
+      const testResult = await this.callVPSProxyTest(env, proxyData);
+      
+      return new Response(JSON.stringify({
+        status: 'success',
+        message: '代理测试完成',
+        data: testResult
+      }), {
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({
+        status: 'error',
+        message: `代理测试失败: ${error.message}`
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
     }
   }
 
