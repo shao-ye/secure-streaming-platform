@@ -116,11 +116,16 @@ try {
     const { router: simpleStreamRoutes } = require('./routes/simple-stream');
     app.use('/api/simple-stream', simpleStreamRoutes);
     
+    // 代理管理API路由
+    const proxyRoutes = require('./routes/proxy');
+    app.use('/api/proxy', proxyRoutes);
+    logger.info('代理管理API路由已加载');
+    
     // 保留原有API路由（向后兼容）
     const apiRoutes = require('./routes/api');
     app.use('/api', apiRoutes);
 } catch (error) {
-    logger.warn('API routes not found, creating basic structure...');
+    logger.warn('API routes not found, creating basic structure...', error.message);
 
     // 基础API端点
     app.get('/api/status', (req, res) => {
