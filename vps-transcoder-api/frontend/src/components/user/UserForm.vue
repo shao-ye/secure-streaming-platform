@@ -158,6 +158,7 @@ const rules = {
   ]
 }
 
+// 监听用户数据变化
 watch(() => props.userData, (newData) => {
   if (newData && props.mode === 'edit') {
     formData.value = {
@@ -171,9 +172,40 @@ watch(() => props.userData, (newData) => {
   }
 }, { immediate: true })
 
+// 监听对话框显示状态
 watch(() => props.visible, (visible) => {
-  if (visible && props.mode === 'create') {
-    resetForm()
+  if (visible) {
+    if (props.mode === 'create') {
+      resetForm()
+    } else if (props.mode === 'edit' && props.userData) {
+      // 编辑模式下重新加载数据
+      formData.value = {
+        username: props.userData.username || '',
+        displayName: props.userData.displayName || '',
+        email: props.userData.email || '',
+        role: 'user',
+        password: '',
+        confirmPassword: ''
+      }
+    }
+  }
+})
+
+// 监听模式变化
+watch(() => props.mode, (newMode) => {
+  if (props.visible) {
+    if (newMode === 'create') {
+      resetForm()
+    } else if (newMode === 'edit' && props.userData) {
+      formData.value = {
+        username: props.userData.username || '',
+        displayName: props.userData.displayName || '',
+        email: props.userData.email || '',
+        role: 'user',
+        password: '',
+        confirmPassword: ''
+      }
+    }
   }
 })
 
