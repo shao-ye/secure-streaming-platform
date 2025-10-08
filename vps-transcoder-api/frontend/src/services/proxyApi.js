@@ -1,4 +1,4 @@
-import { axios } from '../utils/axios'
+import axios from 'axios'
 
 /**
  * 代理管理API服务
