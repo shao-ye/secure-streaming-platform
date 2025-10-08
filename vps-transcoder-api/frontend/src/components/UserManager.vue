@@ -11,7 +11,7 @@
       <div class="header-right">
         <el-button 
           type="primary" 
-          @click="showCreateDialog = true"
+          @click="handleCreateUser"
           :icon="Plus"
         >
           创建用户
@@ -111,6 +111,13 @@ const refreshUsers = async () => {
   } catch (error) {
     ElMessage.error('刷新用户列表失败: ' + error.message)
   }
+}
+
+// 处理创建用户
+const handleCreateUser = () => {
+  currentUser.value = null
+  formMode.value = 'create'
+  showCreateDialog.value = true
 }
 
 // 处理编辑用户
