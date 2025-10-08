@@ -50,24 +50,36 @@
           </el-alert>
         </div>
         
-        <div class="tunnel-status" v-if="tunnelStatus">
+        <!-- 隧道状态显示（仅在启用时显示） -->
+        <div class="tunnel-status" v-if="tunnelConfig.enabled">
           <h4>隧道状态</h4>
           <div class="status-grid">
             <div class="status-item">
               <span class="label">健康状态:</span>
-              <el-tag :type="getHealthType(tunnelStatus.health.status)">
-                {{ getHealthText(tunnelStatus.health.status) }}
+              <el-tag :type="getHealthType(tunnelStatus?.health)">
+                {{ getHealthText(tunnelStatus?.health) }}
               </el-tag>
             </div>
-            <div class="status-item" v-if="tunnelStatus.health.latency">
-              <span class="label">延迟:</span>
-              <span>{{ tunnelStatus.health.latency }}ms</span>
+            <div class="status-item">
+              <span class="label">响应时间:</span>
+              <span>{{ tunnelConfig.endpoints?.tunnel?.responseTime || '未知' }}</span>
             </div>
             <div class="status-item">
               <span class="label">最后检查:</span>
-              <span>{{ formatTime(tunnelStatus.health.timestamp) }}</span>
+              <span>{{ formatTime(tunnelConfig.endpoints?.tunnel?.lastCheck) }}</span>
             </div>
           </div>
+        </div>
+        
+        <!-- 禁用状态说明 -->
+        <div class="disabled-info" v-else>
+          <el-alert
+            title="隧道优化已禁用"
+            type="info"
+            description="当前使用直连模式访问VPS服务器。启用隧道优化可显著提升视频加载速度和稳定性。"
+            :closable="false"
+            show-icon
+          />
         </div>
         
         <div class="tunnel-endpoints">
@@ -240,6 +252,8 @@ const getDeploymentType = (status) => {
 const getHealthType = (status) => {
   switch (status) {
     case 'healthy': return 'success'
+    case 'ready': return 'success'
+    case 'warning': return 'warning'
     case 'unhealthy': return 'warning'
     case 'error': return 'danger'
     default: return 'info'
@@ -249,6 +263,8 @@ const getHealthType = (status) => {
 const getHealthText = (status) => {
   switch (status) {
     case 'healthy': return '健康'
+    case 'ready': return '就绪'
+    case 'warning': return '警告'
     case 'unhealthy': return '不健康'
     case 'error': return '错误'
     default: return '未知'
@@ -256,7 +272,21 @@ const getHealthText = (status) => {
 }
 
 const formatTime = (timestamp) => {
-  return new Date(timestamp).toLocaleString('zh-CN')
+  if (!timestamp) return '未知'
+  try {
+    const date = new Date(timestamp)
+    if (isNaN(date.getTime())) return '未知'
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch (error) {
+    return '未知'
+  }
 }
 
 onMounted(() => {
@@ -303,8 +333,8 @@ onMounted(() => {
 
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 15px;
   margin-top: 10px;
 }
 
@@ -312,6 +342,14 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 8px 12px;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid #e4e7ed;
+}
+
+.disabled-info {
+  margin: 20px 0;
 }
 
 .label {
