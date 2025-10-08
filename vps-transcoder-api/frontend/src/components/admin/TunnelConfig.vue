@@ -22,7 +22,7 @@
         </div>
         
         <div class="config-description">
-          <p>{{ tunnelConfig.description }}</p>
+          <p>{{ tunnelConfig.description || '隧道优化功能可以显著提升视频加载速度和稳定性' }}</p>
         </div>
         
         <!-- 部署状态显示 -->
@@ -76,16 +76,24 @@
             <div class="endpoint-group">
               <h5>🚀 隧道端点 (优化)</h5>
               <ul>
-                <li v-for="(url, service) in tunnelConfig.endpoints?.tunnel" :key="service">
-                  <strong>{{ service }}:</strong> {{ url }}
+                <li v-for="(value, service) in tunnelConfig.endpoints?.tunnel" :key="service">
+                  <strong>{{ service }}:</strong> 
+                  <span v-if="typeof value === 'string'">{{ value }}</span>
+                  <span v-else-if="service === 'status'" :class="`status-${value}`">{{ value }}</span>
+                  <span v-else-if="service === 'responseTime'">{{ value }}</span>
+                  <span v-else>{{ value }}</span>
                 </li>
               </ul>
             </div>
             <div class="endpoint-group">
               <h5>🔗 直连端点 (备用)</h5>
               <ul>
-                <li v-for="(url, service) in tunnelConfig.endpoints?.direct" :key="service">
-                  <strong>{{ service }}:</strong> {{ url }}
+                <li v-for="(value, service) in tunnelConfig.endpoints?.direct" :key="service">
+                  <strong>{{ service }}:</strong> 
+                  <span v-if="typeof value === 'string'">{{ value }}</span>
+                  <span v-else-if="service === 'status'" :class="`status-${value}`">{{ value }}</span>
+                  <span v-else-if="service === 'responseTime'">{{ value }}</span>
+                  <span v-else>{{ value }}</span>
                 </li>
               </ul>
             </div>
@@ -118,8 +126,17 @@ const loadTunnelConfig = async () => {
     const response = await api.request('/api/admin/tunnel/config')
     const data = response.data
     if (data.status === 'success') {
-      tunnelConfig.value = data.data.tunnel
-      tunnelStatus.value = { health: data.data.tunnel.health }
+      // 修复数据结构解析
+      tunnelConfig.value = {
+        enabled: data.data.enabled,
+        description: data.data.description,
+        endpoints: data.data.endpoints,
+        performance: data.data.performance,
+        updatedAt: data.data.updatedAt
+      }
+      tunnelStatus.value = { 
+        health: data.data.endpoints?.tunnel?.status || 'unknown'
+      }
     }
   } catch (error) {
     ElMessage.error('加载隧道配置失败')
