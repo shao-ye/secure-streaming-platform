@@ -2808,9 +2808,92 @@ async function recordLoginLog(env, username, request, success, details = {}) {
 
 ---
 
+---
+
+## 🌐 代理配置网络优化架构 (v5.0)
+
+### 代理优化目标
+专门针对中国大陆地区用户的视频播放体验优化，通过第三方代理节点实现：
+- **延迟减少**: 50-70% (800-2000ms → 300-600ms)
+- **连接稳定性**: 提升40-60% (60-70% → 85-95%)
+- **播放成功率**: 提升30-50% (70-80% → 90-95%)
+
+### 代理架构设计
+
+#### 代理配置管理
+```
+# 代理管理端点
+/api/admin/proxy/config     # 代理配置管理API
+/api/admin/proxy/status     # 代理状态监控API
+/api/admin/proxy/control    # 代理控制操作API
+```
+
+#### 支持的代理协议
+- **VLESS协议**: 支持XHTTP传输协议，完全兼容提供的代理配置
+- **VMess协议**: 支持标准VMess配置
+- **Shadowsocks**: 支持SS协议
+- **HTTP/HTTPS代理**: 支持基础HTTP代理
+
+#### 智能路由策略整合
+基于现有隧道优化的智能路由扩展：
+```javascript
+// 智能代理路由决策
+const routingPriority = {
+  "CN": ["proxy", "tunnel", "direct"],  // 中国用户优先代理
+  "global": ["tunnel", "direct"]        // 全球用户优先隧道
+};
+```
+
+#### VPS代理服务架构
+```
+VPS代理层:
+├── ProxyManager.js          # 代理管理服务
+├── V2Ray/Xray客户端         # 代理客户端
+├── 透明代理配置             # iptables规则管理
+└── FFmpeg代理集成          # 视频流代理转发
+```
+
+### 代理配置数据结构
+```json
+{
+  "proxy_config": {
+    "enabled": true,
+    "activeProxyId": "proxy_001",
+    "autoSwitch": true,
+    "healthCheckInterval": 30000,
+    "fallbackMode": "tunnel",
+    "proxies": [
+      {
+        "id": "proxy_001",
+        "name": "香港节点1",
+        "type": "vless",
+        "config": "vless://uuid@host:port?type=xhttp&...",
+        "status": "active",
+        "latency": 120,
+        "priority": 1
+      }
+    ]
+  }
+}
+```
+
+### 代理与隧道的协同工作
+- **代理优先**: 中国大陆用户优先使用代理节点
+- **隧道备份**: 代理失败时自动降级到Cloudflare Tunnel
+- **直连兜底**: 隧道也失败时最终降级到直连模式
+- **智能切换**: 基于网络质量和延迟自动选择最优路径
+
+### 安全和合规设计
+- **权限控制**: 只有admin用户可配置代理
+- **配置加密**: 代理配置在KV存储中加密保存
+- **审计日志**: 记录所有代理配置变更操作
+- **合规检查**: 确保代理使用符合相关法规要求
+
+---
+
 **文档创建时间**: 2025年10月2日  
-**文档更新时间**: 2025年10月7日 00:15  
-**文档版本**: v4.0 (Cloudflare Tunnel网络优化版)  
+**文档更新时间**: 2025年10月8日 23:30  
+**文档版本**: v5.0 (代理配置网络优化版)  
 **维护人员**: YOYO开发团队  
 **联系方式**: 项目仓库Issues
 
@@ -2819,5 +2902,5 @@ async function recordLoginLog(env, username, request, success, details = {}) {
 - **v2.0**: 新增SimpleStreamManager简化架构，实现按需转码和超低延迟
 - **v3.0**: R2登录日志迁移，成本优化和分析能力提升
 - **v4.0**: Cloudflare Tunnel网络优化，专门改善中国大陆用户体验
-- **v2.1**: 修复频道冲突问题，优化基于频道ID的独立输出目录管理
-- **v3.0**: 完成R2登录日志存储迁移，实现成本优化和统计分析能力大幅提升
+- **v5.0**: 代理配置网络优化，支持VLESS/XHTTP协议，提供多层网络优化方案
+- **v2.1**: 用户管理功能完整实现，包括CRUD操作、密码管理、自动刷新等
