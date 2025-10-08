@@ -182,6 +182,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { proxyApi } from '../../services/proxyApi'
 
 // 响应式数据
 const proxyEnabled = ref(false)
@@ -194,31 +195,8 @@ const showAddDialog = ref(false)
 const editMode = ref(false)
 const formRef = ref()
 
-// 代理列表
-const proxyList = ref([
-  {
-    id: 'proxy_1',
-    name: '香港节点1',
-    type: 'vless',
-    config: 'vless://uuid@hk1.example.com:443?encryption=none&security=tls&type=ws&host=hk1.example.com&path=%2Fws#HK1',
-    status: 'connected',
-    latency: 120,
-    priority: 1,
-    remarks: '香港高速节点',
-    testing: false
-  },
-  {
-    id: 'proxy_2', 
-    name: '新加坡节点',
-    type: 'vmess',
-    config: 'vmess://eyJ2IjoiMiIsInBzIjoiU0cxIiwiYWRkIjoic2cxLmV4YW1wbGUuY29tIiwicG9ydCI6IjQ0MyIsImlkIjoidXVpZCIsImFpZCI6IjAiLCJzY3kiOiJhdXRvIiwibmV0Ijoid3MiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiJzZzEuZXhhbXBsZS5jb20iLCJwYXRoIjoiL3dzIiwidGxzIjoidGxzIn0=',
-    status: 'disconnected',
-    latency: null,
-    priority: 2,
-    remarks: '新加坡节点',
-    testing: false
-  }
-])
+// 代理列表 - 从API加载
+const proxyList = ref([])
 
 // 表单数据
 const proxyForm = ref({
@@ -315,26 +293,26 @@ const maskProxyUrl = (url) => {
 const handleProxyToggle = async (enabled) => {
   switchLoading.value = true
   try {
+    // 调用真实API
+    await proxyApi.toggleProxy(enabled)
+    
     if (enabled) {
       connectionStatus.value = 'connecting'
-      // 模拟连接过程
-      setTimeout(() => {
-        connectionStatus.value = 'connected'
-        currentProxy.value = proxyList.value.find(p => p.status === 'connected')?.name || '示例代理节点'
-        ElMessage.success('代理已启用')
-      }, 2000)
+      // 获取代理状态
+      const status = await proxyApi.getStatus()
+      connectionStatus.value = status.connectionStatus || 'connected'
+      currentProxy.value = status.currentProxy || '已启用代理'
+      ElMessage.success('代理已启用')
     } else {
       connectionStatus.value = 'disconnected'
       currentProxy.value = null
       ElMessage.info('代理已禁用')
     }
   } catch (error) {
-    ElMessage.error('代理切换失败')
+    ElMessage.error('代理切换失败: ' + (error.message || '网络错误'))
     proxyEnabled.value = !enabled
   } finally {
-    setTimeout(() => {
-      switchLoading.value = false
-    }, 2000)
+    switchLoading.value = false
   }
 }
 
@@ -342,18 +320,25 @@ const handleProxyToggle = async (enabled) => {
 const testProxy = async (proxy) => {
   proxy.testing = true
   try {
-    // 模拟测试过程
-    await new Promise(resolve => setTimeout(resolve, 2000))
+    // 调用真实API测试代理
+    const result = await proxyApi.testProxy({
+      id: proxy.id,
+      name: proxy.name,
+      type: proxy.type,
+      config: proxy.config
+    })
     
-    // 随机生成延迟
-    const latency = Math.floor(Math.random() * 300) + 50
-    proxy.latency = latency
-    proxy.status = latency < 200 ? 'connected' : 'disconnected'
-    
-    ElMessage.success(`代理测试完成，延迟: ${latency}ms`)
+    if (result.success) {
+      proxy.latency = result.latency
+      proxy.status = result.latency < 500 ? 'connected' : 'disconnected'
+      ElMessage.success(`代理测试成功，延迟: ${result.latency}ms`)
+    } else {
+      proxy.status = 'error'
+      ElMessage.error(`代理测试失败: ${result.error || '连接超时'}`)
+    }
   } catch (error) {
     proxy.status = 'error'
-    ElMessage.error('代理测试失败')
+    ElMessage.error('代理测试失败: ' + (error.message || '网络错误'))
   } finally {
     proxy.testing = false
   }
@@ -407,11 +392,11 @@ const saveProxy = async () => {
     await formRef.value.validate()
     saving.value = true
     
-    // 模拟保存过程
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
     if (editMode.value) {
-      // 编辑模式
+      // 编辑模式 - 调用真实API
+      await proxyApi.updateProxy(proxyForm.value.id, proxyForm.value)
+      
+      // 更新本地列表
       const index = proxyList.value.findIndex(p => p.id === proxyForm.value.id)
       if (index > -1) {
         proxyList.value[index] = {
@@ -421,12 +406,15 @@ const saveProxy = async () => {
           latency: null,
           testing: false
         }
-        ElMessage.success('代理更新成功')
       }
+      ElMessage.success('代理更新成功')
     } else {
-      // 添加模式
+      // 添加模式 - 调用真实API
+      const result = await proxyApi.createProxy(proxyForm.value)
+      
+      // 添加到本地列表
       const newProxy = {
-        id: `proxy_${Date.now()}`,
+        id: result.id || `proxy_${Date.now()}`,
         ...proxyForm.value,
         status: 'disconnected',
         latency: null,
@@ -439,7 +427,7 @@ const saveProxy = async () => {
     showAddDialog.value = false
     resetForm()
   } catch (error) {
-    console.error('表单验证失败:', error)
+    ElMessage.error('保存失败: ' + (error.message || '网络错误'))
   } finally {
     saving.value = false
   }
@@ -460,9 +448,50 @@ const resetForm = () => {
   }
 }
 
+// 加载代理配置数据
+const loadProxyConfig = async () => {
+  loading.value = true
+  try {
+    // 获取代理配置
+    const config = await proxyApi.getConfig()
+    
+    if (config.success) {
+      proxyList.value = config.data.proxies || []
+      proxyEnabled.value = config.data.settings?.enabled || false
+      
+      // 获取代理状态
+      if (proxyEnabled.value) {
+        const status = await proxyApi.getStatus()
+        connectionStatus.value = status.connectionStatus || 'disconnected'
+        currentProxy.value = status.currentProxy
+      }
+    }
+  } catch (error) {
+    console.warn('加载代理配置失败:', error)
+    ElMessage.warning('加载代理配置失败，使用离线模式')
+    
+    // 如果API失败，显示示例数据
+    proxyList.value = [
+      {
+        id: 'example_1',
+        name: '示例节点（请添加真实代理）',
+        type: 'vless',
+        config: 'vless://example-uuid@example.com:443?params',
+        status: 'disconnected',
+        latency: null,
+        priority: 1,
+        remarks: '这是示例数据，请添加真实的代理配置',
+        testing: false
+      }
+    ]
+  } finally {
+    loading.value = false
+  }
+}
+
 // 组件挂载时初始化
 onMounted(() => {
-  // 初始化数据
+  loadProxyConfig()
 })
 </script>
 
