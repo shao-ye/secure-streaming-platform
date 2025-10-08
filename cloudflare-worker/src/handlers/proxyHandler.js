@@ -13,10 +13,16 @@ export class ProxyHandler {
    * 路由处理入口
    */
   async handleRequest(request, env, path, method) {
+    // 正确的CORS配置，支持withCredentials
+    const origin = request.headers.get('Origin');
+    const allowedOrigins = ['https://yoyo.5202021.xyz', 'https://secure-streaming-platform.pages.dev'];
+    const allowOrigin = allowedOrigins.includes(origin) ? origin : 'https://yoyo.5202021.xyz';
+    
     const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': allowOrigin,
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
+      'Access-Control-Allow-Credentials': 'true'
     };
 
     // 处理预检请求
