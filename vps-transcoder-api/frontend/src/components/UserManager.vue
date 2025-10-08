@@ -68,12 +68,12 @@
       @submit="handleUserSubmit"
     />
     
-    <!-- 修改密码对话框 - 暂时移除 -->
-    <!-- <PasswordChangeDialog
+    <!-- 修改密码对话框 -->
+    <PasswordChangeDialog
       v-model:visible="showPasswordDialog"
       :user="currentUser"
       @submit="handlePasswordChange"
-    /> -->
+    />
 
     <!-- 操作日志对话框 - 暂时移除 -->
     <!-- <OperationLogsDialog
@@ -89,7 +89,7 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 import { useUserManagementStore } from '../stores/userManagement'
 import UserList from './user/UserList.vue'
 import UserForm from './user/UserForm.vue'
-// import PasswordChangeDialog from './user/PasswordChangeDialog.vue'
+import PasswordChangeDialog from './user/PasswordChangeDialog.vue'
 // import OperationLogsDialog from './user/OperationLogsDialog.vue'
 
 const userManagementStore = useUserManagementStore()
@@ -136,6 +136,8 @@ const handleDeleteUser = async (user) => {
 
     await userManagementStore.deleteUser(user.id)
     ElMessage.success('用户删除成功')
+    // 🔥 自动刷新用户列表
+    await refreshUsers()
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error('删除用户失败: ' + error.message)
@@ -143,17 +145,18 @@ const handleDeleteUser = async (user) => {
   }
 }
 
-// 处理修改密码 - 暂时禁用
+// 处理修改密码
 const handleChangePassword = (user) => {
-  ElMessage.info('密码修改功能正在开发中')
-  // currentUser.value = user
-  // showPasswordDialog.value = true
+  currentUser.value = user
+  showPasswordDialog.value = true
 }
 
 // 处理切换用户状态
 const handleToggleStatus = async (user) => {
   try {
     const action = user.status === 'active' ? '禁用' : '启用'
+    const newStatus = user.status === 'active' ? 'inactive' : 'active'
+    
     await ElMessageBox.confirm(
       `确定要${action}用户 "${user.displayName}" 吗？`,
       `${action}用户`,
@@ -164,8 +167,10 @@ const handleToggleStatus = async (user) => {
       }
     )
 
-    await userManagementStore.toggleUserStatus(user.id)
+    await userManagementStore.toggleUserStatus(user.id, newStatus)
     ElMessage.success(`用户已${action}`)
+    // 🔥 自动刷新用户列表
+    await refreshUsers()
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error('操作失败: ' + error.message)
@@ -186,6 +191,8 @@ const handleUserSubmit = async (userData) => {
     
     showCreateDialog.value = false
     currentUser.value = null
+    // 🔥 自动刷新用户列表
+    await refreshUsers()
   } catch (error) {
     ElMessage.error('操作失败: ' + error.message)
   }
@@ -194,10 +201,12 @@ const handleUserSubmit = async (userData) => {
 // 处理密码修改提交
 const handlePasswordChange = async (passwordData) => {
   try {
-    await userManagementStore.changePassword(currentUser.value.id, passwordData.password)
+    await userManagementStore.changePassword(currentUser.value.id, passwordData.newPassword)
     ElMessage.success('密码修改成功')
     showPasswordDialog.value = false
     currentUser.value = null
+    // 🔥 自动刷新用户列表
+    await refreshUsers()
   } catch (error) {
     ElMessage.error('密码修改失败: ' + error.message)
   }
