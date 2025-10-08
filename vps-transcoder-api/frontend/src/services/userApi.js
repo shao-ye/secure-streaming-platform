@@ -43,7 +43,7 @@ export const userApi = {
    * 修改用户密码
    */
   changePassword(userId, newPassword) {
-    return axios.put(`/api/users/${userId}/password`, { password: newPassword })
+    return axios.put(`/api/users/${userId}/password`, { newPassword })
   },
   
   /**

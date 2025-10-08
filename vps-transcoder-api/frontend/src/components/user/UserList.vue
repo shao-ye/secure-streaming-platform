@@ -43,43 +43,45 @@
         </template>
       </el-table-column>
       
-      <el-table-column label="操作" width="300" fixed="right">
+      <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
-          <el-button 
-            size="small" 
-            @click="$emit('edit', row)"
-            :icon="Edit"
-          >
-            编辑
-          </el-button>
-          
-          <el-button 
-            size="small" 
-            type="warning"
-            @click="$emit('change-password', row)"
-            :icon="Key"
-          >
-            改密
-          </el-button>
-          
-          <el-button 
-            size="small" 
-            :type="row.status === 'active' ? 'warning' : 'success'"
-            @click="$emit('toggle-status', row)"
-            :icon="row.status === 'active' ? Lock : Unlock"
-          >
-            {{ row.status === 'active' ? '禁用' : '启用' }}
-          </el-button>
-          
-          <el-button 
-            size="small" 
-            type="danger" 
-            @click="$emit('delete', row)"
-            :disabled="row.username === 'admin'"
-            :icon="Delete"
-          >
-            删除
-          </el-button>
+          <div class="action-buttons">
+            <el-button 
+              size="small" 
+              @click="$emit('edit', row)"
+              :icon="Edit"
+            >
+              编辑
+            </el-button>
+            
+            <el-button 
+              size="small" 
+              type="warning"
+              @click="$emit('change-password', row)"
+              :icon="Key"
+            >
+              改密
+            </el-button>
+            
+            <el-button 
+              size="small" 
+              :type="row.status === 'active' ? 'warning' : 'success'"
+              @click="$emit('toggle-status', row)"
+              :icon="row.status === 'active' ? Lock : Unlock"
+            >
+              {{ row.status === 'active' ? '禁用' : '启用' }}
+            </el-button>
+            
+            <el-button 
+              size="small" 
+              type="danger" 
+              @click="$emit('delete', row)"
+              :disabled="row.username === 'admin'"
+              :icon="Delete"
+            >
+              删除
+            </el-button>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -144,6 +146,13 @@ const formatDateTime = (dateString) => {
   width: 100%;
 }
 
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-start;
+}
+
 :deep(.el-table) {
   font-size: 14px;
 }
@@ -152,7 +161,28 @@ const formatDateTime = (dateString) => {
   padding: 8px 12px;
 }
 
-:deep(.el-button + .el-button) {
-  margin-left: 8px;
+:deep(.el-table__body-wrapper) {
+  max-height: calc(100vh - 400px);
+  overflow-y: auto;
+}
+
+.action-buttons .el-button {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  min-width: auto;
+}
+
+.action-buttons .el-button + .el-button {
+  margin-left: 0;
+}
+
+/* 优化表格尺寸 */
+:deep(.el-table th) {
+  padding: 8px 0;
+}
+
+:deep(.el-table td) {
+  padding: 6px 0;
 }
 </style>

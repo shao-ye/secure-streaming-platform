@@ -73,7 +73,9 @@ export const useUserManagementStore = defineStore('userManagement', {
         const response = await userApi.createUser(userData)
         
         // 添加到本地用户列表
-        this.users.push(response.data)
+        if (response.data?.data) {
+          this.users.push(response.data.data)
+        }
         
         return response.data
       } catch (error) {
@@ -94,8 +96,8 @@ export const useUserManagementStore = defineStore('userManagement', {
         
         // 更新本地用户列表
         const index = this.users.findIndex(user => user.id === userId)
-        if (index !== -1) {
-          this.users[index] = response.data
+        if (index !== -1 && response.data?.data) {
+          this.users[index] = response.data.data
         }
         
         return response.data
@@ -149,15 +151,15 @@ export const useUserManagementStore = defineStore('userManagement', {
     /**
      * 切换用户状态
      */
-    async toggleUserStatus(userId) {
+    async toggleUserStatus(userId, newStatus) {
       this.loading = true
       try {
-        const response = await userApi.toggleUserStatus(userId)
+        const response = await userApi.toggleUserStatus(userId, newStatus)
         
         // 更新本地用户状态
         const user = this.users.find(user => user.id === userId)
         if (user) {
-          user.status = response.data.status
+          user.status = newStatus
         }
         
         return response.data
