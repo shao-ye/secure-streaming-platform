@@ -148,13 +148,21 @@ export class ProxyHandler {
       }
 
       return new Response(JSON.stringify({
+        success: true,
         status: 'success',
         data: config
       }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     } catch (error) {
-      throw new Error(`获取代理配置失败: ${error.message}`);
+      return new Response(JSON.stringify({
+        success: false,
+        status: 'error',
+        message: `获取代理配置失败: ${error.message}`
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
     }
   }
 
@@ -204,7 +212,13 @@ export class ProxyHandler {
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     } catch (error) {
-      throw new Error(`创建代理失败: ${error.message}`);
+      return new Response(JSON.stringify({
+        status: 'error',
+        message: `创建代理失败: ${error.message}`
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
     }
   }
 
@@ -259,10 +273,15 @@ export class ProxyHandler {
       
       // 如果启用了代理，同步到VPS
       if (config.settings.enabled && config.settings.activeProxyId) {
-        await this.syncConfigToVPS(config, env);
+        try {
+          await this.syncConfigToVPS(config, env);
+        } catch (syncError) {
+          console.warn('VPS同步失败:', syncError);
+        }
       }
       
       return new Response(JSON.stringify({
+        success: true,
         status: 'success',
         message: '代理设置更新成功',
         data: config.settings
@@ -270,7 +289,14 @@ export class ProxyHandler {
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     } catch (error) {
-      throw new Error(`更新代理设置失败: ${error.message}`);
+      return new Response(JSON.stringify({
+        success: false,
+        status: 'error',
+        message: `更新代理设置失败: ${error.message}`
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
     }
   }
 
@@ -304,20 +330,33 @@ export class ProxyHandler {
       }
       
       return new Response(JSON.stringify({
+        success: true,
         status: 'success',
         data: status
       }), {
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     } catch (error) {
-      throw new Error(`获取代理状态失败: ${error.message}`);
+      return new Response(JSON.stringify({
+        success: false,
+        status: 'error',
+        message: `获取代理状态失败: ${error.message}`,
+        data: {
+          connectionStatus: 'disconnected',
+          currentProxy: null,
+          lastUpdate: new Date().toISOString()
+        }
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
     }
   }
 
   /**
-   * 测试代理连接
+   * 按ID测试代理连接
    */
-  async testProxy(env, path, corsHeaders) {
+  async testProxyById(env, path, corsHeaders) {
     try {
       const proxyId = decodeURIComponent(path.split('/')[5]);
       
