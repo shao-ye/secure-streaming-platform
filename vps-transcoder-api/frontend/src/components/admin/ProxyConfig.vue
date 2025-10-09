@@ -328,15 +328,35 @@ const testProxy = async (proxy) => {
       config: proxy.config
     })
     
-    if (result.success) {
-      proxy.latency = result.latency
-      proxy.status = result.latency < 500 ? 'connected' : 'disconnected'
-      ElMessage.success(`代理测试成功，延迟: ${result.latency}ms`)
+    console.log('代理测试结果:', result)
+    
+    // 检查API响应结构
+    const testData = result.data || result
+    
+    if (testData && testData.success) {
+      // 代理测试成功
+      proxy.latency = testData.latency || 0
+      proxy.status = 'connected'
+      
+      // 根据测试方法显示不同的消息
+      const method = testData.method || 'unknown'
+      const latencyText = testData.latency ? `${testData.latency}ms` : '< 1ms'
+      
+      if (method === 'local_validation') {
+        ElMessage.success(`代理配置验证通过 (本地验证), 响应时间: ${latencyText}`)
+      } else if (method === 'vps_validation') {
+        ElMessage.success(`代理连接测试成功 (VPS验证), 延迟: ${latencyText}`)
+      } else {
+        ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
+      }
     } else {
+      // 代理测试失败
       proxy.status = 'error'
-      ElMessage.error(`代理测试失败: ${result.error || '连接超时'}`)
+      const errorMsg = testData?.error || result.message || '连接测试失败'
+      ElMessage.error(`代理测试失败: ${errorMsg}`)
     }
   } catch (error) {
+    console.error('代理测试异常:', error)
     proxy.status = 'error'
     ElMessage.error('代理测试失败: ' + (error.message || '网络错误'))
   } finally {
@@ -466,7 +486,13 @@ const loadProxyConfig = async () => {
     const config = await proxyApi.getConfig()
     
     if (config.success) {
-      proxyList.value = config.data.proxies || []
+      // 加载代理列表并设置初始状态
+      proxyList.value = (config.data.proxies || []).map(proxy => ({
+        ...proxy,
+        status: proxy.status || 'disconnected', // 设置默认状态
+        latency: proxy.latency || null,
+        testing: false
+      }))
       proxyEnabled.value = config.data.settings?.enabled || false
       
       // 获取代理状态
