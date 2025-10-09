@@ -111,6 +111,38 @@ export const proxyApi = {
   },
   
   /**
+   * 启用代理
+   */
+  async enableProxy(proxyId) {
+    try {
+      const response = await axios.post('/api/admin/proxy/control', {
+        action: 'enable',
+        proxyId: proxyId
+      })
+      return response.data
+    } catch (error) {
+      console.error('启用代理失败:', error)
+      throw error
+    }
+  },
+  
+  /**
+   * 禁用代理
+   */
+  async disableProxy(proxyId) {
+    try {
+      const response = await axios.post('/api/admin/proxy/control', {
+        action: 'disable',
+        proxyId: proxyId
+      })
+      return response.data
+    } catch (error) {
+      console.error('禁用代理失败:', error)
+      throw error
+    }
+  },
+  
+  /**
    * 代理控制操作
    */
   async controlProxy(action, data = {}) {
