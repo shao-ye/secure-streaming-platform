@@ -94,7 +94,7 @@
               :loading="row.enabling"
               :disabled="!proxySettings.enabled || row.enabling"
             >
-              {{ row.enabling ? '启用中...' : '启用' }}
+              {{ row.enabling ? '连接中...' : '连接' }}
             </el-button>
             <el-button 
               v-else
@@ -104,7 +104,7 @@
               :loading="row.disabling"
               :disabled="row.disabling"
             >
-              {{ row.disabling ? '禁用中...' : '禁用' }}
+              {{ row.disabling ? '断开中...' : '断开' }}
             </el-button>
             <el-button 
               @click="testProxy(row)" 
@@ -652,33 +652,52 @@ const enableProxy = async (proxy) => {
       // 测试网络延迟
       await testProxyLatency(proxy)
       
-      // 检查连接状态
+      // 检查连接状态 - 给VPS更多时间建立连接
       setTimeout(async () => {
         try {
           const status = await proxyApi.getStatus()
-          proxy.status = status.connectionStatus === 'connected' ? 'connected' : 'error'
           connectionStatus.value = status.connectionStatus
           currentProxy.value = status.currentProxy
           
-          if (proxy.status === 'connected') {
-            ElMessage.success(`代理 "${proxy.name}" 启用成功`)
+          if (status.connectionStatus === 'connected') {
+            proxy.status = 'connected'
+            ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+          } else if (status.connectionStatus === 'connecting') {
+            proxy.status = 'connecting'
+            ElMessage.info(`代理 "${proxy.name}" 正在连接中...`)
+            // 如果还在连接中，再等待一段时间
+            setTimeout(async () => {
+              try {
+                const finalStatus = await proxyApi.getStatus()
+                proxy.status = finalStatus.connectionStatus === 'connected' ? 'connected' : 'error'
+                if (proxy.status === 'connected') {
+                  ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+                } else {
+                  ElMessage.warning(`代理 "${proxy.name}" 连接超时，请检查代理配置或网络状况`)
+                }
+              } catch (error) {
+                proxy.status = 'error'
+                ElMessage.error(`代理 "${proxy.name}" 连接检查失败`)
+              }
+            }, 5000)
           } else {
-            ElMessage.warning(`代理 "${proxy.name}" 启用完成，但连接状态异常`)
+            proxy.status = 'error'
+            ElMessage.warning(`代理 "${proxy.name}" 连接失败 - 可能是代理服务器不可达或配置错误`)
           }
         } catch (error) {
           console.error('检查代理状态失败:', error)
           proxy.status = 'error'
-          ElMessage.error(`代理 "${proxy.name}" 状态检查失败`)
+          ElMessage.error(`代理 "${proxy.name}" 状态检查失败: ${error.message}`)
         }
-      }, 2000)
+      }, 3000) // 增加到3秒，给VPS更多时间
       
     } else {
-      ElMessage.error(`启用代理失败: ${result.message || '未知错误'}`)
+      ElMessage.error(`连接代理失败: ${result.message || '未知错误'}`)
       proxy.status = 'error'
     }
   } catch (error) {
-    console.error('启用代理失败:', error)
-    ElMessage.error(`启用代理失败: ${error.message || '网络错误'}`)
+    console.error('连接代理失败:', error)
+    ElMessage.error(`连接代理失败: ${error.message || '网络错误'}`)
     proxy.status = 'error'
   } finally {
     proxy.enabling = false
@@ -701,13 +720,13 @@ const disableProxy = async (proxy) => {
       connectionStatus.value = 'disconnected'
       currentProxy.value = null
       
-      ElMessage.success(`代理 "${proxy.name}" 已禁用`)
+      ElMessage.success(`代理 "${proxy.name}" 已断开`)
     } else {
-      ElMessage.error(`禁用代理失败: ${result.message || '未知错误'}`)
+      ElMessage.error(`断开代理失败: ${result.message || '未知错误'}`)
     }
   } catch (error) {
-    console.error('禁用代理失败:', error)
-    ElMessage.error(`禁用代理失败: ${error.message || '网络错误'}`)
+    console.error('断开代理失败:', error)
+    ElMessage.error(`断开代理失败: ${error.message || '网络错误'}`)
   } finally {
     proxy.disabling = false
   }
