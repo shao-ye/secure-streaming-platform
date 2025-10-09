@@ -679,6 +679,10 @@ export class ProxyHandler {
     try {
       const vpsEndpoint = `${env.VPS_API_BASE || 'https://yoyo-vps.5202021.xyz'}/api/proxy/config`;
       
+      // 设置5秒超时
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
       const response = await fetch(vpsEndpoint, {
         method: 'POST',
         headers: {
@@ -688,17 +692,25 @@ export class ProxyHandler {
         body: JSON.stringify({
           action: 'update',
           config: config
-        })
+        }),
+        signal: controller.signal
       });
       
+      clearTimeout(timeoutId);
+      
       if (!response.ok) {
-        throw new Error(`VPS同步失败: ${response.statusText}`);
+        console.warn(`VPS同步失败: ${response.statusText}，但代理配置已保存`);
+        return; // 不抛出错误，允许继续执行
       }
       
       console.log('代理配置已同步到VPS');
     } catch (error) {
-      console.error('VPS同步失败:', error);
-      throw error;
+      if (error.name === 'AbortError') {
+        console.warn('VPS同步超时，但代理配置已保存');
+      } else {
+        console.warn('VPS同步失败:', error.message, '但代理配置已保存');
+      }
+      // 不抛出错误，允许代理功能继续工作
     }
   }
 
