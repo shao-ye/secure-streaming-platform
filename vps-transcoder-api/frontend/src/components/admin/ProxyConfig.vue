@@ -593,21 +593,26 @@ const loadProxyConfig = async () => {
       // 获取VPS代理状态 - 总是尝试获取状态以确保显示正确
       try {
         const status = await proxyApi.getStatus()
+        console.log('获取到的代理状态:', status)
         connectionStatus.value = status.connectionStatus || 'disconnected'
         currentProxy.value = status.currentProxy
         
-        // 更新所有代理的连接状态
+        // 强制更新所有代理的连接状态，忽略配置中的status字段
         proxyList.value.forEach(proxy => {
           if (proxy.id === proxySettings.value.activeProxyId) {
             // 活跃代理根据实际连接状态设置
-            proxy.status = status.connectionStatus === 'connected' ? 'connected' : 
-                         status.connectionStatus === 'connecting' ? 'connecting' : 'error'
-            if (status.latency) {
-              proxy.latency = status.latency
+            const actualStatus = status.connectionStatus === 'connected' ? 'connected' : 
+                               status.connectionStatus === 'connecting' ? 'connecting' : 'error'
+            proxy.status = actualStatus
+            console.log(`强制更新代理${proxy.name}状态: ${actualStatus}`)
+            
+            if (status.statistics && status.statistics.avgLatency) {
+              proxy.latency = status.statistics.avgLatency
             }
           } else {
             // 非活跃代理设置为未连接
             proxy.status = 'disconnected'
+            console.log(`设置非活跃代理${proxy.name}为未连接`)
           }
         })
       } catch (error) {
@@ -616,6 +621,9 @@ const loadProxyConfig = async () => {
         proxyList.value.forEach(proxy => {
           if (proxy.id !== proxySettings.value.activeProxyId) {
             proxy.status = 'disconnected'
+          } else {
+            // 活跃代理设置为错误状态
+            proxy.status = 'error'
           }
         })
       }
