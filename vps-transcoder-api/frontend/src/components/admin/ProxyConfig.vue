@@ -279,7 +279,7 @@ const getStatusText = (status) => {
 // 获取代理初始状态
 const getInitialProxyStatus = (proxy, activeProxyId) => {
   // 如果是活跃代理，需要根据实际连接状态设置
-  if (proxy.id === activeProxyId && proxy.isActive) {
+  if (proxy.id === activeProxyId) {
     // 这里先设置为连接中，后续会通过API更新实际状态
     return 'connecting'
   }
@@ -590,30 +590,34 @@ const loadProxyConfig = async () => {
         isActive: proxy.id === proxySettings.value.activeProxyId
       }))
       
-      // 获取VPS代理状态
-      if (proxySettings.value.enabled && proxySettings.value.activeProxyId) {
-        try {
-          const status = await proxyApi.getStatus()
-          connectionStatus.value = status.connectionStatus || 'disconnected'
-          currentProxy.value = status.currentProxy
-          
-          // 更新所有代理的连接状态
-          proxyList.value.forEach(proxy => {
-            if (proxy.id === proxySettings.value.activeProxyId) {
-              // 活跃代理根据实际连接状态设置
-              proxy.status = status.connectionStatus === 'connected' ? 'connected' : 
-                           status.connectionStatus === 'connecting' ? 'connecting' : 'error'
-              if (status.latency) {
-                proxy.latency = status.latency
-              }
-            } else {
-              // 非活跃代理设置为未连接
-              proxy.status = 'disconnected'
+      // 获取VPS代理状态 - 总是尝试获取状态以确保显示正确
+      try {
+        const status = await proxyApi.getStatus()
+        connectionStatus.value = status.connectionStatus || 'disconnected'
+        currentProxy.value = status.currentProxy
+        
+        // 更新所有代理的连接状态
+        proxyList.value.forEach(proxy => {
+          if (proxy.id === proxySettings.value.activeProxyId) {
+            // 活跃代理根据实际连接状态设置
+            proxy.status = status.connectionStatus === 'connected' ? 'connected' : 
+                         status.connectionStatus === 'connecting' ? 'connecting' : 'error'
+            if (status.latency) {
+              proxy.latency = status.latency
             }
-          })
-        } catch (error) {
-          console.warn('获取代理状态失败:', error)
-        }
+          } else {
+            // 非活跃代理设置为未连接
+            proxy.status = 'disconnected'
+          }
+        })
+      } catch (error) {
+        console.warn('获取代理状态失败:', error)
+        // 如果获取状态失败，至少确保非活跃代理显示为未连接
+        proxyList.value.forEach(proxy => {
+          if (proxy.id !== proxySettings.value.activeProxyId) {
+            proxy.status = 'disconnected'
+          }
+        })
       }
     }
   } catch (error) {
