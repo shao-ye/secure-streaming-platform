@@ -74,9 +74,12 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="延迟" width="80">
+        <el-table-column label="延迟" width="100">
           <template #default="{ row }">
-            <span v-if="row.latency">{{ row.latency }}ms</span>
+            <span v-if="row.latency">
+              <span v-if="typeof row.latency === 'string'">{{ row.latency }}</span>
+              <span v-else>{{ row.latency }}ms</span>
+            </span>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -343,11 +346,15 @@ const testProxy = async (proxy) => {
       const latencyText = testData.latency ? `${testData.latency}ms` : '< 1ms'
       
       if (method === 'local_validation') {
-        ElMessage.success(`代理配置验证通过 (本地验证), 响应时间: ${latencyText}`)
+        ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
+        // 对于本地验证，不显示延迟或显示为"配置验证"
+        proxy.latency = '配置验证'
       } else if (method === 'vps_validation') {
-        ElMessage.success(`代理连接测试成功 (VPS验证), 延迟: ${latencyText}`)
+        ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
+        proxy.latency = testData.latency
       } else {
         ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
+        proxy.latency = testData.latency
       }
     } else {
       // 代理测试失败
