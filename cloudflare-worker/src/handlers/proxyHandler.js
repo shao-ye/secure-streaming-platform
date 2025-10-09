@@ -144,6 +144,32 @@ export class ProxyHandler {
         config = { ...config, ...storedConfig };
       }
 
+      // 同步实际连接状态
+      try {
+        const statusResponse = await this.getProxyStatusData(env);
+        if (statusResponse.success && statusResponse.data) {
+          const actualStatus = statusResponse.data;
+          
+          // 更新代理状态以反映实际连接状态
+          config.proxies = config.proxies.map(proxy => {
+            if (proxy.id === config.settings.activeProxyId) {
+              // 活跃代理根据实际连接状态设置
+              proxy.status = actualStatus.connectionStatus === 'connected' ? 'connected' : 
+                           actualStatus.connectionStatus === 'connecting' ? 'connecting' : 'error';
+              if (actualStatus.avgLatency) {
+                proxy.latency = actualStatus.avgLatency;
+              }
+            } else {
+              // 非活跃代理设置为未连接
+              proxy.status = 'disconnected';
+            }
+            return proxy;
+          });
+        }
+      } catch (statusError) {
+        console.warn('获取代理状态失败，使用配置中的状态:', statusError.message);
+      }
+
       return new Response(JSON.stringify({
         success: true,
         status: 'success',
@@ -418,9 +444,9 @@ export class ProxyHandler {
   }
 
   /**
-   * 获取代理状态
+   * 获取代理状态数据（内部使用）
    */
-  async getProxyStatus(env, corsHeaders) {
+  async getProxyStatusData(env) {
     try {
       // 从VPS获取实时状态
       const vpsStatus = await this.fetchVPSProxyStatus(env);
@@ -446,13 +472,49 @@ export class ProxyHandler {
         await env.YOYO_USER_DB.put(this.PROXY_STATUS_KEY, JSON.stringify(status));
       }
       
-      return new Response(JSON.stringify({
+      return {
         success: true,
-        status: 'success',
         data: status
-      }), {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        data: {
+          connectionStatus: 'disconnected',
+          currentProxy: null,
+          lastUpdate: new Date().toISOString()
+        }
+      };
+    }
+  }
+
+  /**
+   * 获取代理状态
+   */
+  async getProxyStatus(env, corsHeaders) {
+    try {
+      const statusResponse = await this.getProxyStatusData(env);
+      
+      if (statusResponse.success) {
+        return new Response(JSON.stringify({
+          success: true,
+          status: 'success',
+          data: statusResponse.data
+        }), {
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      } else {
+        return new Response(JSON.stringify({
+          success: false,
+          status: 'error',
+          message: `获取代理状态失败: ${statusResponse.error}`,
+          data: statusResponse.data
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
     } catch (error) {
       return new Response(JSON.stringify({
         success: false,
