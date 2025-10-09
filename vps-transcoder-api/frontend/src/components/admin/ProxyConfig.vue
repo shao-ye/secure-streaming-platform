@@ -372,14 +372,24 @@ const deleteProxy = async (proxy) => {
       }
     )
     
+    // 调用API删除代理
+    await proxyApi.deleteProxy(proxy.id)
+    
+    // 从本地列表中删除
     const index = proxyList.value.findIndex(p => p.id === proxy.id)
     if (index > -1) {
       proxyList.value.splice(index, 1)
-      ElMessage.success('代理删除成功')
     }
+    
+    ElMessage.success('代理删除成功')
+    
+    // 刷新代理列表以确保数据同步
+    await loadProxyConfig()
+    
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('删除代理失败')
+      console.error('删除代理失败:', error)
+      ElMessage.error(`删除代理失败: ${error.message || '未知错误'}`)
     }
   }
 }
