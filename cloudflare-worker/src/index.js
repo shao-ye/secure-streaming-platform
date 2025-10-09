@@ -53,6 +53,52 @@ function handleCors(request) {
 }
 
 /**
+ * 生成随机salt
+ */
+function generateSalt() {
+  const array = new Uint8Array(12);
+  crypto.getRandomValues(array);
+  return btoa(String.fromCharCode.apply(null, array));
+}
+
+/**
+ * 统一密码哈希函数（PBKDF2 + SHA-256）
+ */
+async function hashPassword(password, salt = null) {
+  if (!salt) {
+    salt = generateSalt();
+  }
+  
+  const encoder = new TextEncoder();
+  const passwordData = encoder.encode(password);
+  const saltData = encoder.encode(salt);
+  
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    passwordData,
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+  
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt: saltData,
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    256
+  );
+  
+  const hashArray = Array.from(new Uint8Array(derivedBits));
+  const hashedPassword = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  
+  return { hashedPassword, salt };
+}
+
+/**
  * 简单的认证检查
  */
 function isAuthenticated(request) {
@@ -440,33 +486,114 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
-    // 简单的认证端点（兼容现有前端）
+    // 用户认证端点（支持KV存储用户数据）
     if ((path === '/api/auth/login' || path === '/api/login') && method === 'POST') {
       const body = await request.json();
       
-      // 简化认证：admin/admin123
-      if (body.username === 'admin' && body.password === 'admin123') {
-        return new Response(JSON.stringify({
-          status: 'success',
-          message: 'Login successful',
-          data: {
-            user: { username: 'admin', role: 'admin' },
-            token: 'simple-token-' + Date.now()
+      try {
+        // 从KV存储检查用户认证
+        const userKey = `user:${body.username}`;
+        const userData = await env.YOYO_USER_DB.get(userKey);
+        
+        if (userData) {
+          const user = JSON.parse(userData);
+          
+          // 检查用户状态 - 兼容旧用户数据
+          const userStatus = user.status || 'active';
+          if (userStatus !== 'active') {
+            return new Response(JSON.stringify({
+              status: 'error',
+              message: '账户已被禁用'
+            }), {
+              status: 401,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            });
           }
-        }), {
-          status: 200,
-          headers: { 
-            'Content-Type': 'application/json',
-            'Set-Cookie': 'session=authenticated; Path=/; HttpOnly; SameSite=Strict',
-            ...corsHeaders
+          
+          // 统一密码验证（使用PBKDF2 + SHA-256）
+          let passwordMatch = false;
+          
+          if (user.salt && user.hashedPassword) {
+            // 使用PBKDF2验证密码
+            try {
+              const encoder = new TextEncoder();
+              const passwordData = encoder.encode(body.password);
+              const saltData = encoder.encode(user.salt);
+              
+              const keyMaterial = await crypto.subtle.importKey(
+                'raw',
+                passwordData,
+                { name: 'PBKDF2' },
+                false,
+                ['deriveBits']
+              );
+              
+              const derivedBits = await crypto.subtle.deriveBits(
+                {
+                  name: 'PBKDF2',
+                  salt: saltData,
+                  iterations: 100000,
+                  hash: 'SHA-256'
+                },
+                keyMaterial,
+                256
+              );
+              
+              const hashArray = Array.from(new Uint8Array(derivedBits));
+              const computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+              
+              if (user.hashedPassword === computedHash) {
+                passwordMatch = true;
+              }
+            } catch (error) {
+              console.log('PBKDF2验证失败:', error.message);
+            }
           }
-        });
-      } else {
+          
+          if (passwordMatch) {
+            // 更新登录信息
+            user.lastLogin = new Date().toISOString();
+            user.loginCount = (user.loginCount || 0) + 1;
+            await env.YOYO_USER_DB.put(userKey, JSON.stringify(user));
+            
+            return new Response(JSON.stringify({
+              status: 'success',
+              message: 'Login successful',
+              data: {
+                user: { 
+                  username: user.username, 
+                  role: user.role || 'user',
+                  displayName: user.displayName || user.username
+                },
+                token: 'simple-token-' + Date.now()
+              }
+            }), {
+              status: 200,
+              headers: { 
+                'Content-Type': 'application/json',
+                'Set-Cookie': 'session=authenticated; Path=/; HttpOnly; SameSite=Strict',
+                ...corsHeaders
+              }
+            });
+          }
+        }
+        
+        // 认证失败
         return new Response(JSON.stringify({
           status: 'error',
           message: 'Invalid credentials'
         }), {
           status: 401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+        
+      } catch (error) {
+        console.error('Login error:', error);
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: 'Login service error'
+        }), {
+          status: 500,
           headers: { 'Content-Type': 'application/json', ...corsHeaders }
         });
       }
@@ -875,6 +1002,11 @@ async function handleRequest(request, env, ctx) {
           });
         }
         
+        // 使用统一的密码哈希
+        const { hashedPassword, salt } = body.password ? 
+          await hashPassword(body.password) : 
+          { hashedPassword: null, salt: null };
+        
         const newUser = {
           id: body.username,
           username: body.username,
@@ -885,7 +1017,8 @@ async function handleRequest(request, env, ctx) {
           loginCount: 0,
           createdAt: new Date().toISOString(),
           email: body.email || `${body.username}@yoyo.local`,
-          hashedPassword: body.password ? `hashed_${body.password}` : null
+          hashedPassword: hashedPassword,
+          salt: salt
         };
         
         // 保存到KV存储
@@ -1018,6 +1151,79 @@ async function handleRequest(request, env, ctx) {
       }
     }
     
+    // 批量重置所有用户密码API端点（仅限admin）
+    if (path === '/api/admin/reset-all-passwords' && method === 'POST') {
+      try {
+        console.log('🔄 开始批量重置所有用户密码为123456');
+        
+        // 获取所有用户
+        const listResult = await env.YOYO_USER_DB.list({ prefix: 'user:' });
+        let resetCount = 0;
+        let skipCount = 0;
+        
+        for (const key of listResult.keys) {
+          try {
+            const userData = await env.YOYO_USER_DB.get(key.name);
+            if (userData) {
+              const user = JSON.parse(userData);
+              
+              // 跳过admin用户，保持其原有密码
+              if (user.username === 'admin') {
+                console.log('⏭️ 跳过admin用户');
+                skipCount++;
+                continue;
+              }
+              
+              // 为其他用户重置密码为123456
+              const { hashedPassword, salt } = await hashPassword('123456');
+              
+              const updatedUser = {
+                ...user,
+                hashedPassword: hashedPassword,
+                salt: salt,
+                lastUpdated: new Date().toISOString()
+              };
+              
+              // 清理旧的密码字段
+              delete updatedUser.password;
+              
+              await env.YOYO_USER_DB.put(key.name, JSON.stringify(updatedUser));
+              console.log(`✅ 重置用户密码: ${user.username}`);
+              resetCount++;
+            }
+          } catch (error) {
+            console.error(`❌ 重置用户密码失败: ${key.name}`, error);
+          }
+        }
+        
+        console.log(`🎉 批量重置完成: ${resetCount}个用户重置成功, ${skipCount}个用户跳过`);
+        
+        return new Response(JSON.stringify({
+          status: 'success',
+          message: '批量重置密码完成',
+          data: {
+            resetCount: resetCount,
+            skipCount: skipCount,
+            newPassword: '123456'
+          }
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+        
+      } catch (error) {
+        console.error('批量重置密码失败:', error);
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '批量重置密码失败',
+          error: error.message
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+    
     // 修改密码API端点
     if (path.match(/^\/api\/users\/[^/]+\/password$/) && method === 'PUT') {
       try {
@@ -1038,10 +1244,14 @@ async function handleRequest(request, env, ctx) {
         
         const existingUser = JSON.parse(existingUserData);
         
+        // 使用统一的密码哈希
+        const { hashedPassword, salt } = await hashPassword(body.newPassword);
+        
         // 更新密码
         const updatedUser = {
           ...existingUser,
-          hashedPassword: `hashed_${body.newPassword}`,
+          hashedPassword: hashedPassword,
+          salt: salt,
           lastUpdated: new Date().toISOString()
         };
         
