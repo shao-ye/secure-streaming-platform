@@ -276,6 +276,17 @@ const getStatusText = (status) => {
   }
 }
 
+// 获取代理初始状态
+const getInitialProxyStatus = (proxy, activeProxyId) => {
+  // 如果是活跃代理，需要根据实际连接状态设置
+  if (proxy.id === activeProxyId && proxy.isActive) {
+    // 这里先设置为连接中，后续会通过API更新实际状态
+    return 'connecting'
+  }
+  // 非活跃代理设置为未连接
+  return 'disconnected'
+}
+
 // 获取协议类型颜色
 const getTypeColor = (type) => {
   switch (type) {
@@ -398,9 +409,8 @@ const testProxy = async (proxy) => {
     const testData = result.data || result
     
     if (testData && testData.success) {
-      // 代理测试成功
+      // 代理测试成功 - 只更新延迟，不改变连接状态
       proxy.latency = testData.latency || 0
-      proxy.status = 'connected'
       
       // 根据测试方法显示不同的消息
       const method = testData.method || 'unknown'
@@ -426,15 +436,15 @@ const testProxy = async (proxy) => {
         ElMessage.warning(`代理配置有效，但网络连接测试超时 - 可能是网络问题或服务器不响应HTTP请求`)
       }
     } else {
-      // 代理测试失败
-      proxy.status = 'error'
+      // 代理测试失败 - 只显示错误消息，不改变连接状态
       const errorMsg = testData?.error || result.message || '连接测试失败'
       ElMessage.error(`代理测试失败: ${errorMsg}`)
+      proxy.latency = null
     }
   } catch (error) {
     console.error('代理测试异常:', error)
-    proxy.status = 'error'
     ElMessage.error('代理测试失败: ' + (error.message || '网络错误'))
+    proxy.latency = null
   } finally {
     proxy.testing = false
   }
@@ -569,10 +579,10 @@ const loadProxyConfig = async () => {
       }
       proxyEnabled.value = proxySettings.value.enabled
       
-      // 加载代理列表并设置初始状态
+      // 加载代理列表并设置初始状态 - 根据isActive和后台连接状态正确设置
       proxyList.value = (config.data.proxies || []).map(proxy => ({
         ...proxy,
-        status: proxy.status || 'disconnected',
+        status: getInitialProxyStatus(proxy, proxySettings.value.activeProxyId),
         latency: proxy.latency || null,
         testing: false,
         enabling: false,
@@ -587,14 +597,20 @@ const loadProxyConfig = async () => {
           connectionStatus.value = status.connectionStatus || 'disconnected'
           currentProxy.value = status.currentProxy
           
-          // 更新活跃代理的状态
-          const activeProxy = proxyList.value.find(p => p.isActive)
-          if (activeProxy) {
-            activeProxy.status = status.connectionStatus === 'connected' ? 'connected' : 'error'
-            if (status.latency) {
-              activeProxy.latency = status.latency
+          // 更新所有代理的连接状态
+          proxyList.value.forEach(proxy => {
+            if (proxy.id === proxySettings.value.activeProxyId) {
+              // 活跃代理根据实际连接状态设置
+              proxy.status = status.connectionStatus === 'connected' ? 'connected' : 
+                           status.connectionStatus === 'connecting' ? 'connecting' : 'error'
+              if (status.latency) {
+                proxy.latency = status.latency
+              }
+            } else {
+              // 非活跃代理设置为未连接
+              proxy.status = 'disconnected'
             }
-          }
+          })
         } catch (error) {
           console.warn('获取代理状态失败:', error)
         }
