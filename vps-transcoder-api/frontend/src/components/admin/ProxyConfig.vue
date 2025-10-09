@@ -345,16 +345,24 @@ const testProxy = async (proxy) => {
       const method = testData.method || 'unknown'
       const latencyText = testData.latency ? `${testData.latency}ms` : '< 1ms'
       
-      if (method === 'local_validation') {
-        ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
-        // 对于本地验证，不显示延迟或显示为"配置验证"
-        proxy.latency = '配置验证'
+      if (method === 'network_test') {
+        ElMessage.success(`代理网络测试成功, 延迟: ${latencyText}`)
+        proxy.latency = testData.latency
       } else if (method === 'vps_validation') {
         ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
         proxy.latency = testData.latency
+      } else if (method === 'local_validation') {
+        ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
+        proxy.latency = '配置验证'
       } else {
         ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
         proxy.latency = testData.latency
+      }
+      
+      // 处理网络延迟测试失败的情况
+      if (testData.latency === -1) {
+        proxy.latency = '网络超时'
+        ElMessage.warning(`代理配置有效，但网络连接测试超时 - 可能是网络问题或服务器不响应HTTP请求`)
       }
     } else {
       // 代理测试失败

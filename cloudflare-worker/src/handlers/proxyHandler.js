@@ -670,7 +670,7 @@ export class ProxyHandler {
   }
 
   /**
-   * 本地代理配置验证
+   * 本地代理配置验证 + 网络延迟测试
    */
   async localProxyValidation(proxy) {
     try {
@@ -698,31 +698,173 @@ export class ProxyHandler {
         };
       }
       
-      // 对于用户提供的真实代理，采用宽松的验证策略
-      // 只要配置格式正确且能解析出服务器信息，就认为是可用的
-      const latency = Date.now() - startTime;
+      // 测试网络延迟
+      const networkLatency = await this.testNetworkLatency(serverInfo);
       
-      console.log('本地代理验证通过:', {
+      console.log('代理验证和延迟测试完成:', {
         proxyName: proxy.name,
         serverHost: serverInfo.hostname,
         serverPort: serverInfo.port,
-        latency: latency
+        networkLatency: networkLatency
       });
       
       return {
         success: true,
-        latency: latency,
+        latency: networkLatency,
         error: null,
-        method: 'local_validation'
+        method: networkLatency > 0 ? 'network_test' : 'local_validation'
       };
       
     } catch (error) {
-      console.error('本地代理验证失败:', error);
+      console.error('代理验证失败:', error);
       return { 
         success: false, 
-        error: `本地验证失败: ${error.message}`, 
+        error: `验证失败: ${error.message}`, 
         latency: null 
       };
+    }
+  }
+
+  /**
+   * 测试网络延迟
+   */
+  async testNetworkLatency(serverInfo) {
+    try {
+      const startTime = Date.now();
+      
+      // 方法1: 尝试HTTPS连接测试
+      const httpsLatency = await this.testHttpsLatency(serverInfo, startTime);
+      if (httpsLatency > 0) {
+        return httpsLatency;
+      }
+      
+      // 方法2: 尝试HTTP连接测试
+      const httpLatency = await this.testHttpLatency(serverInfo, startTime);
+      if (httpLatency > 0) {
+        return httpLatency;
+      }
+      
+      // 方法3: 使用DNS解析时间作为网络延迟估算
+      const dnsLatency = await this.testDnsLatency(serverInfo, startTime);
+      return dnsLatency;
+      
+    } catch (error) {
+      console.error('网络延迟测试异常:', error);
+      return -1; // 测试失败
+    }
+  }
+
+  /**
+   * HTTPS连接延迟测试
+   */
+  async testHttpsLatency(serverInfo, startTime) {
+    try {
+      const testUrl = `https://${serverInfo.hostname}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
+      
+      const response = await fetch(testUrl, {
+        method: 'HEAD',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ProxyTest/1.0)'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      const latency = Date.now() - startTime;
+      
+      console.log('HTTPS延迟测试成功:', {
+        hostname: serverInfo.hostname,
+        latency: latency,
+        status: response.status
+      });
+      
+      return latency;
+      
+    } catch (error) {
+      console.log('HTTPS连接失败:', error.message);
+      return -1;
+    }
+  }
+
+  /**
+   * HTTP连接延迟测试
+   */
+  async testHttpLatency(serverInfo, startTime) {
+    try {
+      const testUrl = `http://${serverInfo.hostname}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
+      
+      const response = await fetch(testUrl, {
+        method: 'HEAD',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ProxyTest/1.0)'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      const latency = Date.now() - startTime;
+      
+      console.log('HTTP延迟测试成功:', {
+        hostname: serverInfo.hostname,
+        latency: latency,
+        status: response.status
+      });
+      
+      return latency;
+      
+    } catch (error) {
+      console.log('HTTP连接失败:', error.message);
+      return -1;
+    }
+  }
+
+  /**
+   * DNS解析延迟测试（作为网络延迟的估算）
+   */
+  async testDnsLatency(serverInfo, startTime) {
+    try {
+      // 尝试一个简单的fetch请求来触发DNS解析
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2秒超时
+      
+      // 使用一个不存在的路径，但会触发DNS解析和TCP连接
+      const testUrl = `https://${serverInfo.hostname}/proxy-test-${Date.now()}`;
+      
+      try {
+        await fetch(testUrl, {
+          method: 'HEAD',
+          signal: controller.signal
+        });
+      } catch (fetchError) {
+        // 即使请求失败，DNS解析和连接建立的时间也是有意义的
+        clearTimeout(timeoutId);
+        const estimatedLatency = Date.now() - startTime;
+        
+        console.log('DNS+连接延迟估算:', {
+          hostname: serverInfo.hostname,
+          estimatedLatency: estimatedLatency,
+          error: fetchError.message
+        });
+        
+        // 如果时间太短，可能是立即失败（网络不可达）
+        if (estimatedLatency < 50) {
+          return -1;
+        }
+        
+        // 如果时间合理，返回估算延迟
+        return estimatedLatency;
+      }
+      
+      clearTimeout(timeoutId);
+      return Date.now() - startTime;
+      
+    } catch (error) {
+      console.log('DNS延迟测试失败:', error.message);
+      return -1;
     }
   }
 
