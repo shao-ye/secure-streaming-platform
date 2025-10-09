@@ -522,6 +522,10 @@ export class ProxyHandler {
       const { action, proxyId } = body;
       
       switch (action) {
+        case 'enable':
+          return await this.enableProxy(env, proxyId, corsHeaders);
+        case 'disable':
+          return await this.disableProxy(env, proxyId, corsHeaders);
         case 'switch':
           return await this.switchProxy(env, proxyId, corsHeaders);
         case 'restart':
@@ -534,6 +538,103 @@ export class ProxyHandler {
     } catch (error) {
       throw new Error(`代理控制操作失败: ${error.message}`);
     }
+  }
+
+  /**
+   * 启用代理
+   */
+  async enableProxy(env, proxyId, corsHeaders) {
+    const configData = await env.YOYO_USER_DB.get(this.PROXY_CONFIG_KEY);
+    if (!configData) {
+      throw new Error('代理配置不存在');
+    }
+    
+    const config = JSON.parse(configData);
+    const proxy = config.proxies.find(p => p.id === proxyId);
+    
+    if (!proxy) {
+      throw new Error('代理不存在');
+    }
+    
+    // 禁用其他代理，确保只有一个代理处于活跃状态
+    config.proxies.forEach(p => {
+      p.isActive = p.id === proxyId;
+    });
+    
+    // 更新活跃代理
+    config.settings.activeProxyId = proxyId;
+    config.settings.enabled = true;
+    
+    // 保存配置
+    await env.YOYO_USER_DB.put(this.PROXY_CONFIG_KEY, JSON.stringify(config));
+    
+    // 同步到VPS
+    try {
+      await this.syncConfigToVPS(config, env);
+    } catch (error) {
+      console.warn('同步配置到VPS失败:', error.message);
+    }
+    
+    return new Response(JSON.stringify({
+      success: true,
+      status: 'success',
+      message: `代理 "${proxy.name}" 已启用`,
+      data: {
+        activeProxyId: proxyId,
+        proxyName: proxy.name
+      }
+    }), {
+      status: 200,
+      headers: corsHeaders
+    });
+  }
+
+  /**
+   * 禁用代理
+   */
+  async disableProxy(env, proxyId, corsHeaders) {
+    const configData = await env.YOYO_USER_DB.get(this.PROXY_CONFIG_KEY);
+    if (!configData) {
+      throw new Error('代理配置不存在');
+    }
+    
+    const config = JSON.parse(configData);
+    const proxy = config.proxies.find(p => p.id === proxyId);
+    
+    if (!proxy) {
+      throw new Error('代理不存在');
+    }
+    
+    // 禁用代理
+    config.proxies.forEach(p => {
+      p.isActive = false;
+    });
+    
+    // 清除活跃代理
+    config.settings.activeProxyId = null;
+    
+    // 保存配置
+    await env.YOYO_USER_DB.put(this.PROXY_CONFIG_KEY, JSON.stringify(config));
+    
+    // 同步到VPS（停止代理）
+    try {
+      await this.syncConfigToVPS(config, env);
+    } catch (error) {
+      console.warn('同步配置到VPS失败:', error.message);
+    }
+    
+    return new Response(JSON.stringify({
+      success: true,
+      status: 'success',
+      message: `代理 "${proxy.name}" 已禁用`,
+      data: {
+        activeProxyId: null,
+        proxyName: proxy.name
+      }
+    }), {
+      status: 200,
+      headers: corsHeaders
+    });
   }
 
   /**

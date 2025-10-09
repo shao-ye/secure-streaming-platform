@@ -84,8 +84,28 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="200">
+        <el-table-column label="操作" width="280">
           <template #default="{ row }">
+            <el-button 
+              v-if="!row.isActive"
+              @click="enableProxy(row)" 
+              size="small" 
+              type="success"
+              :loading="row.enabling"
+              :disabled="!proxySettings.enabled || row.enabling"
+            >
+              {{ row.enabling ? '启用中...' : '启用' }}
+            </el-button>
+            <el-button 
+              v-else
+              @click="disableProxy(row)" 
+              size="small" 
+              type="warning"
+              :loading="row.disabling"
+              :disabled="row.disabling"
+            >
+              {{ row.disabling ? '禁用中...' : '禁用' }}
+            </el-button>
             <el-button 
               @click="testProxy(row)" 
               size="small" 
@@ -198,6 +218,12 @@ const showAddDialog = ref(false)
 const editMode = ref(false)
 const formRef = ref()
 
+// 代理设置
+const proxySettings = ref({
+  enabled: false,
+  activeProxyId: null
+})
+
 // 代理列表 - 从API加载
 const proxyList = ref([])
 
@@ -296,24 +322,59 @@ const maskProxyUrl = (url) => {
 const handleProxyToggle = async (enabled) => {
   switchLoading.value = true
   try {
-    // 调用真实API
-    await proxyApi.toggleProxy(enabled)
+    // 更新代理设置
+    proxySettings.value.enabled = enabled
+    
+    // 调用API更新设置
+    await proxyApi.updateSettings({ enabled })
     
     if (enabled) {
-      connectionStatus.value = 'connecting'
-      // 获取代理状态
-      const status = await proxyApi.getStatus()
-      connectionStatus.value = status.connectionStatus || 'connected'
-      currentProxy.value = status.currentProxy || '已启用代理'
-      ElMessage.success('代理已启用')
+      ElMessage.success('代理功能已启用，请选择一个代理进行连接')
+      // 如果有活跃代理，尝试获取状态
+      if (proxySettings.value.activeProxyId) {
+        try {
+          const status = await proxyApi.getStatus()
+          connectionStatus.value = status.connectionStatus || 'disconnected'
+          currentProxy.value = status.currentProxy
+        } catch (error) {
+          console.warn('获取代理状态失败:', error)
+        }
+      }
     } else {
+      // 禁用代理功能时，同时禁用所有活跃代理
+      if (proxySettings.value.activeProxyId) {
+        const activeProxy = proxyList.value.find(p => p.isActive)
+        if (activeProxy) {
+          try {
+            await proxyApi.disableProxy(activeProxy.id)
+            activeProxy.isActive = false
+            activeProxy.status = 'disconnected'
+            activeProxy.latency = null
+          } catch (error) {
+            console.warn('禁用活跃代理失败:', error)
+          }
+        }
+      }
+      
+      // 重置状态
+      proxySettings.value.activeProxyId = null
       connectionStatus.value = 'disconnected'
       currentProxy.value = null
-      ElMessage.info('代理已禁用')
+      
+      // 更新所有代理状态
+      proxyList.value.forEach(proxy => {
+        proxy.isActive = false
+        proxy.status = 'disconnected'
+      })
+      
+      ElMessage.info('代理功能已禁用')
     }
   } catch (error) {
+    console.error('代理切换失败:', error)
     ElMessage.error('代理切换失败: ' + (error.message || '网络错误'))
+    // 回滚状态
     proxyEnabled.value = !enabled
+    proxySettings.value.enabled = !enabled
   } finally {
     switchLoading.value = false
   }
@@ -501,20 +562,42 @@ const loadProxyConfig = async () => {
     const config = await proxyApi.getConfig()
     
     if (config.success) {
+      // 更新代理设置
+      proxySettings.value = {
+        enabled: config.data.settings?.enabled || false,
+        activeProxyId: config.data.settings?.activeProxyId || null
+      }
+      proxyEnabled.value = proxySettings.value.enabled
+      
       // 加载代理列表并设置初始状态
       proxyList.value = (config.data.proxies || []).map(proxy => ({
         ...proxy,
-        status: proxy.status || 'disconnected', // 设置默认状态
+        status: proxy.status || 'disconnected',
         latency: proxy.latency || null,
-        testing: false
+        testing: false,
+        enabling: false,
+        disabling: false,
+        isActive: proxy.id === proxySettings.value.activeProxyId
       }))
-      proxyEnabled.value = config.data.settings?.enabled || false
       
-      // 获取代理状态
-      if (proxyEnabled.value) {
-        const status = await proxyApi.getStatus()
-        connectionStatus.value = status.connectionStatus || 'disconnected'
-        currentProxy.value = status.currentProxy
+      // 获取VPS代理状态
+      if (proxySettings.value.enabled && proxySettings.value.activeProxyId) {
+        try {
+          const status = await proxyApi.getStatus()
+          connectionStatus.value = status.connectionStatus || 'disconnected'
+          currentProxy.value = status.currentProxy
+          
+          // 更新活跃代理的状态
+          const activeProxy = proxyList.value.find(p => p.isActive)
+          if (activeProxy) {
+            activeProxy.status = status.connectionStatus === 'connected' ? 'connected' : 'error'
+            if (status.latency) {
+              activeProxy.latency = status.latency
+            }
+          }
+        } catch (error) {
+          console.warn('获取代理状态失败:', error)
+        }
       }
     }
   } catch (error) {
@@ -537,6 +620,126 @@ const loadProxyConfig = async () => {
     ]
   } finally {
     loading.value = false
+  }
+}
+
+// 启用代理
+const enableProxy = async (proxy) => {
+  if (!proxySettings.value.enabled) {
+    ElMessage.warning('请先开启代理功能总开关')
+    return
+  }
+  
+  proxy.enabling = true
+  try {
+    // 禁用其他代理
+    proxyList.value.forEach(p => {
+      if (p.id !== proxy.id) {
+        p.isActive = false
+        p.status = 'disconnected'
+      }
+    })
+    
+    // 调用API启用代理
+    const result = await proxyApi.enableProxy(proxy.id)
+    
+    if (result.success) {
+      // 更新本地状态
+      proxy.isActive = true
+      proxy.status = 'connecting'
+      proxySettings.value.activeProxyId = proxy.id
+      
+      // 测试网络延迟
+      await testProxyLatency(proxy)
+      
+      // 检查连接状态
+      setTimeout(async () => {
+        try {
+          const status = await proxyApi.getStatus()
+          proxy.status = status.connectionStatus === 'connected' ? 'connected' : 'error'
+          connectionStatus.value = status.connectionStatus
+          currentProxy.value = status.currentProxy
+          
+          if (proxy.status === 'connected') {
+            ElMessage.success(`代理 "${proxy.name}" 启用成功`)
+          } else {
+            ElMessage.warning(`代理 "${proxy.name}" 启用完成，但连接状态异常`)
+          }
+        } catch (error) {
+          console.error('检查代理状态失败:', error)
+          proxy.status = 'error'
+          ElMessage.error(`代理 "${proxy.name}" 状态检查失败`)
+        }
+      }, 2000)
+      
+    } else {
+      ElMessage.error(`启用代理失败: ${result.message || '未知错误'}`)
+      proxy.status = 'error'
+    }
+  } catch (error) {
+    console.error('启用代理失败:', error)
+    ElMessage.error(`启用代理失败: ${error.message || '网络错误'}`)
+    proxy.status = 'error'
+  } finally {
+    proxy.enabling = false
+  }
+}
+
+// 禁用代理
+const disableProxy = async (proxy) => {
+  proxy.disabling = true
+  try {
+    // 调用API禁用代理
+    const result = await proxyApi.disableProxy(proxy.id)
+    
+    if (result.success) {
+      // 更新本地状态
+      proxy.isActive = false
+      proxy.status = 'disconnected'
+      proxy.latency = null
+      proxySettings.value.activeProxyId = null
+      connectionStatus.value = 'disconnected'
+      currentProxy.value = null
+      
+      ElMessage.success(`代理 "${proxy.name}" 已禁用`)
+    } else {
+      ElMessage.error(`禁用代理失败: ${result.message || '未知错误'}`)
+    }
+  } catch (error) {
+    console.error('禁用代理失败:', error)
+    ElMessage.error(`禁用代理失败: ${error.message || '网络错误'}`)
+  } finally {
+    proxy.disabling = false
+  }
+}
+
+// 测试代理延迟（启用时调用）
+const testProxyLatency = async (proxy) => {
+  try {
+    const result = await proxyApi.testProxy({
+      id: proxy.id,
+      name: proxy.name,
+      type: proxy.type,
+      config: proxy.config
+    })
+    
+    if (result.success && result.data.success) {
+      const testData = result.data
+      const method = testData.method || 'unknown'
+      
+      if (method === 'network_test') {
+        proxy.latency = testData.latency
+      } else if (method === 'vps_validation') {
+        proxy.latency = testData.latency
+      } else if (testData.latency === -1) {
+        proxy.latency = '网络超时'
+      } else {
+        proxy.latency = '配置验证'
+      }
+    }
+  } catch (error) {
+    console.warn('测试代理延迟失败:', error)
+    proxy.latency = '测试失败'
   }
 }
 
