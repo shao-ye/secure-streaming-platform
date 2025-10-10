@@ -17,6 +17,34 @@ import { getCacheStats, clearCache } from '../utils/cache.js';
 import { R2LoginLogger } from '../utils/r2-logger.js';
 
 /**
+ * 保存测试历史到R2存储 - 每个proxyId只保留最新记录
+ */
+async function saveTestHistory(env, testRecord) {
+  try {
+    // R2 Key格式: proxyId.json (每个代理只保留一条最新记录)
+    const key = `${testRecord.proxyId}.json`;
+    
+    const historyData = {
+      proxyId: testRecord.proxyId,
+      testUrlId: testRecord.testUrlId,
+      success: testRecord.success,
+      latency: testRecord.latency,
+      method: testRecord.method,
+      timestamp: new Date().toISOString(),
+      error: testRecord.error || null
+    };
+    
+    // 直接覆盖保存，自动替换旧记录
+    await env.PROXY_TEST_HISTORY.put(key, JSON.stringify(historyData));
+    
+    console.log(`代理测试记录已更新: ${key}`);
+  } catch (error) {
+    console.error('保存测试记录失败:', error);
+    // 不抛出错误，避免影响主要功能
+  }
+}
+
+/**
  * 验证管理员权限
  */
 async function requireAdmin(request, env) {
@@ -790,6 +818,124 @@ export const handleAdmin = {
       console.error('Admin get login logs error:', error);
       logError(env, 'Admin get login logs handler error', error);
       return errorResponse('Failed to retrieve login logs', 'ADMIN_LOGIN_LOGS_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 代理测试 - 转发到VPS进行真实测试
+   */
+  async testProxy(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      let proxyData;
+      try {
+        proxyData = await request.json();
+      } catch (error) {
+        return errorResponse('Invalid JSON in request body', 'INVALID_JSON', 400, request);
+      }
+
+      // 验证代理数据
+      if (!proxyData || !proxyData.config) {
+        return errorResponse('Proxy configuration is required', 'MISSING_PROXY_CONFIG', 400, request);
+      }
+
+      // 获取测试网站ID，默认为baidu
+      const testUrlId = proxyData.testUrlId || 'baidu';
+
+      // 验证ID安全性
+      const allowedIds = ['baidu', 'google'];
+      if (!allowedIds.includes(testUrlId)) {
+        return errorResponse('无效的测试网站ID', 'INVALID_TEST_URL_ID', 400, request);
+      }
+
+      logInfo(env, 'Admin testing proxy', {
+        username: auth.user.username,
+        proxyName: proxyData.name || 'unknown',
+        testUrlId: testUrlId
+      });
+
+      // 转发到VPS进行真实代理测试
+      const vpsApiUrl = env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz';
+      const vpsApiKey = env.VPS_API_KEY || 'default-api-key';
+
+      const vpsRequestBody = {
+        proxyConfig: proxyData,
+        testUrlId: testUrlId
+      };
+
+      // 设置10秒超时
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('VPS代理测试超时')), 10000);
+      });
+
+      const fetchPromise = fetch(`${vpsApiUrl}/api/proxy/test`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': vpsApiKey
+        },
+        body: JSON.stringify(vpsRequestBody)
+      });
+
+      const vpsResponse = await Promise.race([fetchPromise, timeoutPromise]);
+
+      if (vpsResponse.ok) {
+        const vpsData = await vpsResponse.json();
+        
+        logInfo(env, 'VPS proxy test completed', {
+          username: auth.user.username,
+          proxyName: proxyData.name || 'unknown',
+          success: vpsData.data?.success || false,
+          latency: vpsData.data?.latency || -1,
+          method: vpsData.data?.method || 'unknown'
+        });
+
+        // 保存测试历史到R2（异步，不影响响应）
+        if (vpsData.data && env.PROXY_TEST_HISTORY) {
+          saveTestHistory(env, {
+            proxyId: proxyData.id,
+            testUrlId: testUrlId,
+            success: vpsData.data.success,
+            latency: vpsData.data.latency,
+            method: vpsData.data.method,
+            error: vpsData.data.error
+          }).catch(err => console.error('保存测试历史失败:', err));
+        }
+
+        // 直接返回VPS的测试结果
+        return successResponse(vpsData.data, vpsData.message || '代理测试完成', request);
+      } else {
+        logError(env, 'VPS proxy test failed', new Error(`HTTP ${vpsResponse.status}`), {
+          username: auth.user.username,
+          proxyName: proxyData.name || 'unknown'
+        });
+
+        return errorResponse(
+          `VPS代理测试失败: HTTP ${vpsResponse.status}`,
+          'VPS_TEST_FAILED',
+          502,
+          request
+        );
+      }
+
+    } catch (error) {
+      logError(env, 'Admin proxy test handler error', error, {
+        proxyName: proxyData?.name || 'unknown'
+      });
+
+      // 如果是超时错误，返回-1结果
+      if (error.message.includes('超时')) {
+        return successResponse({
+          success: false,
+          latency: -1,
+          method: 'real_test',
+          error: '代理测试超时'
+        }, '代理测试超时', request);
+      }
+
+      return errorResponse('代理测试失败', 'PROXY_TEST_ERROR', 500, request);
     }
   }
 };

@@ -286,6 +286,9 @@ export default {
       // 登录日志API
       router.get('/api/admin/login/logs', (req, env, ctx) => handleAdmin.getLoginLogs(req, env, ctx));
       
+      // 代理管理API
+      router.post('/api/admin/proxy/test', (req, env, ctx) => handleAdmin.testProxy(req, env, ctx));
+      
       // 隧道管理API路由
       router.get('/api/admin/tunnel/config', (req, env, ctx) => deploymentHandlers.getTunnelConfig(req, env, ctx));
       router.put('/api/admin/tunnel/config', (req, env, ctx) => deploymentHandlers.updateTunnelConfig(req, env, ctx));

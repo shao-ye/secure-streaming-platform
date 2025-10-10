@@ -39,14 +39,23 @@
       
       <el-form inline>
         <el-form-item label="测试网站:">
-          <el-input 
-            v-model="testUrl" 
-            placeholder="https://www.baidu.com"
-            style="width: 300px"
-            clearable
-          />
+          <el-select 
+            v-model="globalTestUrlId" 
+            placeholder="选择测试网站"
+            style="width: 200px"
+            @change="updateGlobalTestUrlId"
+          >
+            <el-option 
+              label="百度 (推荐)" 
+              value="baidu"
+            />
+            <el-option 
+              label="谷歌" 
+              value="google"
+            />
+          </el-select>
           <el-text class="ml-2" type="info" size="small">
-            建议使用百度等国内网站，测试代理对中国用户的加速效果
+            百度：测试代理对中国用户的加速效果 | 谷歌：测试代理的国际访问能力
           </el-text>
         </el-form-item>
       </el-form>
@@ -255,8 +264,21 @@ const proxySettings = ref({
 // 代理列表 - 从API加载
 const proxyList = ref([])
 
-// 测试网站配置
-const testUrl = ref('https://www.baidu.com')
+// 全局测试网站ID配置
+const globalTestUrlId = ref('baidu') // 默认选择百度
+
+// 并发测试控制
+const testingCount = ref(0)
+const MAX_CONCURRENT_TESTS = 1 // 只允许同时测试一个
+
+// 频率限制
+const testFrequencyCount = ref(0)
+const MAX_TESTS_PER_MINUTE = 20
+
+// 每分钟重置计数器
+setInterval(() => {
+  testFrequencyCount.value = 0
+}, 60000)
 
 // 表单数据
 const proxyForm = ref({
@@ -479,19 +501,58 @@ const handleProxyToggle = async (enabled) => {
   }
 }
 
+// ID验证函数
+const validateTestUrlId = (urlId) => {
+  const allowedIds = ['baidu', 'google']
+  return allowedIds.includes(urlId)
+}
+
+// 更新全局测试网站配置
+const updateGlobalTestUrlId = async (newUrlId) => {
+  try {
+    // 这里可以添加保存到后端的逻辑
+    ElMessage.success('测试网站配置已更新')
+  } catch (error) {
+    ElMessage.error('更新配置失败')
+    // 回滚到之前的值
+    globalTestUrlId.value = 'baidu'
+  }
+}
+
 // 测试代理连接 - 真实延迟测试
 const testProxy = async (proxy) => {
-  proxy.testing = true
   try {
-    console.log('🚀 开始真实代理测试:', { name: proxy.name, testUrl: testUrl.value })
+    // 检查频率限制
+    if (testFrequencyCount.value >= MAX_TESTS_PER_MINUTE) {
+      ElMessage.warning('测试频率过高，请稍后再试')
+      return
+    }
     
-    // 调用真实API测试代理，传递测试网站URL
+    // 检查并发限制
+    if (testingCount.value >= MAX_CONCURRENT_TESTS) {
+      ElMessage.warning('请等待当前测试完成')
+      return
+    }
+    
+    // ID安全验证
+    if (!validateTestUrlId(globalTestUrlId.value)) {
+      ElMessage.error('无效的测试网站ID')
+      return
+    }
+    
+    testingCount.value++
+    testFrequencyCount.value++
+    proxy.testing = true
+    
+    console.log('🚀 开始真实代理测试:', { name: proxy.name, testUrlId: globalTestUrlId.value })
+    
+    // 调用真实API测试代理，传递ID而不是URL
     const result = await proxyApi.testProxy({
       id: proxy.id,
       name: proxy.name,
       type: proxy.type,
       config: proxy.config,
-      testUrl: testUrl.value
+      testUrlId: globalTestUrlId.value
     })
     
     console.log('代理测试结果:', result)
@@ -499,27 +560,21 @@ const testProxy = async (proxy) => {
     // 检查API响应结构
     const testData = result.data || result
     
-    if (testData && testData.success) {
-      // 代理测试成功 - 支持多种测试方法
-      proxy.latency = testData.latency || 0
-      const methodName = testData.method === 'vps_validation' ? 'VPS验证' : 
-                        testData.method === 'real_test' ? '真实测试' : 
-                        testData.method === 'local_validation' ? '本地验证' : '未知方法'
-      console.log(`✅ 代理测试成功 ${proxy.name}: ${testData.latency}ms (${methodName})`)
-      ElMessage.success(`代理测试成功 - 延迟: ${testData.latency}ms (${methodName})`)
+    if (testData && testData.success && testData.method === 'real_test') {
+      // 显示真实延迟
+      proxy.latency = testData.latency
+      ElMessage.success(`代理测试成功 - 延迟: ${testData.latency}ms`)
     } else {
-      // 测试失败，显示-1
+      // 显示-1
       proxy.latency = -1
-      console.log(`❌ 代理测试失败 ${proxy.name}: ${testData ? testData.error : '未知错误'}`)
-      ElMessage.error(`代理测试失败: ${testData ? testData.error : '连接不可用'}`)
+      ElMessage.error('代理测试失败 - 连接不可用')
     }
   } catch (error) {
-    // 异常情况，显示-1
     proxy.latency = -1
-    console.error('代理测试异常:', error)
-    ElMessage.error(`代理测试失败: ${error.message || '网络错误'}`)
+    ElMessage.error(`代理测试失败: ${error.message}`)
   } finally {
     proxy.testing = false
+    testingCount.value--
   }
 }
 
@@ -903,6 +958,18 @@ const testProxyLatency = async (proxy) => {
 
 // 组件挂载时初始化
 onMounted(() => {
+  // 页面加载时重置所有测试状态
+  proxyList.value.forEach(proxy => {
+    proxy.testing = false // 重置测试状态
+  })
+  
+  // 重置并发计数器
+  testingCount.value = 0
+  
+  // 重置频率限制计数器
+  testFrequencyCount.value = 0
+  
+  // 加载代理配置
   loadProxyConfig()
 })
 </script>
