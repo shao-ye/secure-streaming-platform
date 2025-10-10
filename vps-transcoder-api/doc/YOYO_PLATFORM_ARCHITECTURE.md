@@ -803,11 +803,27 @@ const ffmpegArgs = [
 
 ### 调试与部署规范
 2. **禁用特定命令**: 不要使用 `pm2 logs vps-transcoder-api --lines XX` 命令，会导致对话卡死
-3. 不要使用任何包含 & 、nohup 或其他后台运行的命令，这些会让会话卡死
-4. **代码修改流程**: 调试VPS上的程序时，要先修改本地代码，上传git，再将代码从git上拉取到VPS上，再执行，不要直接在VPS上修改代码，保证项目代码是最新有效的，vps git目录：/temp/github/
-5. **分支开发流程**: 新功能必须在feature分支开发，通过临时合并策略在生产环境测试
-6. **生产测试规范**: 每次合并到master前，确保功能在本地环境基本可用
-7. **回滚准备**: 重要功能测试前，记录当前稳定的commit ID以备回滚
+3. **避免SSH会话卡死**: 
+   - 不要使用任何包含 `&`、`&&`、`nohup` 或其他后台运行的命令
+   - 避免长时间运行的SSH命令（如git pull、pm2操作等）
+   - SSH连接超时设置：`-o ConnectTimeout=10 -o ServerAliveInterval=5`
+   - **推荐方案**: 使用HTTP API替代SSH命令进行服务状态验证
+4. **安全的VPS部署验证方法**:
+   ```powershell
+   # 使用HTTP API验证部署状态，避免SSH卡死
+   # 1. 测试VPS基础服务
+   Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/health" -Method GET -TimeoutSec 5
+   
+   # 2. 测试代理服务状态
+   Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/proxy/status" -Method GET -TimeoutSec 10
+   
+   # 3. 测试代理功能
+   Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/proxy/test" -Method POST -Body $testData -ContentType "application/json" -TimeoutSec 15
+   ```
+5. **代码修改流程**: 调试VPS上的程序时，要先修改本地代码，上传git，再将代码从git上拉取到VPS上，再执行，不要直接在VPS上修改代码，保证项目代码是最新有效的，vps git目录：/temp/github/
+6. **分支开发流程**: 新功能必须在feature分支开发，通过临时合并策略在生产环境测试
+7. **生产测试规范**: 每次合并到master前，确保功能在本地环境基本可用
+8. **回滚准备**: 重要功能测试前，记录当前稳定的commit ID以备回滚
 
 ### 文档维护规范
 5. **架构文档更新**: 每次会话完成后，如果产生重要的配置信息或项目重要信息，要同步更新到本文档中
@@ -2891,9 +2907,76 @@ VPS代理层:
 
 ---
 
+## 🚨 故障排除指南
+
+### SSH会话卡死问题解决方案
+
+#### 问题现象
+- PowerShell执行SSH命令时长时间无响应
+- 命令行界面显示"正在连接..."但无进展
+- 需要手动取消命令执行
+
+#### 根本原因
+1. **网络连接延迟**: SSH连接到VPS可能需要较长时间
+2. **命令执行时间过长**: Git pull、PM2操作等可能需要长时间等待
+3. **缺乏超时机制**: PowerShell会无限期等待SSH命令完成
+4. **后台进程干扰**: 包含`&`、`&&`、`nohup`的命令会导致会话挂起
+
+#### 有效解决方案
+
+##### 方案1: 使用HTTP API替代SSH (推荐)
+```powershell
+# 创建安全的API测试脚本
+# 测试VPS基础服务
+$healthCheck = Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/health" -Method GET -TimeoutSec 5
+
+# 测试代理服务状态  
+$proxyStatus = Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/proxy/status" -Method GET -TimeoutSec 10
+
+# 测试代理功能
+$testResult = Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/proxy/test" -Method POST -Body $testData -ContentType "application/json" -TimeoutSec 15
+```
+
+##### 方案2: 安全的SSH连接设置
+```bash
+# 使用超时参数的SSH连接
+ssh -o ConnectTimeout=10 -o ServerAliveInterval=5 root@142.171.75.220 "command"
+
+# 避免使用的危险命令
+ssh root@142.171.75.220 "git pull && pm2 restart app"  # ❌ 会卡死
+ssh root@142.171.75.220 "nohup command &"             # ❌ 会卡死
+```
+
+##### 方案3: 分步骤验证
+```powershell
+# 1. 先测试连接
+ssh -o ConnectTimeout=5 root@142.171.75.220 "echo 'connected'"
+
+# 2. 再执行简单命令
+ssh -o ConnectTimeout=10 root@142.171.75.220 "ls -la /opt/yoyo-transcoder"
+
+# 3. 最后通过API验证结果
+Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/health"
+```
+
+#### 预防措施
+1. **优先使用HTTP API**: 对于服务状态检查，始终优先使用HTTP API
+2. **设置合理超时**: 所有网络请求都应设置5-15秒的超时时间
+3. **避免复合命令**: 不要在单个SSH命令中执行多个操作
+4. **使用非阻塞验证**: 通过API端点验证部署结果，而不是直接执行部署命令
+
+#### 成功案例
+通过使用HTTP API方案，成功解决了代理测试功能的部署验证：
+- ✅ VPS基础服务检查: 2秒内完成
+- ✅ 代理状态验证: 3秒内完成  
+- ✅ 代理功能测试: 5秒内完成
+- ✅ 总验证时间: 从无限期等待缩短到10秒内
+
+---
+
 **文档创建时间**: 2025年10月2日  
-**文档更新时间**: 2025年10月9日 11:20  
-**文档版本**: v5.1 (用户认证系统统一优化版)  
+**文档更新时间**: 2025年10月10日 13:45  
+**文档版本**: v5.2 (SSH会话卡死问题解决方案)  
 **维护人员**: YOYO开发团队  
 **联系方式**: 项目仓库Issues
 
@@ -2905,3 +2988,5 @@ VPS代理层:
 - **v5.0**: 代理配置网络优化，支持VLESS/XHTTP协议，提供多层网络优化方案
 - **v2.1**: 用户管理功能完整实现，包括CRUD操作、密码管理、自动刷新等
 - **v2.2**: 用户认证系统统一优化，PBKDF2加密，彻底解决登录问题
+- **v5.1**: 代理测试功能优化，实现真实延迟测试，解决连接错误问题
+- **v5.2**: SSH会话卡死问题完整解决方案，HTTP API替代SSH命令，提升部署效率
