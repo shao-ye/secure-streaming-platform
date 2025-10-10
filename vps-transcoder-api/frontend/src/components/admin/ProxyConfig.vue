@@ -590,6 +590,9 @@ const loadProxyConfig = async () => {
         isActive: proxy.id === proxySettings.value.activeProxyId
       }))
       
+      console.log('加载的代理列表:', proxyList.value.length, '个代理')
+      console.log('活跃代理ID:', proxySettings.value.activeProxyId)
+      
       // 获取VPS代理状态 - 总是尝试获取状态以确保显示正确
       try {
         const status = await proxyApi.getStatus()
@@ -598,11 +601,12 @@ const loadProxyConfig = async () => {
         currentProxy.value = status.currentProxy
         
         // 强制更新所有代理的连接状态，忽略配置中的status字段
+        console.log('开始更新代理状态，代理列表长度:', proxyList.value.length)
         proxyList.value.forEach(proxy => {
           if (proxy.id === proxySettings.value.activeProxyId) {
             // 活跃代理根据实际连接状态设置
             const actualStatus = status.connectionStatus === 'connected' ? 'connected' : 
-                               status.connectionStatus === 'connecting' ? 'connecting' : 'error'
+                               status.connectionStatus === 'connecting' ? 'connecting' : 'disconnected'
             proxy.status = actualStatus
             console.log(`强制更新代理${proxy.name}状态: ${actualStatus}`)
             
