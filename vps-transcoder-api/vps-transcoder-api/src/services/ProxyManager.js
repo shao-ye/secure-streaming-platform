@@ -646,32 +646,164 @@ class ProxyManager {
   }
 
   /**
-   * 测试特定代理配置
+   * 测试特定代理配置 - 真实延迟测试
    */
-  async testProxyConfig(proxyConfig) {
+  async testProxyConfig(proxyConfig, testUrl = 'https://www.baidu.com') {
     try {
-      logger.info('测试代理配置:', proxyConfig.name);
+      logger.info('开始真实代理测试:', { name: proxyConfig.name, testUrl });
       
-      const startTime = Date.now();
+      // 调用真实代理测试方法
+      const testResult = await this.testProxyRealLatency(proxyConfig, testUrl);
       
-      // 优化的测试策略：不启动完整代理进程，而是进行配置验证和基础连通性测试
-      const testResult = await this.validateAndTestProxy(proxyConfig);
-      const latency = Date.now() - startTime;
-      
-      return {
-        success: testResult.success,
-        latency: testResult.success ? latency : null,
-        error: testResult.success ? null : testResult.error,
-        method: 'vps_validation'
-      };
+      return testResult;
     } catch (error) {
-      logger.error('测试代理配置失败:', error);
+      logger.error('代理测试异常:', error);
       return {
         success: false,
-        latency: null,
-        error: error.message,
-        method: 'vps_validation'
+        latency: -1,
+        method: 'real_test',
+        error: error.message
       };
+    }
+  }
+
+  /**
+   * 真实代理延迟测试
+   */
+  async testProxyRealLatency(proxyConfig, testUrl = 'https://www.baidu.com') {
+    const startTime = Date.now();
+    
+    try {
+      logger.info('启动真实代理测试:', { name: proxyConfig.name, testUrl });
+      
+      // 1. 临时启动代理客户端
+      const proxyProcess = await this.startTempProxy(proxyConfig);
+      
+      // 2. 通过代理访问测试网站
+      const response = await this.testThroughProxy(testUrl, proxyProcess);
+      
+      // 3. 计算真实延迟
+      const latency = Date.now() - startTime;
+      
+      // 4. 清理临时代理
+      await this.cleanupTempProxy(proxyProcess);
+      
+      logger.info('真实代理测试成功:', { name: proxyConfig.name, latency });
+      
+      return {
+        success: true,
+        latency: latency,
+        method: 'real_test'
+      };
+      
+    } catch (error) {
+      logger.error('真实代理测试失败:', { name: proxyConfig.name, error: error.message });
+      return {
+        success: false,
+        latency: -1,
+        method: 'real_test',
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * 临时启动代理客户端
+   */
+  async startTempProxy(proxyConfig) {
+    const tempConfigPath = `/tmp/v2ray_test_${Date.now()}.json`;
+    
+    try {
+      // 生成临时配置文件
+      const config = await this.generateV2rayConfig(proxyConfig);
+      await fs.writeFile(tempConfigPath, JSON.stringify(config, null, 2));
+      
+      // 启动临时V2Ray进程
+      const process = spawn('v2ray', ['-config', tempConfigPath], {
+        stdio: 'pipe'
+      });
+      
+      // 等待进程启动
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('代理启动超时'));
+        }, 5000);
+        
+        process.stdout.on('data', (data) => {
+          if (data.toString().includes('started')) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        
+        process.on('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+      });
+      
+      return { process, configPath: tempConfigPath };
+    } catch (error) {
+      // 清理配置文件
+      try {
+        await fs.unlink(tempConfigPath);
+      } catch {}
+      throw error;
+    }
+  }
+
+  /**
+   * 通过代理访问测试网站
+   */
+  async testThroughProxy(testUrl, proxyInfo) {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    
+    try {
+      // 使用curl通过代理访问测试网站
+      const curlCommand = `curl -x socks5://127.0.0.1:${this.proxyPort} --connect-timeout 10 --max-time 10 -s -o /dev/null -w "%{http_code}" "${testUrl}"`;
+      
+      const { stdout } = await execAsync(curlCommand);
+      const httpCode = stdout.trim();
+      
+      if (httpCode === '200') {
+        return { success: true };
+      } else {
+        throw new Error(`HTTP响应码: ${httpCode}`);
+      }
+    } catch (error) {
+      throw new Error(`代理连接测试失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 清理临时代理
+   */
+  async cleanupTempProxy(proxyInfo) {
+    try {
+      // 停止进程
+      if (proxyInfo.process && !proxyInfo.process.killed) {
+        proxyInfo.process.kill('SIGTERM');
+        
+        // 等待进程退出
+        await new Promise((resolve) => {
+          proxyInfo.process.on('exit', resolve);
+          setTimeout(() => {
+            if (!proxyInfo.process.killed) {
+              proxyInfo.process.kill('SIGKILL');
+            }
+            resolve();
+          }, 3000);
+        });
+      }
+      
+      // 删除临时配置文件
+      if (proxyInfo.configPath) {
+        await fs.unlink(proxyInfo.configPath);
+      }
+    } catch (error) {
+      logger.warn('清理临时代理失败:', error.message);
     }
   }
 
