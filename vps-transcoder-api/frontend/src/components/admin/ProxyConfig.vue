@@ -339,6 +339,15 @@ const handleProxyToggle = async (enabled) => {
     // 调用API更新设置
     await proxyApi.updateSettings({ enabled })
     
+    // 保存代理配置到localStorage供前端路由使用
+    const proxyConfig = {
+      enabled: enabled,
+      activeProxyId: proxySettings.value.activeProxyId,
+      updatedAt: new Date().toISOString()
+    }
+    localStorage.setItem('proxy_config', JSON.stringify(proxyConfig))
+    console.log('代理配置已保存到localStorage:', proxyConfig)
+    
     if (enabled) {
       ElMessage.success('代理功能已启用，请选择一个代理进行连接')
       // 如果有活跃代理，尝试获取状态
@@ -631,6 +640,15 @@ const loadProxyConfig = async () => {
           }
         })
       }
+      
+      // 保存代理配置到localStorage供前端路由使用
+      const proxyConfig = {
+        enabled: proxySettings.value.enabled,
+        activeProxyId: proxySettings.value.activeProxyId,
+        updatedAt: new Date().toISOString()
+      }
+      localStorage.setItem('proxy_config', JSON.stringify(proxyConfig))
+      console.log('代理配置已保存到localStorage:', proxyConfig)
     }
   } catch (error) {
     console.warn('加载代理配置失败:', error)
