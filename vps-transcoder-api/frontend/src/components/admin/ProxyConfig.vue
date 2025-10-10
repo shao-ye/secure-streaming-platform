@@ -203,7 +203,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { proxyApi } from '../../services/proxyApi'
 
@@ -600,7 +600,13 @@ const loadProxyConfig = async () => {
       }))
       
       console.log('加载的代理列表:', proxyList.value.length, '个代理')
+      console.log('代理列表内容:', proxyList.value)
       console.log('活跃代理ID:', proxySettings.value.activeProxyId)
+      
+      // 强制触发Vue响应式更新
+      nextTick(() => {
+        console.log('Vue nextTick - 代理列表长度:', proxyList.value.length)
+      })
       
       // 获取VPS代理状态 - 总是尝试获取状态以确保显示正确
       try {
