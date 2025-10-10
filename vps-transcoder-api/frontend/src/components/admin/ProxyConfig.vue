@@ -49,6 +49,7 @@
         stripe 
         :loading="loading"
         empty-text="暂无代理配置"
+        style="width: 100%"
       >
         <el-table-column prop="name" label="代理名称" width="150" />
         
@@ -60,7 +61,7 @@
           </template>
         </el-table-column>
         
-        <el-table-column prop="id" label="代理ID" width="200">
+        <el-table-column prop="id" label="代理ID" width="250">
           <template #default="{ row }">
             <span class="proxy-id">{{ row.id }}</span>
           </template>
@@ -84,7 +85,7 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="280">
+        <el-table-column label="操作" min-width="280">
           <template #default="{ row }">
             <el-button 
               v-if="!row.isActive"
@@ -418,12 +419,12 @@ const testProxy = async (proxy) => {
     const testData = result.data || result
     
     if (testData && testData.success) {
-      // 代理测试成功 - 只更新延迟，不改变连接状态
-      proxy.latency = testData.latency || 0
-      
       // 根据测试方法显示不同的消息
       const method = testData.method || 'unknown'
       const latencyText = testData.latency ? `${testData.latency}ms` : '< 1ms'
+      
+      // 保存当前延迟，避免被覆盖
+      const currentLatency = proxy.latency
       
       if (method === 'network_test') {
         ElMessage.success(`代理网络测试成功, 延迟: ${latencyText}`)
@@ -434,9 +435,10 @@ const testProxy = async (proxy) => {
       } else if (method === 'local_validation') {
         ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
         // 对于本地验证，如果代理当前是连接状态，保持原有延迟；否则显示配置验证
-        if (proxy.isActive && proxy.latency && typeof proxy.latency === 'number') {
+        if (proxy.isActive && currentLatency && typeof currentLatency === 'number') {
           // 保持当前延迟不变
-          ElMessage.info(`当前连接延迟: ${proxy.latency}ms (来自VPS状态)`)
+          proxy.latency = currentLatency
+          ElMessage.info(`当前连接延迟: ${currentLatency}ms (来自VPS状态)`)
         } else {
           proxy.latency = '配置验证'
         }
