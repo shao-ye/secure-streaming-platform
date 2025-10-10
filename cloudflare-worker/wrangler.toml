@@ -17,6 +17,10 @@ VPS_API_KEY = "85da076ae24b028b3d1ea1884e6b13c5afe34488be0f8d39a05fbbf26d23e938"
 binding = "YOYO_USER_DB"
 id = "edafbcf1042147f9b52f0fc4b5c37543"
 
+[[env.production.r2_buckets]]
+binding = "PROXY_TEST_HISTORY"
+bucket_name = "proxy-test-history"
+
 [env.development]
 name = "yoyo-streaming-simple-dev"
 
