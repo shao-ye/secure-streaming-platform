@@ -51,19 +51,21 @@
         empty-text="暂无代理配置"
         style="width: 100%"
       >
-        <el-table-column prop="name" label="代理名称" width="150" />
+        <el-table-column type="index" label="序号" width="60" />
+        
+        <el-table-column prop="id" label="代理ID" width="250">
+          <template #default="{ row }">
+            <span class="proxy-id">{{ row.id }}</span>
+          </template>
+        </el-table-column>
+        
+        <el-table-column prop="name" label="代理名称" width="120" />
         
         <el-table-column prop="type" label="协议类型" width="100">
           <template #default="{ row }">
             <el-tag size="small" :type="getTypeColor(row.type)">
               {{ getTypeText(row.type) }}
             </el-tag>
-          </template>
-        </el-table-column>
-        
-        <el-table-column prop="id" label="代理ID" width="250">
-          <template #default="{ row }">
-            <span class="proxy-id">{{ row.id }}</span>
           </template>
         </el-table-column>
         
@@ -85,7 +87,7 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" min-width="280">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button 
               v-if="!row.isActive"
@@ -425,6 +427,7 @@ const testProxy = async (proxy) => {
       
       // 保存当前延迟，避免被覆盖
       const currentLatency = proxy.latency
+      console.log(`测试代理 ${proxy.name}: method=${method}, isActive=${proxy.isActive}, currentLatency=${currentLatency}, testLatency=${testData.latency}`)
       
       if (method === 'network_test') {
         ElMessage.success(`代理网络测试成功, 延迟: ${latencyText}`)
@@ -433,14 +436,14 @@ const testProxy = async (proxy) => {
         ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
         proxy.latency = testData.latency
       } else if (method === 'local_validation') {
-        ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
         // 对于本地验证，如果代理当前是连接状态，保持原有延迟；否则显示配置验证
         if (proxy.isActive && currentLatency && typeof currentLatency === 'number') {
           // 保持当前延迟不变
           proxy.latency = currentLatency
-          ElMessage.info(`当前连接延迟: ${currentLatency}ms (来自VPS状态)`)
+          ElMessage.success(`代理配置验证通过 (本地验证) - 当前连接延迟: ${currentLatency}ms`)
         } else {
           proxy.latency = '配置验证'
+          ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
         }
       } else {
         ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
