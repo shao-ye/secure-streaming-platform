@@ -473,31 +473,35 @@ const testProxy = async (proxy) => {
     
     if (testData && testData.success) {
       // 根据测试方法显示不同的消息
-      const method = testData.method || 'unknown'
+      const method = testData.method || 'local_validation'  // 默认为本地验证
       const latencyText = testData.latency ? `${testData.latency}ms` : '< 1ms'
       
       // 保存当前延迟，避免被覆盖
       const currentLatency = proxy.latency
-      console.log(`测试代理 ${proxy.name}: method=${method}, isActive=${proxy.isActive}, currentLatency=${currentLatency}, testLatency=${testData.latency}`)
+      console.log(`🔍 测试代理 ${proxy.name}: method=${method}, isActive=${proxy.isActive}, currentLatency=${currentLatency}, testLatency=${testData.latency}`)
       
-      if (method === 'network_test') {
-        ElMessage.success(`代理网络测试成功, 延迟: ${latencyText}`)
-        proxy.latency = testData.latency
-      } else if (method === 'vps_validation') {
-        ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
-        proxy.latency = testData.latency
-      } else if (method === 'local_validation') {
-        // 对于本地验证，提供更合理的延迟估算
+      // 强制使用本地验证逻辑，因为API测试经常失败
+      if (method === 'local_validation' || method === 'unknown' || testData.latency === 1) {
+        console.log(`🔧 使用本地验证逻辑处理代理: ${proxy.name}`)
+        
         if (proxy.isActive && currentLatency && typeof currentLatency === 'number') {
           // 保持当前真实延迟不变
           proxy.latency = currentLatency
+          console.log(`✅ 保持活跃代理 ${proxy.name} 的真实延迟: ${currentLatency}ms`)
           ElMessage.success(`代理配置验证通过 - 当前连接延迟: ${currentLatency}ms (来自VPS状态)`)
         } else {
           // 对于未连接的代理，基于服务器地理位置估算延迟
           const estimatedLatency = estimateLatencyByServer(proxy.config)
           proxy.latency = estimatedLatency
+          console.log(`📍 为未连接代理 ${proxy.name} 估算延迟: ${estimatedLatency}`)
           ElMessage.success(`代理配置验证通过 - 预估延迟: ${estimatedLatency} (基于服务器位置)`)
         }
+      } else if (method === 'network_test') {
+        ElMessage.success(`代理网络测试成功, 延迟: ${latencyText}`)
+        proxy.latency = testData.latency
+      } else if (method === 'vps_validation') {
+        ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
+        proxy.latency = testData.latency
       } else {
         ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
         proxy.latency = testData.latency
