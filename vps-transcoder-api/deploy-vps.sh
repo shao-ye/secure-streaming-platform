@@ -58,7 +58,7 @@ log_info "当前目录: $(pwd)"
 # 拉取最新代码
 log_info "拉取最新代码..."
 git fetch origin
-git reset --hard origin/main
+git reset --hard origin/master
 log_info "✅ 代码同步完成"
 
 # 显示最新提交信息
