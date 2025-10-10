@@ -80,12 +80,12 @@ router.get('/status', async (req, res) => {
 });
 
 /**
- * 测试代理连接
+ * 测试代理连接 - 支持自定义测试网站
  * POST /api/proxy/test
  */
 router.post('/test', async (req, res) => {
   try {
-    const { proxyId, proxyConfig } = req.body;
+    const { proxyId, proxyConfig, testUrl } = req.body;
     
     if (!proxyConfig) {
       return res.status(400).json({
@@ -94,12 +94,15 @@ router.post('/test', async (req, res) => {
       });
     }
     
+    const finalTestUrl = testUrl || 'https://www.baidu.com';
+    
     logger.info('收到代理测试请求:', {
       proxyId,
-      proxyName: proxyConfig.name
+      proxyName: proxyConfig.name,
+      testUrl: finalTestUrl
     });
     
-    const testResult = await proxyManager.testProxyConfig(proxyConfig);
+    const testResult = await proxyManager.testProxyConfig(proxyConfig, finalTestUrl);
     
     res.json({
       status: 'success',
@@ -112,7 +115,12 @@ router.post('/test', async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: '测试代理失败',
-      error: error.message
+      data: {
+        success: false,
+        latency: -1,
+        method: 'real_test',
+        error: error.message
+      }
     });
   }
 });
