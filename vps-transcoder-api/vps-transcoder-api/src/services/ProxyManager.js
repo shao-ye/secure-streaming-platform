@@ -647,10 +647,26 @@ class ProxyManager {
 
   /**
    * 测试特定代理配置 - 真实延迟测试
+   * @param {Object} proxyConfig - 代理配置
+   * @param {string} testUrlId - 测试网站ID (baidu/google)
+   * @returns {Object} 测试结果
    */
-  async testProxyConfig(proxyConfig, testUrl = 'https://www.baidu.com') {
+  async testProxyConfig(proxyConfig, testUrlId = 'baidu') {
+    // ID安全验证
+    const allowedIds = ['baidu', 'google'];
+    if (!allowedIds.includes(testUrlId)) {
+      throw new Error('不支持的测试网站ID');
+    }
+    
+    // 根据ID获取实际URL
+    const testUrlMap = {
+      'baidu': 'https://www.baidu.com',
+      'google': 'https://www.google.com'
+    };
+    const testUrl = testUrlMap[testUrlId];
+    
     try {
-      logger.info('开始真实代理测试:', { name: proxyConfig.name, testUrl });
+      logger.info('开始真实代理测试:', { name: proxyConfig.name, testUrlId, testUrl });
       
       // 调用真实代理测试方法
       const testResult = await this.testProxyRealLatency(proxyConfig, testUrl);
@@ -669,24 +685,39 @@ class ProxyManager {
 
   /**
    * 真实代理延迟测试
+   * @param {Object} proxyConfig - 代理配置
+   * @param {string} testUrl - 测试网站URL
+   * @returns {Object} 测试结果
    */
-  async testProxyRealLatency(proxyConfig, testUrl = 'https://www.baidu.com') {
+  async testProxyRealLatency(proxyConfig, testUrl) {
     const startTime = Date.now();
+    let tempProxyProcess = null;
+    let processTimeout = null;
     
     try {
       logger.info('启动真实代理测试:', { name: proxyConfig.name, testUrl });
       
-      // 1. 临时启动代理客户端
-      const proxyProcess = await this.startTempProxy(proxyConfig);
+      // 1. 启动临时代理进程
+      tempProxyProcess = await this.startTempProxy(proxyConfig);
       
-      // 2. 通过代理访问测试网站
-      const response = await this.testThroughProxy(testUrl, proxyProcess);
+      // 2. 设置15秒进程级强制超时
+      processTimeout = setTimeout(() => {
+        if (tempProxyProcess && tempProxyProcess.process) {
+          tempProxyProcess.process.kill('SIGTERM');
+          logger.warn('代理测试进程超时，强制终止');
+        }
+      }, 15000);
       
-      // 3. 计算真实延迟
+      // 3. 通过代理访问测试网站
+      const response = await this.testThroughProxy(testUrl, tempProxyProcess);
+      
+      // 4. 计算真实延迟
       const latency = Date.now() - startTime;
       
-      // 4. 清理临时代理
-      await this.cleanupTempProxy(proxyProcess);
+      // 5. 清理超时定时器
+      if (processTimeout) {
+        clearTimeout(processTimeout);
+      }
       
       logger.info('真实代理测试成功:', { name: proxyConfig.name, latency });
       
@@ -704,6 +735,14 @@ class ProxyManager {
         method: 'real_test',
         error: error.message
       };
+    } finally {
+      // 6. 确保资源清理
+      if (processTimeout) {
+        clearTimeout(processTimeout);
+      }
+      if (tempProxyProcess) {
+        await this.cleanupTempProxy(tempProxyProcess);
+      }
     }
   }
 
