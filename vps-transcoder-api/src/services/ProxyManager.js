@@ -533,15 +533,21 @@ class ProxyManager {
   }
 
   /**
-   * 测试代理连接
+   * 测试代理连接 - 支持可配置测试网站
    */
-  async testProxyConnection() {
+  async testProxyConnection(testUrl = 'https://www.baidu.com') {
     try {
-      // 通过代理测试连接Google
-      const testCommand = `curl -x socks5://127.0.0.1:${this.proxyPort} -s -o /dev/null -w "%{http_code}" --connect-timeout 10 http://www.google.com`;
+      logger.info('开始真实代理连通性测试:', testUrl);
+      
+      // 通过代理测试连接指定网站，10秒超时
+      const testCommand = `curl -x socks5://127.0.0.1:${this.proxyPort} -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 10 "${testUrl}"`;
       const { stdout } = await execAsync(testCommand);
       
-      return stdout.trim() === '200';
+      const httpCode = stdout.trim();
+      const isSuccess = httpCode === '200' || httpCode === '301' || httpCode === '302';
+      
+      logger.info('代理连通性测试结果:', { testUrl, httpCode, isSuccess });
+      return isSuccess;
     } catch (error) {
       logger.warn('代理连接测试失败:', error.message);
       return false;
@@ -582,39 +588,58 @@ class ProxyManager {
   }
 
   /**
-   * 测试特定代理配置
+   * 测试特定代理配置 - 真实延迟测试
    */
-  async testProxyConfig(proxyConfig) {
+  async testProxyConfig(proxyConfig, testUrl = 'https://www.baidu.com') {
     try {
-      logger.info('测试代理配置:', proxyConfig.name);
+      logger.info('开始真实代理延迟测试:', { name: proxyConfig.name, testUrl });
       
-      const startTime = Date.now();
+      // 保存当前代理状态
+      const tempProxy = this.activeProxy ? { ...this.activeProxy } : null;
       
-      // 临时启动代理进行测试
-      const tempProxy = { ...this.activeProxy };
-      await this.startProxy(proxyConfig);
-      
-      // 测试连接
-      const isConnected = await this.testProxyConnection();
-      const latency = Date.now() - startTime;
-      
-      // 恢复原来的代理
-      if (tempProxy) {
-        await this.startProxy(tempProxy);
-      } else {
-        await this.stopProxy();
+      try {
+        // 临时启动代理进行测试
+        await this.startProxy(proxyConfig);
+        
+        // 记录开始时间
+        const startTime = Date.now();
+        
+        // 测试连接
+        const isConnected = await this.testProxyConnection(testUrl);
+        
+        // 计算真实延迟
+        const latency = Date.now() - startTime;
+        
+        logger.info('代理测试完成:', { 
+          name: proxyConfig.name, 
+          isConnected, 
+          latency: isConnected ? latency : -1 
+        });
+        
+        return {
+          success: isConnected,
+          latency: isConnected ? latency : -1,
+          method: 'real_test',
+          error: isConnected ? null : '代理连接失败'
+        };
+        
+      } finally {
+        // 恢复原来的代理状态
+        if (tempProxy) {
+          await this.startProxy(tempProxy);
+          logger.info('恢复原代理:', tempProxy.name);
+        } else {
+          await this.stopProxy();
+          logger.info('停止临时代理');
+        }
       }
       
-      return {
-        success: isConnected,
-        latency: isConnected ? latency : null,
-        error: isConnected ? null : '连接测试失败'
-      };
     } catch (error) {
       logger.error('测试代理配置失败:', error);
       return {
         success: false,
-        latency: null,
+        latency: -1,
+        method: 'real_test',
         error: error.message
       };
     }
