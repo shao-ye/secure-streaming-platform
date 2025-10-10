@@ -80,7 +80,7 @@ fi
 log_step "3. 更新项目文件"
 
 # 复制VPS API文件
-VPS_SOURCE="$GIT_DIR/vps-transcoder-api"
+VPS_SOURCE="$GIT_DIR/vps-transcoder-api/vps-transcoder-api"
 if [ -d "$VPS_SOURCE" ]; then
     # 复制源代码
     cp -r $VPS_SOURCE/src/* $PROJECT_DIR/src/ 2>/dev/null || true
