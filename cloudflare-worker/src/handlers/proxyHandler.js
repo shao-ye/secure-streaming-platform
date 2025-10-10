@@ -376,14 +376,19 @@ export class ProxyHandler {
   }
 
   /**
-   * 测试代理连接
+   * 测试代理连接 - 支持自定义测试网站
    */
   async testProxy(request, env, corsHeaders) {
     try {
       const proxyData = await request.json();
       
-      // 调用VPS测试代理
-      const testResult = await this.callVPSProxyTest(env, proxyData);
+      // 获取测试网站URL，默认为百度
+      const testUrl = proxyData.testUrl || 'https://www.baidu.com';
+      
+      console.log('收到代理测试请求:', { name: proxyData.name, testUrl });
+      
+      // 调用VPS进行真实代理测试
+      const testResult = await this.callVPSProxyTest(env, proxyData, testUrl);
       
       return new Response(JSON.stringify({
         status: 'success',
@@ -393,9 +398,16 @@ export class ProxyHandler {
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     } catch (error) {
+      console.error('代理测试异常:', error);
       return new Response(JSON.stringify({
         status: 'error',
-        message: `代理测试失败: ${error.message}`
+        message: `代理测试失败: ${error.message}`,
+        data: {
+          success: false,
+          latency: -1,
+          method: 'real_test',
+          error: error.message
+        }
       }), {
         status: 500,
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
@@ -818,16 +830,17 @@ export class ProxyHandler {
   }
 
   /**
-   * 调用VPS测试代理
+   * 调用VPS进行真实代理测试
    */
-  async callVPSProxyTest(env, proxy) {
+  async callVPSProxyTest(env, proxy, testUrl = 'https://www.baidu.com') {
+    console.log('🚀 开始真实代理延迟测试:', { name: proxy.name, testUrl });
+    
     try {
-      // 首先尝试VPS测试，设置较短超时
+      // 调用VPS进行真实代理测试，10秒超时
       const vpsEndpoint = `${env.VPS_API_BASE || 'https://yoyo-vps.5202021.xyz'}/api/proxy/test`;
       
-      // 创建一个带超时的Promise
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('VPS测试超时')), 3000); // 3秒超时
+        setTimeout(() => reject(new Error('VPS测试超时')), 10000); // 10秒超时
       });
       
       const fetchPromise = fetch(vpsEndpoint, {
@@ -838,7 +851,8 @@ export class ProxyHandler {
         },
         body: JSON.stringify({
           proxyId: proxy.id,
-          proxyConfig: proxy
+          proxyConfig: proxy,
+          testUrl: testUrl
         })
       });
       
@@ -846,17 +860,40 @@ export class ProxyHandler {
       
       if (response.ok) {
         const data = await response.json();
-        console.log('VPS代理测试成功:', data);
-        return data.data;
+        console.log('✅ VPS真实代理测试成功:', data);
+        
+        if (data.data && data.data.success) {
+          return {
+            success: true,
+            latency: data.data.latency,
+            method: 'real_test',
+            error: null
+          };
+        } else {
+          return {
+            success: false,
+            latency: -1,
+            method: 'real_test',
+            error: data.data ? data.data.error : '代理测试失败'
+          };
+        }
       } else {
-        console.warn('VPS代理测试失败，状态码:', response.status);
-        // VPS测试失败，使用本地验证
-        return await this.localProxyValidation(proxy);
+        console.error('VPS代理测试失败，状态码:', response.status);
+        return {
+          success: false,
+          latency: -1,
+          method: 'real_test',
+          error: `VPS测试失败: HTTP ${response.status}`
+        };
       }
     } catch (error) {
-      console.warn('VPS代理测试失败，使用本地验证:', error.message);
-      // VPS不可用时，使用本地验证
-      return await this.localProxyValidation(proxy);
+      console.error('VPS代理测试异常:', error.message);
+      return {
+        success: false,
+        latency: -1,
+        method: 'real_test',
+        error: error.message.includes('超时') ? '测试超时' : '连接失败'
+      };
     }
   }
 
@@ -865,6 +902,7 @@ export class ProxyHandler {
    */
   async localProxyValidation(proxy) {
     try {
+      console.log('🚀 开始本地代理验证，代理名称:', proxy.name);
       const startTime = Date.now();
       
       // 基本配置格式验证

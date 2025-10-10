@@ -29,6 +29,29 @@
       </div>
     </el-card>
 
+    <!-- 测试网站配置 -->
+    <el-card class="test-config-card" shadow="hover">
+      <template #header>
+        <div class="card-header">
+          <span>测试配置</span>
+        </div>
+      </template>
+      
+      <el-form inline>
+        <el-form-item label="测试网站:">
+          <el-input 
+            v-model="testUrl" 
+            placeholder="https://www.baidu.com"
+            style="width: 300px"
+            clearable
+          />
+          <el-text class="ml-2" type="info" size="small">
+            建议使用百度等国内网站，测试代理对中国用户的加速效果
+          </el-text>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
     <!-- 代理列表管理 -->
     <el-card class="proxy-list-card" shadow="hover">
       <template #header>
@@ -81,10 +104,9 @@
         
         <el-table-column label="延迟" width="80">
           <template #default="{ row }">
-            <span v-if="row.latency">
-              <span v-if="typeof row.latency === 'string'">{{ row.latency }}</span>
-              <span v-else>{{ row.latency }}ms</span>
-            </span>
+            <span v-if="row.testing">测试中...</span>
+            <span v-else-if="row.latency === -1">-1</span>
+            <span v-else-if="typeof row.latency === 'number' && row.latency > 0">{{ row.latency }}ms</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -232,6 +254,9 @@ const proxySettings = ref({
 
 // 代理列表 - 从API加载
 const proxyList = ref([])
+
+// 测试网站配置
+const testUrl = ref('https://www.baidu.com')
 
 // 表单数据
 const proxyForm = ref({
@@ -454,16 +479,19 @@ const handleProxyToggle = async (enabled) => {
   }
 }
 
-// 测试代理连接
+// 测试代理连接 - 真实延迟测试
 const testProxy = async (proxy) => {
   proxy.testing = true
   try {
-    // 调用真实API测试代理
+    console.log('🚀 开始真实代理测试:', { name: proxy.name, testUrl: testUrl.value })
+    
+    // 调用真实API测试代理，传递测试网站URL
     const result = await proxyApi.testProxy({
       id: proxy.id,
       name: proxy.name,
       type: proxy.type,
-      config: proxy.config
+      config: proxy.config,
+      testUrl: testUrl.value
     })
     
     console.log('代理测试结果:', result)
@@ -471,62 +499,22 @@ const testProxy = async (proxy) => {
     // 检查API响应结构
     const testData = result.data || result
     
-    if (testData && testData.success) {
-      // 根据测试方法显示不同的消息
-      const method = testData.method || 'local_validation'  // 默认为本地验证
-      const latencyText = testData.latency ? `${testData.latency}ms` : '< 1ms'
-      
-      // 保存当前延迟，避免被覆盖
-      const currentLatency = proxy.latency
-      console.log(`🔍 测试代理 ${proxy.name}: method=${method}, isActive=${proxy.isActive}, currentLatency=${currentLatency}, testLatency=${testData.latency}`)
-      
-      // 处理不同测试方法的结果
-      if (method === 'network_test') {
-        // 真实网络延迟测试成功
-        proxy.latency = testData.latency
-        console.log(`🌐 网络延迟测试成功 ${proxy.name}: ${testData.latency}ms`)
-        ElMessage.success(`代理网络测试成功 - 真实延迟: ${testData.latency}ms`)
-      } else if (method === 'local_validation' || method === 'unknown' || testData.latency === 1) {
-        console.log(`🔧 使用本地验证逻辑处理代理: ${proxy.name}`)
-        
-        if (proxy.isActive && currentLatency && typeof currentLatency === 'number') {
-          // 保持当前真实延迟不变
-          proxy.latency = currentLatency
-          console.log(`✅ 保持活跃代理 ${proxy.name} 的真实延迟: ${currentLatency}ms`)
-          ElMessage.success(`代理配置验证通过 - 当前连接延迟: ${currentLatency}ms (来自VPS状态)`)
-        } else {
-          // 对于未连接的代理，基于服务器地理位置估算延迟
-          const estimatedLatency = estimateLatencyByServer(proxy.config)
-          proxy.latency = estimatedLatency
-          console.log(`📍 为未连接代理 ${proxy.name} 估算延迟: ${estimatedLatency}`)
-          ElMessage.success(`代理配置验证通过 - 预估延迟: ${estimatedLatency} (基于服务器位置)`)
-        }
-      } else if (method === 'network_test') {
-        ElMessage.success(`代理网络测试成功, 延迟: ${latencyText}`)
-        proxy.latency = testData.latency
-      } else if (method === 'vps_validation') {
-        ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
-        proxy.latency = testData.latency
-      } else {
-        ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
-        proxy.latency = testData.latency
-      }
-      
-      // 处理网络延迟测试失败的情况
-      if (testData.latency === -1) {
-        proxy.latency = '网络超时'
-        ElMessage.warning(`代理配置有效，但网络连接测试超时 - 可能是网络问题或服务器不响应HTTP请求`)
-      }
+    if (testData && testData.success && testData.method === 'real_test') {
+      // 真实延迟测试成功
+      proxy.latency = testData.latency
+      console.log(`✅ 真实延迟测试成功 ${proxy.name}: ${testData.latency}ms`)
+      ElMessage.success(`代理测试成功 - 真实延迟: ${testData.latency}ms`)
     } else {
-      // 代理测试失败 - 只显示错误消息，不改变连接状态
-      const errorMsg = testData?.error || result.message || '连接测试失败'
-      ElMessage.error(`代理测试失败: ${errorMsg}`)
-      proxy.latency = null
+      // 测试失败，显示-1
+      proxy.latency = -1
+      console.log(`❌ 代理测试失败 ${proxy.name}: ${testData ? testData.error : '未知错误'}`)
+      ElMessage.error(`代理测试失败: ${testData ? testData.error : '连接不可用'}`)
     }
   } catch (error) {
+    // 异常情况，显示-1
+    proxy.latency = -1
     console.error('代理测试异常:', error)
-    ElMessage.error('代理测试失败: ' + (error.message || '网络错误'))
-    proxy.latency = null
+    ElMessage.error(`代理测试失败: ${error.message || '网络错误'}`)
   } finally {
     proxy.testing = false
   }
@@ -998,5 +986,19 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+}
+
+/* 测试配置卡片样式 */
+.test-config-card {
+  margin-bottom: 20px;
+}
+
+.test-config-card .el-form-item {
+  margin-bottom: 0;
+}
+
+.test-config-card .el-text {
+  margin-left: 8px;
+  font-size: 12px;
 }
 </style>
