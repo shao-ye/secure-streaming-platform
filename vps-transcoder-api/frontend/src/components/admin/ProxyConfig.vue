@@ -60,9 +60,9 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="代理配置" min-width="300">
+        <el-table-column prop="id" label="代理ID" width="200">
           <template #default="{ row }">
-            <span class="proxy-url">{{ maskProxyUrl(row.config) }}</span>
+            <span class="proxy-id">{{ row.id }}</span>
           </template>
         </el-table-column>
         
@@ -433,7 +433,13 @@ const testProxy = async (proxy) => {
         proxy.latency = testData.latency
       } else if (method === 'local_validation') {
         ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
-        proxy.latency = '配置验证'
+        // 对于本地验证，如果代理当前是连接状态，保持原有延迟；否则显示配置验证
+        if (proxy.isActive && proxy.latency && typeof proxy.latency === 'number') {
+          // 保持当前延迟不变
+          ElMessage.info(`当前连接延迟: ${proxy.latency}ms (来自VPS状态)`)
+        } else {
+          proxy.latency = '配置验证'
+        }
       } else {
         ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
         proxy.latency = testData.latency
@@ -890,10 +896,13 @@ onMounted(() => {
   align-items: center;
 }
 
-.proxy-url {
+.proxy-id {
   font-family: 'Courier New', monospace;
   font-size: 12px;
-  color: #606266;
+  color: #409eff;
+  background-color: #f0f9ff;
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 .dialog-footer {
