@@ -44,24 +44,26 @@
         </div>
       </template>
       
-      <el-table 
+      <div class="table-container">
+        <el-table 
         :data="proxyList" 
         stripe 
         :loading="loading"
         empty-text="暂无代理配置"
-        style="width: 100%"
+        style="width: 100%; min-width: 1000px;"
+        :table-layout="'auto'"
       >
         <el-table-column type="index" label="序号" width="60" />
         
-        <el-table-column prop="id" label="代理ID" width="250">
+        <el-table-column prop="id" label="代理ID" min-width="200">
           <template #default="{ row }">
             <span class="proxy-id">{{ row.id }}</span>
           </template>
         </el-table-column>
         
-        <el-table-column prop="name" label="代理名称" width="120" />
+        <el-table-column prop="name" label="代理名称" width="100" />
         
-        <el-table-column prop="type" label="协议类型" width="100">
+        <el-table-column prop="type" label="协议类型" width="80">
           <template #default="{ row }">
             <el-tag size="small" :type="getTypeColor(row.type)">
               {{ getTypeText(row.type) }}
@@ -69,7 +71,7 @@
           </template>
         </el-table-column>
         
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" label="状态" width="80">
           <template #default="{ row }">
             <el-tag size="small" :type="getStatusType(row.status)">
               {{ getStatusText(row.status) }}
@@ -77,7 +79,7 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="延迟" width="100">
+        <el-table-column label="延迟" width="80">
           <template #default="{ row }">
             <span v-if="row.latency">
               <span v-if="typeof row.latency === 'string'">{{ row.latency }}</span>
@@ -134,6 +136,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-card>
 
     <!-- 添加/编辑代理对话框 -->
@@ -436,14 +439,15 @@ const testProxy = async (proxy) => {
         ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
         proxy.latency = testData.latency
       } else if (method === 'local_validation') {
-        // 对于本地验证，如果代理当前是连接状态，保持原有延迟；否则显示配置验证
+        // 对于本地验证，不显示1ms的无意义延迟
         if (proxy.isActive && currentLatency && typeof currentLatency === 'number') {
-          // 保持当前延迟不变
+          // 保持当前真实延迟不变
           proxy.latency = currentLatency
-          ElMessage.success(`代理配置验证通过 (本地验证) - 当前连接延迟: ${currentLatency}ms`)
+          ElMessage.success(`代理配置验证通过 - 当前连接延迟: ${currentLatency}ms (来自VPS状态)`)
         } else {
+          // 对于未连接的代理，显示配置验证而不是1ms
           proxy.latency = '配置验证'
-          ElMessage.success(`代理配置验证通过 (本地验证) - 配置格式正确，服务器信息有效`)
+          ElMessage.success(`代理配置验证通过 - 配置格式正确，服务器信息有效`)
         }
       } else {
         ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
@@ -908,6 +912,28 @@ onMounted(() => {
   background-color: #f0f9ff;
   padding: 2px 6px;
   border-radius: 4px;
+}
+
+.table-container {
+  overflow-x: auto;
+  width: 100%;
+}
+
+/* 响应式表格 */
+@media (max-width: 1200px) {
+  .table-container {
+    overflow-x: scroll;
+  }
+  
+  .proxy-list-card {
+    margin: 0 -10px;
+  }
+}
+
+@media (min-width: 1201px) {
+  .table-container .el-table {
+    min-width: auto !important;
+  }
 }
 
 .dialog-footer {
