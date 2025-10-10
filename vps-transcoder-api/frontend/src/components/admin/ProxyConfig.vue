@@ -55,13 +55,13 @@
       >
         <el-table-column type="index" label="序号" width="60" />
         
-        <el-table-column prop="id" label="代理ID" min-width="200">
+        <el-table-column prop="id" label="代理ID" width="180">
           <template #default="{ row }">
             <span class="proxy-id">{{ row.id }}</span>
           </template>
         </el-table-column>
         
-        <el-table-column prop="name" label="代理名称" width="100" />
+        <el-table-column prop="name" label="代理名称" min-width="150" />
         
         <el-table-column prop="type" label="协议类型" width="80">
           <template #default="{ row }">
