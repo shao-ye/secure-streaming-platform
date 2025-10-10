@@ -499,11 +499,14 @@ const testProxy = async (proxy) => {
     // 检查API响应结构
     const testData = result.data || result
     
-    if (testData && testData.success && testData.method === 'real_test') {
-      // 真实延迟测试成功
-      proxy.latency = testData.latency
-      console.log(`✅ 真实延迟测试成功 ${proxy.name}: ${testData.latency}ms`)
-      ElMessage.success(`代理测试成功 - 真实延迟: ${testData.latency}ms`)
+    if (testData && testData.success) {
+      // 代理测试成功 - 支持多种测试方法
+      proxy.latency = testData.latency || 0
+      const methodName = testData.method === 'vps_validation' ? 'VPS验证' : 
+                        testData.method === 'real_test' ? '真实测试' : 
+                        testData.method === 'local_validation' ? '本地验证' : '未知方法'
+      console.log(`✅ 代理测试成功 ${proxy.name}: ${testData.latency}ms (${methodName})`)
+      ElMessage.success(`代理测试成功 - 延迟: ${testData.latency}ms (${methodName})`)
     } else {
       // 测试失败，显示-1
       proxy.latency = -1
