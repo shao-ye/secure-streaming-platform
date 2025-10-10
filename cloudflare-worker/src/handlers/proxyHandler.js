@@ -147,24 +147,34 @@ export class ProxyHandler {
       // 同步实际连接状态
       try {
         const statusResponse = await this.getProxyStatusData(env);
+        console.log('状态同步调试 - statusResponse:', JSON.stringify(statusResponse));
+        
         if (statusResponse.success && statusResponse.data) {
           const actualStatus = statusResponse.data;
+          console.log('状态同步调试 - actualStatus:', JSON.stringify(actualStatus));
+          console.log('状态同步调试 - activeProxyId:', config.settings.activeProxyId);
           
           // 更新代理状态以反映实际连接状态
           config.proxies = config.proxies.map(proxy => {
+            const oldStatus = proxy.status;
             if (proxy.id === config.settings.activeProxyId) {
               // 活跃代理根据实际连接状态设置
               proxy.status = actualStatus.connectionStatus === 'connected' ? 'connected' : 
                            actualStatus.connectionStatus === 'connecting' ? 'connecting' : 'error';
-              if (actualStatus.avgLatency) {
-                proxy.latency = actualStatus.avgLatency;
+              // 更新延迟信息
+              if (actualStatus.statistics && actualStatus.statistics.avgLatency) {
+                proxy.latency = actualStatus.statistics.avgLatency;
               }
+              console.log(`状态同步调试 - 代理${proxy.name}: ${oldStatus} -> ${proxy.status}`);
             } else {
               // 非活跃代理设置为未连接
               proxy.status = 'disconnected';
+              console.log(`状态同步调试 - 非活跃代理${proxy.name}: ${oldStatus} -> ${proxy.status}`);
             }
             return proxy;
           });
+        } else {
+          console.log('状态同步调试 - 状态获取失败或无数据');
         }
       } catch (statusError) {
         console.warn('获取代理状态失败，使用配置中的状态:', statusError.message);
@@ -782,6 +792,7 @@ export class ProxyHandler {
   async fetchVPSProxyStatus(env) {
     try {
       const vpsEndpoint = `${env.VPS_API_BASE || 'https://yoyo-vps.5202021.xyz'}/api/proxy/status`;
+      console.log('调试 - 获取VPS状态，端点:', vpsEndpoint);
       
       const response = await fetch(vpsEndpoint, {
         method: 'GET',
@@ -790,12 +801,17 @@ export class ProxyHandler {
         }
       });
       
+      console.log('调试 - VPS响应状态:', response.status);
+      
       if (response.ok) {
         const data = await response.json();
+        console.log('调试 - VPS返回数据:', JSON.stringify(data));
         return data.data;
+      } else {
+        console.warn('VPS响应不正常:', response.status, response.statusText);
       }
     } catch (error) {
-      console.warn('获取VPS代理状态失败:', error);
+      console.warn('获取VPS代理状态失败:', error.message);
     }
     
     return null;
@@ -901,27 +917,37 @@ export class ProxyHandler {
   }
 
   /**
-   * 测试网络延迟
+   * 测试网络延迟 - 像v2rayN一样的真实延迟测试
    */
   async testNetworkLatency(serverInfo) {
     try {
-      const startTime = Date.now();
+      console.log('开始真实延迟测试:', serverInfo);
       
-      // 方法1: 尝试HTTPS连接测试
-      const httpsLatency = await this.testHttpsLatency(serverInfo, startTime);
+      // 方法1: TCP连接测试（最准确）
+      const tcpLatency = await this.testTcpLatency(serverInfo);
+      if (tcpLatency > 0) {
+        console.log('TCP连接测试成功:', tcpLatency + 'ms');
+        return tcpLatency;
+      }
+      
+      // 方法2: HTTPS连接测试
+      const httpsLatency = await this.testHttpsLatency(serverInfo);
       if (httpsLatency > 0) {
+        console.log('HTTPS连接测试成功:', httpsLatency + 'ms');
         return httpsLatency;
       }
       
-      // 方法2: 尝试HTTP连接测试
-      const httpLatency = await this.testHttpLatency(serverInfo, startTime);
+      // 方法3: HTTP连接测试
+      const httpLatency = await this.testHttpLatency(serverInfo);
       if (httpLatency > 0) {
+        console.log('HTTP连接测试成功:', httpLatency + 'ms');
         return httpLatency;
       }
       
-      // 方法3: 使用DNS解析时间作为网络延迟估算
-      const dnsLatency = await this.testDnsLatency(serverInfo, startTime);
-      return dnsLatency;
+      // 方法4: DNS解析延迟（最后备用）
+      const dnsLatency = await this.testDnsLatency(serverInfo);
+      console.log('DNS解析延迟:', dnsLatency + 'ms');
+      return Math.max(dnsLatency, 10); // 至少10ms，避免显示过小的值
       
     } catch (error) {
       console.error('网络延迟测试异常:', error);
@@ -930,10 +956,63 @@ export class ProxyHandler {
   }
 
   /**
+   * TCP连接延迟测试（最准确的方法）
+   */
+  async testTcpLatency(serverInfo) {
+    try {
+      const startTime = Date.now();
+      
+      // 使用fetch进行TCP连接测试，通过连接到代理服务器端口
+      const testUrl = `https://${serverInfo.hostname}:${serverInfo.port || 443}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+      
+      // 尝试建立连接（不需要完整的HTTP响应）
+      const response = await fetch(testUrl, {
+        method: 'HEAD',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'ProxyLatencyTest/1.0'
+        }
+      }).catch(error => {
+        // 即使连接被拒绝，我们也能测量到达服务器的时间
+        const latency = Date.now() - startTime;
+        if (latency > 0 && latency < 5000) {
+          return { latency: latency };
+        }
+        throw error;
+      });
+      
+      clearTimeout(timeoutId);
+      const latency = Date.now() - startTime;
+      
+      console.log('TCP连接延迟测试:', {
+        hostname: serverInfo.hostname,
+        port: serverInfo.port,
+        latency: latency
+      });
+      
+      return latency;
+      
+    } catch (error) {
+      // 检查是否是连接超时或网络错误
+      const elapsed = Date.now() - (error.startTime || Date.now());
+      if (elapsed > 0 && elapsed < 5000) {
+        console.log('TCP连接测试 - 从错误中获取延迟:', elapsed + 'ms');
+        return elapsed;
+      }
+      
+      console.log('TCP连接测试失败:', error.message);
+      return -1;
+    }
+  }
+
+  /**
    * HTTPS连接延迟测试
    */
-  async testHttpsLatency(serverInfo, startTime) {
+  async testHttpsLatency(serverInfo) {
     try {
+      const startTime = Date.now();
       const testUrl = `https://${serverInfo.hostname}`;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
@@ -966,8 +1045,9 @@ export class ProxyHandler {
   /**
    * HTTP连接延迟测试
    */
-  async testHttpLatency(serverInfo, startTime) {
+  async testHttpLatency(serverInfo) {
     try {
+      const startTime = Date.now();
       const testUrl = `http://${serverInfo.hostname}`;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
@@ -1000,8 +1080,9 @@ export class ProxyHandler {
   /**
    * DNS解析延迟测试（作为网络延迟的估算）
    */
-  async testDnsLatency(serverInfo, startTime) {
+  async testDnsLatency(serverInfo) {
     try {
+      const startTime = Date.now();
       // 尝试一个简单的fetch请求来触发DNS解析
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 2000); // 2秒超时

@@ -125,6 +125,81 @@ async function handleRequest(request, env, ctx) {
   }
 
   try {
+    // 最优先：直接测试tunnel-proxy路径
+    if (path.startsWith('/tunnel-proxy/')) {
+      console.log('🔥 TUNNEL-PROXY PATH DETECTED:', path, 'METHOD:', method);
+      
+      // 简单测试路由
+      if (path === '/tunnel-proxy/test') {
+        return new Response('✅ Tunnel proxy route is working!', {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain', ...corsHeaders }
+        });
+      }
+      
+      // HLS代理路由
+      if (path.match(/^\/tunnel-proxy\/hls\/(.+?)\/(.+)$/) && method === 'GET') {
+        const [, channelId, file] = path.match(/^\/tunnel-proxy\/hls\/(.+?)\/(.+)$/);
+        
+        console.log('🎯 HLS PROXY REQUEST:', { path, channelId, file });
+        
+        // 构建VPS的真实HLS URL
+        const vpsHlsUrl = `${env.VPS_API_URL}/hls/${channelId}/${file}`;
+        
+        try {
+          // 转发请求到VPS，保持原始查询参数
+          const vpsResponse = await fetch(vpsHlsUrl + url.search, {
+            method: 'GET',
+            headers: {
+              'X-API-Key': env.VPS_API_KEY,
+              'User-Agent': request.headers.get('User-Agent') || 'Cloudflare-Worker-Proxy'
+            }
+          });
+          
+          console.log('🔄 VPS RESPONSE:', vpsResponse.status);
+          
+          // 复制VPS响应头并添加CORS头
+          const newHeaders = new Headers(vpsResponse.headers);
+          Object.entries(corsHeaders).forEach(([key, value]) => {
+            newHeaders.set(key, value);
+          });
+          
+          // 添加代理标识头
+          newHeaders.set('X-Proxy-Via', 'cloudflare-workers');
+          newHeaders.set('X-Proxy-Channel', channelId);
+          
+          return new Response(vpsResponse.body, {
+            status: vpsResponse.status,
+            headers: newHeaders
+          });
+          
+        } catch (error) {
+          console.error('❌ TUNNEL PROXY ERROR:', error);
+          return new Response(JSON.stringify({
+            error: 'Proxy request failed',
+            message: error.message,
+            channelId: channelId,
+            file: file,
+            vpsUrl: vpsHlsUrl
+          }), {
+            status: 502,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+          });
+        }
+      }
+      
+      // 如果是tunnel-proxy路径但不匹配任何路由，返回详细信息
+      return new Response(JSON.stringify({
+        message: 'Tunnel proxy path detected but no matching route',
+        path: path,
+        method: method,
+        timestamp: new Date().toISOString()
+      }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+    }
+    
     // 代理配置API路由
     if (path.startsWith('/api/admin/proxy/')) {
       const proxyHandler = new ProxyHandler();
