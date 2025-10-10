@@ -75,9 +75,31 @@ export const useStreamsStore = defineStore('streams', () => {
                     console.log('🚀 使用隧道优化端点');
                   }
                 } else {
-                  // 隧道禁用，使用直连模式
-                  tunnelBaseURL = 'https://yoyo-vps.5202021.xyz';
-                  console.log('🔗 使用直连模式');
+                  // 隧道禁用，检查代理配置
+                  const proxyConfigStr = localStorage.getItem('proxy_config');
+                  if (proxyConfigStr) {
+                    try {
+                      const proxyConfig = JSON.parse(proxyConfigStr);
+                      if (proxyConfig.enabled && proxyConfig.activeProxyId) {
+                        // 代理启用，使用Workers代理模式
+                        useWorkerProxy = true;
+                        tunnelBaseURL = 'https://yoyoapi.5202021.xyz';
+                        console.log('🔄 使用代理模式（透明代理）');
+                      } else {
+                        // 代理禁用，使用直连模式
+                        tunnelBaseURL = 'https://yoyo-vps.5202021.xyz';
+                        console.log('🔗 使用直连模式');
+                      }
+                    } catch (e) {
+                      // 代理配置解析失败，使用直连模式
+                      tunnelBaseURL = 'https://yoyo-vps.5202021.xyz';
+                      console.log('🔗 使用直连模式（代理配置解析失败）');
+                    }
+                  } else {
+                    // 无代理配置，使用直连模式
+                    tunnelBaseURL = 'https://yoyo-vps.5202021.xyz';
+                    console.log('🔗 使用直连模式（无代理配置）');
+                  }
                 }
               } catch (e) {
                 console.warn('⚠️ 隧道配置解析失败，使用默认配置');
