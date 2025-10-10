@@ -335,6 +335,54 @@ const maskProxyUrl = (url) => {
   return url.length > 50 ? url.substring(0, 50) + '...' : url
 }
 
+// 基于服务器位置估算延迟
+const estimateLatencyByServer = (config) => {
+  if (!config) return '配置验证'
+  
+  try {
+    // 解析代理配置中的服务器地址
+    let serverHost = ''
+    
+    if (config.includes('@')) {
+      const parts = config.split('@')
+      if (parts[1]) {
+        const hostPart = parts[1].split(':')[0].split('?')[0]
+        serverHost = hostPart
+      }
+    }
+    
+    // 基于服务器地址估算延迟
+    if (serverHost) {
+      // 日本服务器
+      if (serverHost.includes('jp') || serverHost.includes('japan') || serverHost.includes('136.0.11')) {
+        return '~80ms'
+      }
+      // 美国服务器
+      if (serverHost.includes('us') || serverHost.includes('america') || serverHost.includes('104.224')) {
+        return '~150ms'
+      }
+      // 香港服务器
+      if (serverHost.includes('hk') || serverHost.includes('hongkong')) {
+        return '~30ms'
+      }
+      // 新加坡服务器
+      if (serverHost.includes('sg') || serverHost.includes('singapore')) {
+        return '~50ms'
+      }
+      // 欧洲服务器
+      if (serverHost.includes('eu') || serverHost.includes('europe')) {
+        return '~200ms'
+      }
+    }
+    
+    // 默认估算
+    return '~100ms'
+  } catch (error) {
+    console.warn('延迟估算失败:', error)
+    return '配置验证'
+  }
+}
+
 // 处理代理开关切换
 const handleProxyToggle = async (enabled) => {
   switchLoading.value = true
@@ -439,15 +487,16 @@ const testProxy = async (proxy) => {
         ElMessage.success(`代理连接测试成功 (VPS验证), 网络延迟: ${latencyText}`)
         proxy.latency = testData.latency
       } else if (method === 'local_validation') {
-        // 对于本地验证，不显示1ms的无意义延迟
+        // 对于本地验证，提供更合理的延迟估算
         if (proxy.isActive && currentLatency && typeof currentLatency === 'number') {
           // 保持当前真实延迟不变
           proxy.latency = currentLatency
           ElMessage.success(`代理配置验证通过 - 当前连接延迟: ${currentLatency}ms (来自VPS状态)`)
         } else {
-          // 对于未连接的代理，显示配置验证而不是1ms
-          proxy.latency = '配置验证'
-          ElMessage.success(`代理配置验证通过 - 配置格式正确，服务器信息有效`)
+          // 对于未连接的代理，基于服务器地理位置估算延迟
+          const estimatedLatency = estimateLatencyByServer(proxy.config)
+          proxy.latency = estimatedLatency
+          ElMessage.success(`代理配置验证通过 - 预估延迟: ${estimatedLatency} (基于服务器位置)`)
         }
       } else {
         ElMessage.success(`代理测试成功, 延迟: ${latencyText}`)
