@@ -606,26 +606,31 @@ const loadProxyConfig = async () => {
       try {
         const status = await proxyApi.getStatus()
         console.log('获取到的代理状态:', status)
-        connectionStatus.value = status.connectionStatus || 'disconnected'
-        currentProxy.value = status.currentProxy
+        
+        // 处理API响应的数据结构 - 可能有data嵌套
+        const statusData = status.data || status
+        console.log('解析后的状态数据:', statusData)
+        
+        connectionStatus.value = statusData.connectionStatus || 'disconnected'
+        currentProxy.value = statusData.currentProxy
         
         // 强制更新所有代理的连接状态，使用API返回的真实状态
         console.log('开始更新代理状态，代理列表长度:', proxyList.value.length)
-        console.log('VPS返回的活跃代理ID:', status.currentProxy)
+        console.log('VPS返回的活跃代理ID:', statusData.currentProxy)
         console.log('配置中的活跃代理ID:', proxySettings.value.activeProxyId)
         
         proxyList.value.forEach(proxy => {
           // 使用VPS返回的currentProxy作为准确的活跃代理标识
-          if (proxy.id === status.currentProxy) {
+          if (proxy.id === statusData.currentProxy) {
             // 当前连接的代理
-            const actualStatus = status.connectionStatus === 'connected' ? 'connected' : 
-                               status.connectionStatus === 'connecting' ? 'connecting' : 'disconnected'
+            const actualStatus = statusData.connectionStatus === 'connected' ? 'connected' : 
+                               statusData.connectionStatus === 'connecting' ? 'connecting' : 'disconnected'
             proxy.status = actualStatus
             proxy.isActive = true
             console.log(`✅ 设置活跃代理 ${proxy.name}(${proxy.id}) 状态: ${actualStatus}`)
             
-            if (status.statistics && status.statistics.avgLatency) {
-              proxy.latency = status.statistics.avgLatency
+            if (statusData.statistics && statusData.statistics.avgLatency) {
+              proxy.latency = statusData.statistics.avgLatency
               console.log(`✅ 设置活跃代理 ${proxy.name} 延迟: ${proxy.latency}ms`)
             }
           } else {
@@ -638,9 +643,9 @@ const loadProxyConfig = async () => {
         })
         
         // 同步更新activeProxyId以确保一致性
-        if (status.currentProxy && status.currentProxy !== proxySettings.value.activeProxyId) {
-          console.log(`🔄 同步活跃代理ID: ${proxySettings.value.activeProxyId} -> ${status.currentProxy}`)
-          proxySettings.value.activeProxyId = status.currentProxy
+        if (statusData.currentProxy && statusData.currentProxy !== proxySettings.value.activeProxyId) {
+          console.log(`🔄 同步活跃代理ID: ${proxySettings.value.activeProxyId} -> ${statusData.currentProxy}`)
+          proxySettings.value.activeProxyId = statusData.currentProxy
         }
       } catch (error) {
         console.warn('获取代理状态失败:', error)
