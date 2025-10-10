@@ -480,8 +480,13 @@ const testProxy = async (proxy) => {
       const currentLatency = proxy.latency
       console.log(`🔍 测试代理 ${proxy.name}: method=${method}, isActive=${proxy.isActive}, currentLatency=${currentLatency}, testLatency=${testData.latency}`)
       
-      // 强制使用本地验证逻辑，因为API测试经常失败
-      if (method === 'local_validation' || method === 'unknown' || testData.latency === 1) {
+      // 处理不同测试方法的结果
+      if (method === 'network_test') {
+        // 真实网络延迟测试成功
+        proxy.latency = testData.latency
+        console.log(`🌐 网络延迟测试成功 ${proxy.name}: ${testData.latency}ms`)
+        ElMessage.success(`代理网络测试成功 - 真实延迟: ${testData.latency}ms`)
+      } else if (method === 'local_validation' || method === 'unknown' || testData.latency === 1) {
         console.log(`🔧 使用本地验证逻辑处理代理: ${proxy.name}`)
         
         if (proxy.isActive && currentLatency && typeof currentLatency === 'number') {
