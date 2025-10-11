@@ -13,7 +13,7 @@ import { getProxyConfig, setProxyConfig } from '../utils/kv.js';
  */
 async function requireAdmin(request, env) {
   const auth = await validateSession(request, env);
-  if (!auth) {
+  if (!auth || !auth.user) {
     return { error: errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request) };
   }
 
@@ -32,10 +32,8 @@ export const handleProxyManager = {
   async connect(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       const { proxyConfig } = await request.json();
       
@@ -92,10 +90,8 @@ export const handleProxyManager = {
   async disconnect(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       logInfo('管理员请求断开代理', { admin: auth.user.username });
 
@@ -138,10 +134,8 @@ export const handleProxyManager = {
   async status(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       // 从VPS获取状态
       const vpsResponse = await fetch(`${env.VPS_API_URL}/api/proxy/status`, {
@@ -172,10 +166,8 @@ export const handleProxyManager = {
   async test(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       const { proxyConfig, testUrlId = 'baidu' } = await request.json();
       
@@ -269,10 +261,8 @@ export const handleProxyManager = {
   async updateConfig(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       const { action, config } = await request.json();
       
@@ -319,10 +309,8 @@ export const handleProxyManager = {
   async updateSettings(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       const settings = await request.json();
       
@@ -356,10 +344,8 @@ export const handleProxyManager = {
   async control(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       const { action, proxyId, ...data } = await request.json();
       
