@@ -169,9 +169,21 @@ export const handleProxyManager = {
       const { auth, error } = await requireAdmin(request, env);
       if (error) return error;
 
-      const { proxyConfig, testUrlId = 'baidu' } = await request.json();
+      const requestData = await request.json();
       
-      if (!proxyConfig) {
+      // 支持两种格式：{ proxyConfig: {...} } 或直接 { id, name, type, config, ... }
+      let proxyConfig;
+      let testUrlId = 'baidu';
+      
+      if (requestData.proxyConfig) {
+        // 格式1: { proxyConfig: {...}, testUrlId: 'baidu' }
+        proxyConfig = requestData.proxyConfig;
+        testUrlId = requestData.testUrlId || 'baidu';
+      } else if (requestData.id && requestData.config) {
+        // 格式2: { id, name, type, config, testUrlId }
+        proxyConfig = requestData;
+        testUrlId = requestData.testUrlId || 'baidu';
+      } else {
         return errorResponse('缺少代理配置数据', 'MISSING_PROXY_CONFIG', 400, request);
       }
 
