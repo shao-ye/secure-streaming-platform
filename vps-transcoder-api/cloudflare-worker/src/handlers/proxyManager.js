@@ -8,6 +8,22 @@ import { errorResponse, successResponse } from '../utils/cors.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { getProxyConfig, setProxyConfig } from '../utils/kv.js';
 
+/**
+ * 验证管理员权限
+ */
+async function requireAdmin(request, env) {
+  const auth = await validateSession(request, env);
+  if (!auth) {
+    return { error: errorResponse('Authentication required', 'AUTH_REQUIRED', 401, request) };
+  }
+
+  if (auth.user.role !== 'admin') {
+    return { error: errorResponse('Admin privileges required', 'ADMIN_REQUIRED', 403, request) };
+  }
+
+  return { auth };
+}
+
 export const handleProxyManager = {
   /**
    * 连接代理
@@ -225,15 +241,14 @@ export const handleProxyManager = {
   async getConfig(request, env, ctx) {
     try {
       // 验证管理员权限
-      const auth = await validateSession(request, env);
-      if (!auth.success || auth.user.role !== 'admin') {
-        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
-      }
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
 
       // 使用KV工具函数获取代理配置
       const config = await getProxyConfig(env);
       
       logInfo('代理配置获取成功', { 
+        admin: auth.user.username,
         proxyCount: config.proxies?.length || 0,
         enabled: config.enabled,
         activeProxyId: config.activeProxyId
