@@ -251,8 +251,14 @@ class ProxyManager {
       
       const checkReady = async () => {
         try {
-          // 检查SOCKS5端口是否可用
-          const result = await execAsync(`netstat -tlnp | grep :${this.proxyPort}`);
+          // 检查SOCKS5端口是否可用 (优先使用ss命令，fallback到netstat)
+          let result;
+          try {
+            result = await execAsync(`ss -tlnp | grep :${this.proxyPort}`);
+          } catch (ssError) {
+            result = await execAsync(`netstat -tlnp | grep :${this.proxyPort}`);
+          }
+          
           if (result.stdout.includes(`:${this.proxyPort}`)) {
             logger.info('代理端口已就绪:', this.proxyPort);
             resolve();
