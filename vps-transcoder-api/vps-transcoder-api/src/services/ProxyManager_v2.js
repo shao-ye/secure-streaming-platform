@@ -446,7 +446,9 @@ class ProxyManager {
         fp: params.get('fp') || '',
         pbk: params.get('pbk') || '',
         sid: params.get('sid') || '',
-        spx: params.get('spx') || ''
+        spx: params.get('spx') || '',
+        flow: params.get('flow') || '',
+        sni: params.get('sni') || ''
       };
 
       logger.info('解析VLESS配置:', {
@@ -521,7 +523,8 @@ class ProxyManager {
             "port": parsed.port,
             "users": [{
               "id": parsed.uuid,
-              "encryption": parsed.encryption
+              "encryption": parsed.encryption,
+              "flow": parsed.flow || ""
             }]
           }]
         };
@@ -596,7 +599,7 @@ class ProxyManager {
     } else if (parsed.security === 'reality') {
       streamSettings.security = "reality";
       streamSettings.realitySettings = {
-        "serverName": parsed.host || parsed.address,
+        "serverName": parsed.sni || parsed.host || parsed.address,
         "fingerprint": parsed.fp || "chrome",
         "publicKey": parsed.pbk || "",
         "shortId": parsed.sid || "",
