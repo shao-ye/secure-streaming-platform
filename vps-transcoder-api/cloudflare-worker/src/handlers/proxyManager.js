@@ -6,6 +6,7 @@
 import { validateSession } from './auth.js';
 import { errorResponse, successResponse } from '../utils/cors.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { getProxyConfig, setProxyConfig } from '../utils/kv.js';
 
 export const handleProxyManager = {
   /**
@@ -229,18 +230,15 @@ export const handleProxyManager = {
         return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
       }
 
-      // 从KV获取代理配置
-      const proxyConfigData = await env.YOYO_USER_DB.get('proxy_config');
+      // 使用KV工具函数获取代理配置
+      const config = await getProxyConfig(env);
       
-      if (!proxyConfigData) {
-        return successResponse({
-          enabled: false,
-          activeProxyId: null,
-          proxies: []
-        }, '代理配置获取成功', request);
-      }
+      logInfo('代理配置获取成功', { 
+        proxyCount: config.proxies?.length || 0,
+        enabled: config.enabled,
+        activeProxyId: config.activeProxyId
+      });
 
-      const config = JSON.parse(proxyConfigData);
       return successResponse(config, '代理配置获取成功', request);
 
     } catch (error) {
@@ -273,8 +271,8 @@ export const handleProxyManager = {
         activeProxyId: config.settings?.activeProxyId
       });
 
-      // 保存到KV
-      await env.YOYO_USER_DB.put('proxy_config', JSON.stringify(config));
+      // 使用KV工具函数保存配置
+      await setProxyConfig(env, config);
 
       // 同步到VPS
       const vpsResponse = await fetch(`${env.VPS_API_URL}/api/proxy/config`, {
@@ -319,19 +317,14 @@ export const handleProxyManager = {
       });
 
       // 获取现有配置
-      const existingConfigData = await env.YOYO_USER_DB.get('proxy_config');
-      let config = existingConfigData ? JSON.parse(existingConfigData) : {
-        enabled: false,
-        activeProxyId: null,
-        proxies: []
-      };
+      let config = await getProxyConfig(env);
 
       // 更新设置
       config = { ...config, ...settings };
       config.settings = { ...config.settings, ...settings };
 
-      // 保存到KV
-      await env.YOYO_USER_DB.put('proxy_config', JSON.stringify(config));
+      // 使用KV工具函数保存配置
+      await setProxyConfig(env, config);
 
       return successResponse({ success: true }, '代理设置更新成功', request);
 

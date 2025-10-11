@@ -137,6 +137,39 @@ export async function getStreamsConfig(env) {
 }
 
 /**
+ * 获取代理配置
+ */
+export async function getProxyConfig(env) {
+  try {
+    const proxyData = await env.YOYO_USER_DB.get('proxy_config', 'json');
+    return proxyData || {
+      enabled: false,
+      activeProxyId: null,
+      proxies: [],
+      settings: {
+        enabled: false,
+        activeProxyId: null,
+        autoSwitch: false,
+        testInterval: 300
+      }
+    };
+  } catch (error) {
+    logError(env, 'Failed to get proxy config from KV', error);
+    return {
+      enabled: false,
+      activeProxyId: null,
+      proxies: [],
+      settings: {
+        enabled: false,
+        activeProxyId: null,
+        autoSwitch: false,
+        testInterval: 300
+      }
+    };
+  }
+}
+
+/**
  * 保存流配置
  */
 export async function setStreamsConfig(env, streamsConfig) {
@@ -146,6 +179,24 @@ export async function setStreamsConfig(env, streamsConfig) {
     return streamsConfig;
   } catch (error) {
     logError(env, 'Failed to save streams config to KV', error);
+    throw error;
+  }
+}
+
+/**
+ * 保存代理配置
+ */
+export async function setProxyConfig(env, proxyConfig) {
+  try {
+    await env.YOYO_USER_DB.put('proxy_config', JSON.stringify(proxyConfig));
+    logInfo(env, 'Proxy config saved to KV', { 
+      enabled: proxyConfig.enabled,
+      proxyCount: proxyConfig.proxies?.length || 0,
+      activeProxyId: proxyConfig.activeProxyId
+    });
+    return proxyConfig;
+  } catch (error) {
+    logError(env, 'Failed to save proxy config to KV', error);
     throw error;
   }
 }
