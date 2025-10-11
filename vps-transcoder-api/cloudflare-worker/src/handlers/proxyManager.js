@@ -255,7 +255,7 @@ export const handleProxyManager = {
   },
 
   /**
-   * 更新代理配置
+   * 创建/更新代理配置
    * POST /api/admin/proxy/config
    */
   async updateConfig(request, env, ctx) {
@@ -264,8 +264,16 @@ export const handleProxyManager = {
       const { auth, error } = await requireAdmin(request, env);
       if (error) return error;
 
-      const { action, config } = await request.json();
+      const requestData = await request.json();
       
+      // 检查是否是创建单个代理的请求（前端直接发送代理数据）
+      if (requestData.name && requestData.type && requestData.config) {
+        // 这是创建单个代理的请求
+        return await this.createSingleProxy(request, env, auth, requestData);
+      }
+      
+      // 检查是否是更新整个配置的请求
+      const { action, config } = requestData;
       if (action !== 'update' || !config) {
         return errorResponse('无效的请求参数', 'INVALID_PARAMS', 400, request);
       }
@@ -299,6 +307,52 @@ export const handleProxyManager = {
     } catch (error) {
       logError('更新代理配置异常', error);
       return errorResponse('更新代理配置异常', 'PROXY_CONFIG_UPDATE_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 创建单个代理
+   */
+  async createSingleProxy(request, env, auth, proxyData) {
+    try {
+      // 生成代理ID
+      const proxyId = `proxy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // 创建代理对象
+      const newProxy = {
+        id: proxyId,
+        name: proxyData.name,
+        type: proxyData.type,
+        config: proxyData.config,
+        isActive: false,
+        latency: -1,
+        lastTestTime: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      logInfo('管理员创建代理', { 
+        admin: auth.user.username,
+        proxyId: proxyId,
+        proxyName: proxyData.name,
+        proxyType: proxyData.type
+      });
+
+      // 获取现有配置
+      const config = await getProxyConfig(env);
+      
+      // 添加新代理到列表
+      config.proxies.push(newProxy);
+      config.updatedAt = new Date().toISOString();
+
+      // 保存更新后的配置
+      await setProxyConfig(env, config);
+
+      return successResponse(newProxy, '代理创建成功', request);
+
+    } catch (error) {
+      logError('创建代理异常', error);
+      return errorResponse('创建代理异常', 'PROXY_CREATE_ERROR', 500, request);
     }
   },
 
