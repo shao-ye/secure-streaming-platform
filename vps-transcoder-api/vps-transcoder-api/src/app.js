@@ -121,6 +121,11 @@ try {
     app.use('/api/proxy', proxyRoutes);
     logger.info('代理管理API路由已加载');
     
+    // 部署管理API路由
+    const deploymentRoutes = require('./routes/deployment');
+    app.use('/api/deployment', deploymentRoutes);
+    logger.info('部署管理API路由已加载');
+    
     // 保留原有API路由（向后兼容）
     const apiRoutes = require('./routes/api');
     app.use('/api', apiRoutes);
