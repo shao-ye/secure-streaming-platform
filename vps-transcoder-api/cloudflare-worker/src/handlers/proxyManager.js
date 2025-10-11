@@ -562,23 +562,21 @@ export const handleProxyManager = {
       if (existingConfigData) {
         config = JSON.parse(existingConfigData);
       } else {
-        // 创建默认配置结构
+        // 如果没有现有配置，记录警告并创建最小默认结构
+        logError('警告: proxy-config不存在，可能导致数据丢失');
         config = {
           enabled: false,
           activeProxyId: null,
           proxies: [],
           autoSwitch: false,
           testInterval: 300,
-          currentTestUrlId: 'baidu',
-          settings: {
-            enabled: false,
-            activeProxyId: null,
-            autoSwitch: false,
-            testInterval: 300,
-            currentTestUrlId: 'baidu'
-          }
+          currentTestUrlId: 'baidu'
         };
       }
+      
+      // 确保必要字段存在，但保护现有数据
+      if (!config.proxies) config.proxies = [];
+      if (!config.settings) config.settings = {};
       
       // 更新顶级设置
       if (settings.enabled !== undefined) config.enabled = settings.enabled;
