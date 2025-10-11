@@ -297,5 +297,114 @@ export const handleProxyManager = {
       logError('更新代理配置异常', error);
       return errorResponse('更新代理配置异常', 'PROXY_CONFIG_UPDATE_ERROR', 500, request);
     }
+  },
+
+  /**
+   * 更新代理设置
+   * PUT /api/admin/proxy/settings
+   */
+  async updateSettings(request, env, ctx) {
+    try {
+      // 验证管理员权限
+      const auth = await validateSession(request, env);
+      if (!auth.success || auth.user.role !== 'admin') {
+        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
+      }
+
+      const settings = await request.json();
+      
+      logInfo('管理员更新代理设置', { 
+        admin: auth.user.username,
+        settings
+      });
+
+      // 获取现有配置
+      const existingConfigData = await env.YOYO_USER_DB.get('proxy_config');
+      let config = existingConfigData ? JSON.parse(existingConfigData) : {
+        enabled: false,
+        activeProxyId: null,
+        proxies: []
+      };
+
+      // 更新设置
+      config = { ...config, ...settings };
+      config.settings = { ...config.settings, ...settings };
+
+      // 保存到KV
+      await env.YOYO_USER_DB.put('proxy_config', JSON.stringify(config));
+
+      return successResponse({ success: true }, '代理设置更新成功', request);
+
+    } catch (error) {
+      logError('更新代理设置异常', error);
+      return errorResponse('更新代理设置异常', 'PROXY_SETTINGS_UPDATE_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 代理控制操作
+   * POST /api/admin/proxy/control
+   */
+  async control(request, env, ctx) {
+    try {
+      // 验证管理员权限
+      const auth = await validateSession(request, env);
+      if (!auth.success || auth.user.role !== 'admin') {
+        return errorResponse('需要管理员权限', 'ADMIN_REQUIRED', 403, request);
+      }
+
+      const { action, proxyId, ...data } = await request.json();
+      
+      logInfo('管理员代理控制操作', { 
+        admin: auth.user.username,
+        action,
+        proxyId
+      });
+
+      // 根据不同操作处理
+      switch (action) {
+        case 'enable':
+          // 启用代理 - 转发到VPS
+          const enableResponse = await fetch(`${env.VPS_API_URL}/api/proxy/connect`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': env.VPS_API_KEY
+            },
+            body: JSON.stringify({ proxyConfig: { id: proxyId, ...data } })
+          });
+          
+          if (!enableResponse.ok) {
+            return errorResponse('启用代理失败', 'PROXY_ENABLE_FAILED', 502, request);
+          }
+          
+          const enableResult = await enableResponse.json();
+          return successResponse(enableResult.data, '代理启用成功', request);
+
+        case 'disable':
+          // 禁用代理 - 转发到VPS
+          const disableResponse = await fetch(`${env.VPS_API_URL}/api/proxy/disconnect`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': env.VPS_API_KEY
+            }
+          });
+          
+          if (!disableResponse.ok) {
+            return errorResponse('禁用代理失败', 'PROXY_DISABLE_FAILED', 502, request);
+          }
+          
+          const disableResult = await disableResponse.json();
+          return successResponse(disableResult.data, '代理禁用成功', request);
+
+        default:
+          return errorResponse('不支持的操作', 'UNSUPPORTED_ACTION', 400, request);
+      }
+
+    } catch (error) {
+      logError('代理控制操作异常', error);
+      return errorResponse('代理控制操作异常', 'PROXY_CONTROL_ERROR', 500, request);
+    }
   }
 };
