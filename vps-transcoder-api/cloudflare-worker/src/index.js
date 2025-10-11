@@ -287,8 +287,7 @@ export default {
       // 登录日志API
       router.get('/api/admin/login/logs', (req, env, ctx) => handleAdmin.getLoginLogs(req, env, ctx));
       
-      // 代理管理API
-      router.post('/api/admin/proxy/test', (req, env, ctx) => handleAdmin.testProxy(req, env, ctx));
+      // 代理管理API (已移至proxyManager处理器)
       
       // 隧道管理API路由
       router.get('/api/admin/tunnel/config', (req, env, ctx) => deploymentHandlers.getTunnelConfig(req, env, ctx));
@@ -314,6 +313,8 @@ export default {
       router.post('/api/admin/proxy/test', (req, env, ctx) => handleProxyManager.test(req, env, ctx));
       router.get('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.getConfig(req, env, ctx));
       router.post('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.updateConfig(req, env, ctx));
+      router.put('/api/admin/proxy/settings', (req, env, ctx) => handleProxyManager.updateSettings(req, env, ctx));
+      router.post('/api/admin/proxy/control', (req, env, ctx) => handleProxyManager.control(req, env, ctx));
 
       // 静态资源路由（用于前端资源）
       router.get('/static/*', (req, env, ctx) => handlePages.static(req, env, ctx));
