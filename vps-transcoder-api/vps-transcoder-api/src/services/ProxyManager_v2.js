@@ -14,8 +14,8 @@ class ProxyManager {
     this.activeProxy = null;
     this.v2rayProcess = null;
     this.proxyPort = 1080;
-    this.configPath = '/etc/v2ray/configs/yoyo-proxy.json';
-    this.logPath = '/var/log/v2ray/yoyo-proxy.log';
+    this.configPath = '/opt/yoyo-transcoder/proxy-configs/yoyo-proxy.json';
+    this.logPath = '/opt/yoyo-transcoder/logs/yoyo-proxy.log';
     this.connectionStatus = 'disconnected'; // disconnected, connecting, connected, error
     this.statistics = {
       bytesUp: 0,
