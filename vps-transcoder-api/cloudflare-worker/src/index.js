@@ -313,6 +313,8 @@ export default {
       router.post('/api/admin/proxy/test', (req, env, ctx) => handleProxyManager.test(req, env, ctx));
       router.get('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.getConfig(req, env, ctx));
       router.post('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.updateConfig(req, env, ctx));
+      router.put('/api/admin/proxy/config/:id', (req, env, ctx) => handleProxyManager.updateProxy(req, env, ctx));
+      router.delete('/api/admin/proxy/config/:id', (req, env, ctx) => handleProxyManager.deleteProxy(req, env, ctx));
       router.put('/api/admin/proxy/settings', (req, env, ctx) => handleProxyManager.updateSettings(req, env, ctx));
       router.post('/api/admin/proxy/control', (req, env, ctx) => handleProxyManager.control(req, env, ctx));
 
