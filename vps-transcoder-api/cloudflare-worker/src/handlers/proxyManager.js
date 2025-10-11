@@ -248,26 +248,43 @@ export const handleProxyManager = {
       const { auth, error } = await requireAdmin(request, env);
       if (error) return error;
 
-      // 根据设计文档使用分布式存储方式读取
-      const proxies = await this.getAllProxyConfigs(env);
-      const globalConfig = await this.getGlobalConfig(env);
+      // 使用统一存储格式从proxy-config读取
+      const proxyConfigData = await env.YOYO_USER_DB.get('proxy-config');
       
-      const response = {
-        enabled: globalConfig.enabled || false,
-        activeProxyId: globalConfig.activeProxyId || null,
-        proxies: proxies.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-        settings: {
-          enabled: globalConfig.enabled || false,
-          activeProxyId: globalConfig.activeProxyId || null,
-          autoSwitch: globalConfig.autoSwitch || false,
-          testInterval: globalConfig.testInterval || 300,
-          currentTestUrlId: globalConfig.currentTestUrlId || 'baidu'
-        }
-      };
+      let response;
+      if (proxyConfigData) {
+        const config = JSON.parse(proxyConfigData);
+        response = {
+          enabled: config.enabled || false,
+          activeProxyId: config.activeProxyId || null,
+          proxies: (config.proxies || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+          settings: {
+            enabled: config.enabled || false,
+            activeProxyId: config.activeProxyId || null,
+            autoSwitch: config.autoSwitch || false,
+            testInterval: config.testInterval || 300,
+            currentTestUrlId: config.currentTestUrlId || config.settings?.currentTestUrlId || 'baidu'
+          }
+        };
+      } else {
+        // 返回默认配置
+        response = {
+          enabled: false,
+          activeProxyId: null,
+          proxies: [],
+          settings: {
+            enabled: false,
+            activeProxyId: null,
+            autoSwitch: false,
+            testInterval: 300,
+            currentTestUrlId: 'baidu'
+          }
+        };
+      }
       
       logInfo('代理配置获取成功', { 
         admin: auth.user.username,
-        proxyCount: proxies.length,
+        proxyCount: response.proxies.length,
         enabled: response.enabled,
         activeProxyId: response.activeProxyId
       });
@@ -281,12 +298,13 @@ export const handleProxyManager = {
   },
 
   /**
-   * 获取所有代理配置（分布式存储）
+   * 获取所有代理配置（适配现有KV格式）
    */
   async getAllProxyConfigs(env) {
     try {
+      // 先尝试分布式存储格式
       const { keys } = await env.YOYO_USER_DB.list({ prefix: 'proxy_config_' });
-      const proxies = [];
+      let proxies = [];
       
       for (const key of keys) {
         try {
@@ -299,6 +317,18 @@ export const handleProxyManager = {
         }
       }
       
+      // 如果分布式存储没有数据，尝试从现有的proxy-config中获取
+      if (proxies.length === 0) {
+        const existingConfig = await env.YOYO_USER_DB.get('proxy-config');
+        if (existingConfig) {
+          const config = JSON.parse(existingConfig);
+          if (config.proxies && Array.isArray(config.proxies)) {
+            proxies = config.proxies;
+            logInfo('从现有proxy-config格式加载代理列表', { count: proxies.length });
+          }
+        }
+      }
+      
       return proxies;
     } catch (error) {
       logError('获取代理配置列表失败', error);
@@ -307,12 +337,42 @@ export const handleProxyManager = {
   },
 
   /**
-   * 获取全局配置
+   * 获取全局配置（适配现有KV格式）
    */
   async getGlobalConfig(env) {
     try {
-      const globalConfigData = await env.YOYO_USER_DB.get('proxy_global_config');
-      if (globalConfigData) {
+      // 先尝试新格式
+      let globalConfigData = await env.YOYO_USER_DB.get('proxy_global_config');
+      
+      // 如果新格式不存在，尝试从现有的proxy-config中提取
+      if (!globalConfigData) {
+        const existingConfig = await env.YOYO_USER_DB.get('proxy-config');
+        if (existingConfig) {
+          const config = JSON.parse(existingConfig);
+          // 从现有配置中提取全局设置
+          return {
+            enabled: config.enabled || false,
+            activeProxyId: config.activeProxyId || null,
+            autoSwitch: config.autoSwitch || false,
+            testInterval: config.testInterval || 300,
+            currentTestUrlId: config.currentTestUrlId || 'baidu',
+            testUrls: {
+              "baidu": {
+                id: "baidu",
+                name: "百度 (推荐)",
+                url: "https://www.baidu.com",
+                description: "测试代理对中国用户的加速效果"
+              },
+              "google": {
+                id: "google", 
+                name: "谷歌",
+                url: "https://www.google.com",
+                description: "测试代理的国际访问能力"
+              }
+            }
+          };
+        }
+      } else {
         return JSON.parse(globalConfigData);
       }
       
@@ -407,7 +467,7 @@ export const handleProxyManager = {
   },
 
   /**
-   * 创建单个代理（分布式存储）
+   * 创建单个代理（统一存储格式）
    */
   async createSingleProxy(request, env, auth, proxyData) {
     try {
@@ -435,9 +495,40 @@ export const handleProxyManager = {
         proxyType: proxyData.type
       });
 
-      // 使用分布式存储保存代理配置
-      const proxyKey = `proxy_config_${proxyId}`;
-      await env.YOYO_USER_DB.put(proxyKey, JSON.stringify(newProxy));
+      // 获取现有配置
+      const existingConfigData = await env.YOYO_USER_DB.get('proxy-config');
+      let config;
+      
+      if (existingConfigData) {
+        config = JSON.parse(existingConfigData);
+      } else {
+        // 创建默认配置结构
+        config = {
+          enabled: false,
+          activeProxyId: null,
+          proxies: [],
+          autoSwitch: false,
+          testInterval: 300,
+          currentTestUrlId: 'baidu',
+          settings: {
+            enabled: false,
+            activeProxyId: null,
+            autoSwitch: false,
+            testInterval: 300,
+            currentTestUrlId: 'baidu'
+          }
+        };
+      }
+      
+      // 添加新代理到列表
+      if (!config.proxies) {
+        config.proxies = [];
+      }
+      config.proxies.push(newProxy);
+      config.updatedAt = new Date().toISOString();
+
+      // 保存更新后的配置
+      await env.YOYO_USER_DB.put('proxy-config', JSON.stringify(config));
 
       return successResponse(newProxy, '代理创建成功', request);
 
@@ -448,7 +539,7 @@ export const handleProxyManager = {
   },
 
   /**
-   * 更新代理设置（全局配置）
+   * 更新代理设置（统一存储格式）
    * PUT /api/admin/proxy/settings
    */
   async updateSettings(request, env, ctx) {
@@ -464,18 +555,50 @@ export const handleProxyManager = {
         settings
       });
 
-      // 获取现有全局配置
-      const existingConfig = await this.getGlobalConfig(env);
+      // 获取现有配置
+      const existingConfigData = await env.YOYO_USER_DB.get('proxy-config');
+      let config;
       
-      // 更新全局配置
-      const updatedConfig = {
-        ...existingConfig,
-        ...settings,
-        updatedAt: new Date().toISOString()
-      };
+      if (existingConfigData) {
+        config = JSON.parse(existingConfigData);
+      } else {
+        // 创建默认配置结构
+        config = {
+          enabled: false,
+          activeProxyId: null,
+          proxies: [],
+          autoSwitch: false,
+          testInterval: 300,
+          currentTestUrlId: 'baidu',
+          settings: {
+            enabled: false,
+            activeProxyId: null,
+            autoSwitch: false,
+            testInterval: 300,
+            currentTestUrlId: 'baidu'
+          }
+        };
+      }
+      
+      // 更新顶级设置
+      if (settings.enabled !== undefined) config.enabled = settings.enabled;
+      if (settings.activeProxyId !== undefined) config.activeProxyId = settings.activeProxyId;
+      if (settings.autoSwitch !== undefined) config.autoSwitch = settings.autoSwitch;
+      if (settings.testInterval !== undefined) config.testInterval = settings.testInterval;
+      if (settings.currentTestUrlId !== undefined) config.currentTestUrlId = settings.currentTestUrlId;
+      
+      // 更新settings对象（保持兼容性）
+      if (!config.settings) config.settings = {};
+      if (settings.enabled !== undefined) config.settings.enabled = settings.enabled;
+      if (settings.activeProxyId !== undefined) config.settings.activeProxyId = settings.activeProxyId;
+      if (settings.autoSwitch !== undefined) config.settings.autoSwitch = settings.autoSwitch;
+      if (settings.testInterval !== undefined) config.settings.testInterval = settings.testInterval;
+      if (settings.currentTestUrlId !== undefined) config.settings.currentTestUrlId = settings.currentTestUrlId;
+      
+      config.updatedAt = new Date().toISOString();
 
-      // 保存全局配置
-      await env.YOYO_USER_DB.put('proxy_global_config', JSON.stringify(updatedConfig));
+      // 保存更新后的配置
+      await env.YOYO_USER_DB.put('proxy-config', JSON.stringify(config));
 
       return successResponse({ success: true }, '代理设置更新成功', request);
 
