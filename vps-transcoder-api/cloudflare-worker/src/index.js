@@ -12,6 +12,7 @@ import { handleAuth } from './handlers/auth';
 import { handleStreams } from './handlers/streams';
 import { handleAdmin } from './handlers/admin';
 import { handleProxy } from './handlers/proxy';
+import { handleProxyManager } from './handlers/proxyManager.js';
 import { handlePages } from './handlers/pages';
 import { handleVerify } from './handlers/verify';
 import { deploymentHandlers } from './handlers/deployment.js';
@@ -305,6 +306,14 @@ export default {
 
       // HLS代理路由
       router.get('/hls/:streamId/:file', (req, env, ctx) => handleProxy.hlsFile(req, env, ctx));
+
+      // 代理管理路由
+      router.post('/api/admin/proxy/connect', (req, env, ctx) => handleProxyManager.connect(req, env, ctx));
+      router.post('/api/admin/proxy/disconnect', (req, env, ctx) => handleProxyManager.disconnect(req, env, ctx));
+      router.get('/api/admin/proxy/status', (req, env, ctx) => handleProxyManager.status(req, env, ctx));
+      router.post('/api/admin/proxy/test', (req, env, ctx) => handleProxyManager.test(req, env, ctx));
+      router.get('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.getConfig(req, env, ctx));
+      router.post('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.updateConfig(req, env, ctx));
 
       // 静态资源路由（用于前端资源）
       router.get('/static/*', (req, env, ctx) => handlePages.static(req, env, ctx));

@@ -1,15 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const ProxyManager = require('../services/ProxyManager');
+const ProxyManager = require('../services/ProxyManager_v2');
 const logger = require('../utils/logger');
 
 // 创建代理管理器实例
 const proxyManager = new ProxyManager();
 
-// 初始化代理管理器
-proxyManager.initialize().catch(error => {
-  logger.error('代理管理器初始化失败:', error);
-});
+// ProxyManager_v2 不需要初始化方法
 
 /**
  * 更新代理配置
@@ -57,12 +54,76 @@ router.post('/config', async (req, res) => {
 });
 
 /**
+ * 连接代理
+ * POST /api/proxy/connect
+ */
+router.post('/connect', async (req, res) => {
+  try {
+    const { proxyConfig } = req.body;
+    
+    if (!proxyConfig) {
+      return res.status(400).json({
+        status: 'error',
+        message: '缺少代理配置数据'
+      });
+    }
+    
+    logger.info('收到代理连接请求:', {
+      proxyId: proxyConfig.id,
+      proxyName: proxyConfig.name
+    });
+    
+    const result = await proxyManager.connectProxy(proxyConfig);
+    
+    res.json({
+      status: 'success',
+      message: '代理连接成功',
+      data: result
+    });
+    
+  } catch (error) {
+    logger.error('连接代理失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '连接代理失败',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * 断开代理连接
+ * POST /api/proxy/disconnect
+ */
+router.post('/disconnect', async (req, res) => {
+  try {
+    logger.info('收到代理断开请求');
+    
+    const result = await proxyManager.disconnectProxy();
+    
+    res.json({
+      status: 'success',
+      message: '代理连接已断开',
+      data: result
+    });
+    
+  } catch (error) {
+    logger.error('断开代理失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '断开代理失败',
+      error: error.message
+    });
+  }
+});
+
+/**
  * 获取代理状态
  * GET /api/proxy/status
  */
 router.get('/status', async (req, res) => {
   try {
-    const status = await proxyManager.getProxyStatus();
+    const status = proxyManager.getProxyStatus();
     
     res.json({
       status: 'success',
@@ -102,7 +163,7 @@ router.post('/test', async (req, res) => {
       testUrl: finalTestUrl
     });
     
-    const testResult = await proxyManager.testProxyConfig(proxyConfig, finalTestUrl);
+    const testResult = await proxyManager.testProxyConfig(proxyConfig, 'baidu');
     
     res.json({
       status: 'success',
