@@ -21,6 +21,8 @@ import { R2LoginLogger } from '../utils/r2-logger.js';
  */
 async function saveTestHistory(env, testRecord) {
   try {
+    console.log('📝 开始保存测试历史:', testRecord);
+    
     // R2 Key格式: proxyId.json (每个代理只保留一条最新记录)
     const key = `${testRecord.proxyId}.json`;
     
@@ -34,12 +36,23 @@ async function saveTestHistory(env, testRecord) {
       error: testRecord.error || null
     };
     
+    console.log('💾 准备写入R2存储:', {
+      key: key,
+      data: historyData,
+      hasR2Bucket: !!env.PROXY_TEST_HISTORY
+    });
+    
     // 直接覆盖保存，自动替换旧记录
     await env.PROXY_TEST_HISTORY.put(key, JSON.stringify(historyData));
     
-    console.log(`代理测试记录已更新: ${key}`);
+    console.log(`✅ 代理测试记录已成功保存到R2: ${key}`);
   } catch (error) {
-    console.error('保存测试记录失败:', error);
+    console.error('❌ 保存测试记录失败:', error);
+    console.error('❌ 错误详情:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
     // 不抛出错误，避免影响主要功能
   }
 }
@@ -861,6 +874,7 @@ export const handleAdmin = {
       const vpsApiKey = env.VPS_API_KEY || 'default-api-key';
 
       const vpsRequestBody = {
+        proxyId: proxyData.id,
         proxyConfig: proxyData,
         testUrlId: testUrlId
       };
@@ -893,8 +907,15 @@ export const handleAdmin = {
         });
 
         // 保存测试历史到R2（异步，不影响响应）
+        console.log('🔍 R2存储条件检查:', {
+          hasVpsData: !!vpsData.data,
+          hasR2Bucket: !!env.PROXY_TEST_HISTORY,
+          vpsDataKeys: vpsData.data ? Object.keys(vpsData.data) : null,
+          vpsDataContent: vpsData.data
+        });
+        
         if (vpsData.data && env.PROXY_TEST_HISTORY) {
-          console.log('🔄 开始保存测试历史到R2:', {
+          console.log('✅ 满足R2存储条件，开始保存测试历史:', {
             proxyId: proxyData.id,
             testUrlId: testUrlId,
             success: vpsData.data.success,
@@ -1253,19 +1274,31 @@ export const handleAdmin = {
       // 从R2存储获取测试历史
       let testHistory = [];
       
+      console.log('🔍 开始获取代理测试历史:', {
+        proxyId: proxyId,
+        hasR2Bucket: !!env.PROXY_TEST_HISTORY
+      });
+      
       if (env.PROXY_TEST_HISTORY) {
         try {
           const historyKey = `${proxyId}.json`;
+          console.log('📂 查找R2存储文件:', historyKey);
+          
           const historyData = await env.PROXY_TEST_HISTORY.get(historyKey);
           
           if (historyData) {
             const historyRecord = JSON.parse(await historyData.text());
             testHistory = [historyRecord]; // 只返回最新的一条记录
+            console.log('✅ 找到历史记录:', historyRecord);
+          } else {
+            console.log('⚪ R2存储中没有找到历史记录文件:', historyKey);
           }
         } catch (r2Error) {
-          console.warn('R2存储访问失败:', r2Error);
+          console.error('❌ R2存储访问失败:', r2Error);
           // 继续执行，返回空历史记录
         }
+      } else {
+        console.log('❌ PROXY_TEST_HISTORY R2存储桶未配置');
       }
 
       logInfo(env, 'Admin retrieved proxy test history', {
@@ -1279,6 +1312,115 @@ export const handleAdmin = {
     } catch (error) {
       logError(env, 'Admin get proxy test history handler error', error);
       return errorResponse('Failed to retrieve proxy test history', 'ADMIN_PROXY_HISTORY_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 调试R2存储 - 临时调试端点
+   */
+  async debugR2Storage(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      console.log('🔍 开始调试R2存储...');
+
+      if (!env.PROXY_TEST_HISTORY) {
+        return errorResponse('PROXY_TEST_HISTORY bucket not configured', 'R2_BUCKET_MISSING', 500, request);
+      }
+
+      // 列出所有对象
+      const objects = await env.PROXY_TEST_HISTORY.list();
+      
+      console.log('📂 R2存储对象列表:', objects);
+
+      const result = {
+        bucketExists: true,
+        objectCount: objects.objects.length,
+        objects: objects.objects.map(obj => ({
+          key: obj.key,
+          size: obj.size,
+          uploaded: obj.uploaded,
+          etag: obj.etag
+        }))
+      };
+
+      // 如果有对象，尝试读取第一个
+      if (objects.objects.length > 0) {
+        try {
+          const firstObject = objects.objects[0];
+          const objectData = await env.PROXY_TEST_HISTORY.get(firstObject.key);
+          if (objectData) {
+            const content = JSON.parse(await objectData.text());
+            result.sampleContent = content;
+            console.log('📄 示例对象内容:', content);
+          }
+        } catch (readError) {
+          console.error('读取对象失败:', readError);
+          result.readError = readError.message;
+        }
+      }
+
+      return successResponse(result, 'R2 storage debug info retrieved', request);
+
+    } catch (error) {
+      console.error('❌ R2调试失败:', error);
+      return errorResponse('Failed to debug R2 storage', 'R2_DEBUG_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 测试R2存储写入 - 临时测试端点
+   */
+  async testR2Write(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      console.log('🧪 开始测试R2存储写入...');
+
+      if (!env.PROXY_TEST_HISTORY) {
+        return errorResponse('PROXY_TEST_HISTORY bucket not configured', 'R2_BUCKET_MISSING', 500, request);
+      }
+
+      // 创建测试数据
+      const testRecord = {
+        proxyId: 'test-proxy-' + Date.now(),
+        testUrlId: 'baidu',
+        success: true,
+        latency: 123,
+        method: 'test_method',
+        timestamp: new Date().toISOString(),
+        error: null
+      };
+
+      console.log('📝 准备写入测试数据:', testRecord);
+
+      // 调用saveTestHistory函数
+      await saveTestHistory(env, testRecord);
+
+      // 立即尝试读取
+      const key = `${testRecord.proxyId}.json`;
+      const savedData = await env.PROXY_TEST_HISTORY.get(key);
+      
+      let readResult = null;
+      if (savedData) {
+        readResult = JSON.parse(await savedData.text());
+        console.log('✅ 成功读取刚写入的数据:', readResult);
+      } else {
+        console.log('❌ 无法读取刚写入的数据');
+      }
+
+      return successResponse({
+        writeSuccess: true,
+        testRecord: testRecord,
+        readResult: readResult,
+        readSuccess: !!readResult
+      }, 'R2 storage write test completed', request);
+
+    } catch (error) {
+      console.error('❌ R2写入测试失败:', error);
+      return errorResponse('Failed to test R2 storage write', 'R2_WRITE_TEST_ERROR', 500, request);
     }
   }
 };
