@@ -937,5 +937,160 @@ export const handleAdmin = {
 
       return errorResponse('代理测试失败', 'PROXY_TEST_ERROR', 500, request);
     }
+  },
+
+  /**
+   * 获取代理配置列表 (简化版本，参照频道管理实现)
+   */
+  async getProxyConfig(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      // 直接从KV读取代理配置
+      const proxyConfigData = await env.YOYO_USER_DB.get('proxy-config');
+      
+      logInfo(env, 'Admin retrieved proxy config', {
+        username: auth.user.username,
+        hasData: !!proxyConfigData
+      });
+
+      let response;
+      if (proxyConfigData) {
+        try {
+          const config = JSON.parse(proxyConfigData);
+          response = {
+            enabled: config.enabled || false,
+            activeProxyId: config.activeProxyId || null,
+            proxies: (config.proxies || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+            settings: {
+              enabled: config.enabled || false,
+              activeProxyId: config.activeProxyId || null,
+              autoSwitch: config.autoSwitch || false,
+              testInterval: config.testInterval || 300,
+              currentTestUrlId: config.currentTestUrlId || 'baidu'
+            }
+          };
+        } catch (parseError) {
+          logError(env, 'Proxy config parse error', parseError);
+          response = {
+            enabled: false,
+            activeProxyId: null,
+            proxies: [],
+            settings: {
+              enabled: false,
+              activeProxyId: null,
+              autoSwitch: false,
+              testInterval: 300,
+              currentTestUrlId: 'baidu'
+            }
+          };
+        }
+      } else {
+        response = {
+          enabled: false,
+          activeProxyId: null,
+          proxies: [],
+          settings: {
+            enabled: false,
+            activeProxyId: null,
+            autoSwitch: false,
+            testInterval: 300,
+            currentTestUrlId: 'baidu'
+          }
+        };
+      }
+
+      return successResponse(response, 'Proxy configuration retrieved successfully', request);
+
+    } catch (error) {
+      logError(env, 'Admin get proxy config handler error', error);
+      return errorResponse('Failed to retrieve proxy configuration', 'ADMIN_PROXY_CONFIG_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 创建代理配置 (简化版本，参照频道管理实现)
+   */
+  async createProxyConfig(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      let proxyData;
+      try {
+        proxyData = await request.json();
+      } catch (error) {
+        return errorResponse('Invalid JSON in request body', 'INVALID_JSON', 400, request);
+      }
+
+      // 验证必需字段
+      if (!proxyData.name || !proxyData.type || !proxyData.config) {
+        return errorResponse('Missing required fields: name, type, config', 'MISSING_FIELDS', 400, request);
+      }
+
+      // 生成代理ID
+      const proxyId = `proxy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // 创建代理对象
+      const newProxy = {
+        id: proxyId,
+        name: proxyData.name,
+        type: proxyData.type,
+        config: proxyData.config,
+        isActive: false,
+        latency: -1,
+        lastTestTime: null,
+        lastTestMethod: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      // 获取现有配置
+      const existingConfigData = await env.YOYO_USER_DB.get('proxy-config');
+      let config;
+      
+      if (existingConfigData) {
+        config = JSON.parse(existingConfigData);
+      } else {
+        config = {
+          enabled: false,
+          activeProxyId: null,
+          proxies: [],
+          autoSwitch: false,
+          testInterval: 300,
+          currentTestUrlId: 'baidu',
+          settings: {
+            enabled: false,
+            activeProxyId: null,
+            autoSwitch: false,
+            testInterval: 300,
+            currentTestUrlId: 'baidu'
+          }
+        };
+      }
+      
+      // 添加新代理到列表
+      if (!config.proxies) {
+        config.proxies = [];
+      }
+      config.proxies.push(newProxy);
+      config.updatedAt = new Date().toISOString();
+
+      // 保存更新后的配置
+      await env.YOYO_USER_DB.put('proxy-config', JSON.stringify(config));
+
+      logInfo(env, 'Admin created new proxy', {
+        username: auth.user.username,
+        proxyId: proxyId,
+        proxyName: proxyData.name
+      });
+
+      return successResponse(newProxy, 'Proxy created successfully', request);
+
+    } catch (error) {
+      logError(env, 'Admin create proxy handler error', error);
+      return errorResponse('Failed to create proxy', 'ADMIN_CREATE_PROXY_ERROR', 500, request);
+    }
   }
 };
