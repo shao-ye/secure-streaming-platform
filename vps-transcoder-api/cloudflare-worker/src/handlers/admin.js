@@ -894,6 +894,14 @@ export const handleAdmin = {
 
         // 保存测试历史到R2（异步，不影响响应）
         if (vpsData.data && env.PROXY_TEST_HISTORY) {
+          console.log('🔄 开始保存测试历史到R2:', {
+            proxyId: proxyData.id,
+            testUrlId: testUrlId,
+            success: vpsData.data.success,
+            latency: vpsData.data.latency,
+            method: vpsData.data.method
+          });
+          
           saveTestHistory(env, {
             proxyId: proxyData.id,
             testUrlId: testUrlId,
@@ -901,7 +909,15 @@ export const handleAdmin = {
             latency: vpsData.data.latency,
             method: vpsData.data.method,
             error: vpsData.data.error
-          }).catch(err => console.error('保存测试历史失败:', err));
+          }).catch(err => {
+            console.error('❌ 保存测试历史失败:', err);
+            logError(env, 'Save test history failed', err);
+          });
+        } else {
+          console.log('⚠️ 跳过保存测试历史:', {
+            hasVpsData: !!vpsData.data,
+            hasR2Bucket: !!env.PROXY_TEST_HISTORY
+          });
         }
 
         // 直接返回VPS的测试结果
