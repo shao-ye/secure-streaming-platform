@@ -405,10 +405,17 @@ export const handleStreams = {
         return errorResponse('channelId is required', 'MISSING_CHANNEL_ID', 400, request);
       }
 
-      // 从KV获取频道配置
-      const streamConfig = await getStreamConfig(env, channelId);
+      // 🔥 修复：从完整的streams配置获取频道信息（包含rtmpUrl）
+      // 不能使用getStreamConfig，因为它返回的是用户视图（隐藏了rtmpUrl）
+      const streamsConfig = await getStreamsConfig(env);
+      const streamConfig = streamsConfig.find(stream => stream.id === channelId);
       if (!streamConfig) {
         return errorResponse('Channel not found', 'CHANNEL_NOT_FOUND', 404, request);
+      }
+      
+      // 确保rtmpUrl存在
+      if (!streamConfig.rtmpUrl) {
+        return errorResponse('Channel RTMP URL not configured', 'RTMP_URL_MISSING', 400, request);
       }
 
       // 调用VPS SimpleStreamManager API
