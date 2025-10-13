@@ -16,16 +16,35 @@ cd "$GIT_DIR/vps-transcoder-api" || { echo "❌ Git目录不存在"; exit 1; }
 
 # 2. 强制拉取最新代码（放弃本地修改）
 echo "📥 强制拉取最新代码..."
-echo "⚠️ 检查本地修改..."
+echo "⚠️ 检查本地修改和冲突..."
+
+# 强制重置所有本地修改
+echo "🔄 强制重置本地状态..."
+git reset --hard HEAD
+git clean -fd
+
+# 检查是否有未提交的更改
 if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "🔄 发现本地修改，强制重置为master版本..."
+    echo "🔄 仍有本地修改，再次强制重置..."
     git reset --hard HEAD
     git clean -fd
 fi
 
-echo "📥 拉取master分支..."
+# 强制拉取最新代码
+echo "📥 强制拉取master分支..."
 git fetch origin master
-git reset --hard origin/master
+
+# 检查是否需要合并
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse origin/master)
+
+if [ "$LOCAL" != "$REMOTE" ]; then
+    echo "🔄 检测到版本差异，强制同步到最新版本..."
+    git reset --hard origin/master
+    echo "✅ 已强制同步到最新版本: $(git rev-parse --short HEAD)"
+else
+    echo "✅ 已是最新版本: $(git rev-parse --short HEAD)"
+fi
 
 # 3. 使用rsync同步代码（无交互，可靠）
 echo "🔄 同步代码..."
@@ -59,6 +78,30 @@ for file in "${KEY_FILES[@]}"; do
         exit 1
     fi
 done
+
+# 5. 验证代码版本同步
+echo "🔍 验证代码版本同步..."
+PROXY_MANAGER_FILE="$TARGET_DIR/services/ProxyManager_v2.js"
+
+# 检查是否包含最新的调试日志
+if grep -q "配置解析结果" "$PROXY_MANAGER_FILE" && grep -q "开始调用testProxyLatency" "$PROXY_MANAGER_FILE"; then
+    echo "✅ 代码版本验证通过 - 包含最新调试功能"
+else
+    echo "⚠️ 代码版本可能不是最新 - 缺少调试日志"
+    echo "🔄 尝试强制重新同步..."
+    
+    # 再次强制同步
+    rm -rf "$TARGET_DIR"
+    mkdir -p "$TARGET_DIR"
+    cp -r "$SOURCE_DIR"/* "$TARGET_DIR/"
+    
+    # 再次验证
+    if grep -q "配置解析结果" "$PROXY_MANAGER_FILE" && grep -q "开始调用testProxyLatency" "$PROXY_MANAGER_FILE"; then
+        echo "✅ 强制重新同步成功"
+    else
+        echo "❌ 代码同步可能存在问题，请手动检查"
+    fi
+fi
 
 # 5. 验证proxy.js包含新路由
 echo "🔍 验证代理路由..."
