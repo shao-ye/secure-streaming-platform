@@ -758,22 +758,25 @@ const loadProxyConfig = async () => {
             proxy.isActive = true
             console.log(`✅ 设置活跃代理 ${proxy.name}(${proxy.id}) 状态: connected`)
             
-            // 设置延迟信息
+            // 🔧 修复：设置真实的延迟信息
             if (statusData.statistics) {
-              // 优先使用平均延迟，其次使用连接时间计算的延迟
+              // 优先使用平均延迟（真实的网络延迟）
               if (statusData.statistics.avgLatency && statusData.statistics.avgLatency > 0) {
                 proxy.latency = statusData.statistics.avgLatency
-              } else if (statusData.statistics.connectTime) {
-                // 计算连接建立时的延迟（简单估算）
-                const connectTime = new Date(statusData.statistics.connectTime)
-                const now = new Date()
-                proxy.latency = Math.min(now - connectTime, 1000) // 最大1秒
+                console.log(`✅ 设置活跃代理 ${proxy.name} 真实延迟: ${proxy.latency}ms`)
               } else {
-                proxy.latency = 50 // 默认延迟
+                // 如果没有真实延迟数据，启动延迟测试
+                console.log(`🔄 活跃代理 ${proxy.name} 缺少延迟数据，启动测试...`)
+                proxy.latency = null // 先设为null，避免显示错误数据
+                
+                // 异步测试真实延迟
+                this.testProxyLatencyAsync(proxy)
               }
-              console.log(`✅ 设置活跃代理 ${proxy.name} 延迟: ${proxy.latency}ms`)
             } else {
-              proxy.latency = 50 // 默认延迟
+              console.log(`⚠️ 活跃代理 ${proxy.name} 缺少统计数据`)
+              proxy.latency = null
+              // 异步测试真实延迟
+              this.testProxyLatencyAsync(proxy)
             }
           } else if (isActiveProxy && statusData.connectionStatus === 'connecting') {
             // 正在连接的代理
@@ -995,6 +998,76 @@ onMounted(() => {
   // 加载代理配置
   loadProxyConfig()
 })
+
+// 🔧 新增：异步测试代理真实延迟
+const testProxyLatencyAsync = async (proxy) => {
+  try {
+    console.log(`🔄 开始测试代理 ${proxy.name} 的真实延迟...`)
+    
+    // 设置测试状态
+    proxy.latency = '测试中...'
+    
+    // 调用代理测试API获取真实延迟
+    const result = await proxyApi.testProxy(proxy.id)
+    
+    if (result.success && result.latency && result.latency > 0) {
+      proxy.latency = result.latency
+      console.log(`✅ 代理 ${proxy.name} 真实延迟: ${result.latency}ms`)
+    } else {
+      // 如果API测试失败，尝试简单的ping测试
+      const pingResult = await testProxyPing(proxy)
+      proxy.latency = pingResult.latency || null
+      console.log(`⚠️ 代理 ${proxy.name} ping延迟: ${proxy.latency}ms`)
+    }
+  } catch (error) {
+    console.error(`❌ 测试代理 ${proxy.name} 延迟失败:`, error)
+    proxy.latency = null
+  }
+}
+
+// 🔧 新增：简单的ping测试（备用方案）
+const testProxyPing = async (proxy) => {
+  try {
+    // 解析代理配置获取服务器地址
+    const config = proxy.config
+    let serverHost = null
+    
+    if (config.startsWith('vless://')) {
+      // 解析VLESS URL: vless://uuid@host:port?params
+      const match = config.match(/vless:\/\/[^@]+@([^:]+):/)
+      if (match) {
+        serverHost = match[1]
+      }
+    }
+    
+    if (!serverHost) {
+      return { latency: null }
+    }
+    
+    console.log(`🔄 Ping测试代理服务器: ${serverHost}`)
+    
+    // 使用简单的HTTP请求测试延迟（通过代理服务器的HTTP端口或其他可访问端口）
+    const startTime = Date.now()
+    
+    try {
+      // 尝试连接代理服务器（这里只是测试连通性，不是真正的代理延迟）
+      await fetch(`https://${serverHost}`, { 
+        method: 'HEAD',
+        mode: 'no-cors',
+        signal: AbortSignal.timeout(3000)
+      })
+      
+      const latency = Date.now() - startTime
+      return { latency: Math.min(latency, 999) } // 限制最大延迟显示
+    } catch (error) {
+      // 连接失败，返回null
+      return { latency: null }
+    }
+  } catch (error) {
+    console.error('Ping测试失败:', error)
+    return { latency: null }
+  }
+}
 </script>
 
 <style scoped>
