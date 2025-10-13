@@ -680,12 +680,17 @@ class ProxyManager {
       // 简化测试：检查代理服务器连通性
       const startTime = Date.now();
       
+      logger.info(`开始测试代理服务器连通性: ${parsed.address}:${parsed.port}`);
+      logger.info(`代理配置类型: ${proxyConfig.config.substring(0, 20)}...`);
+      
       try {
         // 使用nc测试端口连通性，但增加更详细的错误处理
-        await execAsync(`timeout 5 nc -z ${parsed.address} ${parsed.port}`);
+        logger.info(`执行命令: timeout 5 nc -z ${parsed.address} ${parsed.port}`);
+        const result = await execAsync(`timeout 5 nc -z ${parsed.address} ${parsed.port}`);
         const latency = Date.now() - startTime;
         
         logger.info(`代理服务器 ${parsed.address}:${parsed.port} 连通性测试成功，延迟: ${latency}ms`);
+        logger.info(`nc命令输出: ${JSON.stringify(result)}`);
         
         return {
           success: true,
@@ -698,10 +703,27 @@ class ProxyManager {
         const latency = Date.now() - startTime;
         
         logger.warn(`代理服务器连通性测试失败: ${error.message}`);
+        logger.warn(`错误详情: ${JSON.stringify(error)}`);
+        logger.warn(`测试耗时: ${latency}ms`);
+        
+        // 检查nc命令是否可用
+        try {
+          await execAsync('which nc');
+          logger.info('nc命令可用');
+        } catch (ncError) {
+          logger.error('nc命令不可用:', ncError.message);
+          return {
+            success: false,
+            latency: latency,
+            method: 'real_test',
+            error: 'nc命令不可用，无法进行端口测试'
+          };
+        }
         
         // 对于VLESS协议，即使连通性测试失败，也可能是网络限制
         // 如果配置格式正确，给出更友好的提示
         if (proxyConfig.config.includes('vless://') && parsed.port > 0 && parsed.port < 65536) {
+          logger.info(`VLESS协议配置格式正确，端口 ${parsed.port} 在有效范围内，认为配置可能有效`);
           return {
             success: true,
             latency: latency,
@@ -710,6 +732,7 @@ class ProxyManager {
           };
         }
         
+        logger.warn(`配置验证失败: 不是VLESS协议或端口无效`);
         return {
           success: false,
           latency: latency,
