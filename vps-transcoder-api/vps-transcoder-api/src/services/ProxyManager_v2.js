@@ -772,7 +772,10 @@ class ProxyManager {
 
       // 简化的配置验证
       const parsed = this.parseProxyUrl(proxyConfig.config);
+      logger.info('配置解析结果:', { address: parsed.address, port: parsed.port });
+      
       if (!parsed.address || !parsed.port) {
+        logger.error('配置解析失败:', parsed);
         return {
           success: false,
           latency: -1,
@@ -782,7 +785,20 @@ class ProxyManager {
       }
 
       // 真实代理连接延迟测试
-      return await this.testProxyLatency(proxyConfig, testUrlId);
+      logger.info('开始调用testProxyLatency方法');
+      try {
+        const result = await this.testProxyLatency(proxyConfig, testUrlId);
+        logger.info('testProxyLatency方法返回结果:', result);
+        return result;
+      } catch (error) {
+        logger.error('testProxyLatency方法执行异常:', error);
+        return {
+          success: false,
+          latency: -1,
+          method: 'real_test',
+          error: `testProxyLatency执行失败: ${error.message}`
+        };
+      }
 
     } catch (error) {
       logger.error('测试代理配置失败:', error);
