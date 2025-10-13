@@ -306,13 +306,15 @@ export default {
       // HLS代理路由
       router.get('/hls/:streamId/:file', (req, env, ctx) => handleProxy.hlsFile(req, env, ctx));
 
-      // 代理管理路由
+      // 代理管理路由 - 使用简化的admin处理器（参照频道管理模式）
+      router.get('/api/admin/proxy/config', (req, env, ctx) => handleAdmin.getProxyConfig(req, env, ctx));
+      router.post('/api/admin/proxy/config', (req, env, ctx) => handleAdmin.createProxyConfig(req, env, ctx));
+      
+      // 其他代理功能仍使用ProxyManager处理器
       router.post('/api/admin/proxy/connect', (req, env, ctx) => handleProxyManager.connect(req, env, ctx));
       router.post('/api/admin/proxy/disconnect', (req, env, ctx) => handleProxyManager.disconnect(req, env, ctx));
       router.get('/api/admin/proxy/status', (req, env, ctx) => handleProxyManager.status(req, env, ctx));
       router.post('/api/admin/proxy/test', (req, env, ctx) => handleProxyManager.test(req, env, ctx));
-      router.get('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.getConfig(req, env, ctx));
-      router.post('/api/admin/proxy/config', (req, env, ctx) => handleProxyManager.updateConfig(req, env, ctx));
       router.put('/api/admin/proxy/config/:id', (req, env, ctx) => handleProxyManager.updateProxy(req, env, ctx));
       router.delete('/api/admin/proxy/config/:id', (req, env, ctx) => handleProxyManager.deleteProxy(req, env, ctx));
       router.put('/api/admin/proxy/settings', (req, env, ctx) => handleProxyManager.updateSettings(req, env, ctx));

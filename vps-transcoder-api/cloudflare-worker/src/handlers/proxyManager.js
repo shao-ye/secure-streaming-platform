@@ -246,27 +246,105 @@ export const handleProxyManager = {
     try {
       // 验证管理员权限
       const { auth, error } = await requireAdmin(request, env);
-      if (error) return error;
+      if (error) {
+        logError('🚨 代理配置获取失败 - 认证错误', { 
+          errorCode: error.status,
+          errorMessage: error.body ? JSON.parse(error.body).message : 'Unknown auth error',
+          url: request.url,
+          method: request.method,
+          timestamp: new Date().toISOString()
+        });
+        return error;
+      }
+
+      // 添加详细调试信息
+      logInfo('🔍 开始获取代理配置', { 
+        admin: auth.user.username,
+        timestamp: new Date().toISOString(),
+        requestUrl: request.url,
+        requestMethod: request.method
+      });
 
       // 使用统一存储格式从proxy-config读取
       const proxyConfigData = await env.YOYO_USER_DB.get('proxy-config');
       
+      // 添加KV读取调试信息
+      logInfo('📦 KV读取结果', { 
+        hasData: !!proxyConfigData,
+        dataLength: proxyConfigData ? proxyConfigData.length : 0,
+        dataType: typeof proxyConfigData,
+        kvKey: 'proxy-config'
+      });
+
+      // 如果有数据，记录原始数据的前100个字符用于调试
+      if (proxyConfigData) {
+        logInfo('📄 KV原始数据预览', {
+          dataPreview: proxyConfigData.substring(0, 200) + (proxyConfigData.length > 200 ? '...' : ''),
+          totalLength: proxyConfigData.length
+        });
+      }
+      
       let response;
       if (proxyConfigData) {
-        const config = JSON.parse(proxyConfigData);
-        response = {
-          enabled: config.enabled || false,
-          activeProxyId: config.activeProxyId || null,
-          proxies: (config.proxies || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-          settings: {
+        try {
+          const config = JSON.parse(proxyConfigData);
+          
+          // 添加配置解析调试信息
+          logInfo('🔧 配置解析成功', { 
+            hasProxies: !!config.proxies,
+            proxiesCount: config.proxies ? config.proxies.length : 0,
+            configKeys: Object.keys(config),
+            enabled: config.enabled,
+            activeProxyId: config.activeProxyId
+          });
+
+          // 如果有代理列表，记录每个代理的基本信息
+          if (config.proxies && Array.isArray(config.proxies) && config.proxies.length > 0) {
+            logInfo('📋 代理列表详情', {
+              proxies: config.proxies.map(p => ({
+                id: p.id,
+                name: p.name,
+                type: p.type,
+                createdAt: p.createdAt,
+                isActive: p.isActive
+              }))
+            });
+          }
+          
+          response = {
             enabled: config.enabled || false,
             activeProxyId: config.activeProxyId || null,
-            autoSwitch: config.autoSwitch || false,
-            testInterval: config.testInterval || 300,
-            currentTestUrlId: config.currentTestUrlId || config.settings?.currentTestUrlId || 'baidu'
-          }
-        };
+            proxies: (config.proxies || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+            settings: {
+              enabled: config.enabled || false,
+              activeProxyId: config.activeProxyId || null,
+              autoSwitch: config.autoSwitch || false,
+              testInterval: config.testInterval || 300,
+              currentTestUrlId: config.currentTestUrlId || config.settings?.currentTestUrlId || 'baidu'
+            }
+          };
+        } catch (parseError) {
+          logError('❌ 配置解析失败', {
+            error: parseError.message,
+            stack: parseError.stack,
+            rawData: proxyConfigData.substring(0, 500)
+          });
+          // 解析失败时返回默认配置
+          response = {
+            enabled: false,
+            activeProxyId: null,
+            proxies: [],
+            settings: {
+              enabled: false,
+              activeProxyId: null,
+              autoSwitch: false,
+              testInterval: 300,
+              currentTestUrlId: 'baidu'
+            }
+          };
+        }
       } else {
+        logInfo('📭 未找到代理配置数据，返回默认配置');
         // 返回默认配置
         response = {
           enabled: false,
@@ -282,17 +360,28 @@ export const handleProxyManager = {
         };
       }
       
-      logInfo('代理配置获取成功', { 
+      logInfo('✅ 代理配置获取成功', { 
         admin: auth.user.username,
         proxyCount: response.proxies.length,
         enabled: response.enabled,
-        activeProxyId: response.activeProxyId
+        activeProxyId: response.activeProxyId,
+        finalResponse: {
+          proxiesCount: response.proxies.length,
+          hasSettings: !!response.settings,
+          responseSize: JSON.stringify(response).length
+        }
       });
 
       return successResponse(response, '代理配置获取成功', request);
 
     } catch (error) {
-      logError('获取代理配置异常', error);
+      logError('💥 获取代理配置异常', {
+        error: error.message,
+        stack: error.stack,
+        url: request.url,
+        method: request.method,
+        timestamp: new Date().toISOString()
+      });
       return errorResponse('获取代理配置异常', 'PROXY_CONFIG_ERROR', 500, request);
     }
   },
@@ -628,20 +717,52 @@ export const handleProxyManager = {
         proxyId: proxyId
       });
 
-      // 删除代理配置
-      const proxyKey = `proxy_config_${proxyId}`;
-      await env.YOYO_USER_DB.delete(proxyKey);
-
-      // 检查是否是当前活跃代理，如果是则清除
-      const globalConfig = await this.getGlobalConfig(env);
-      if (globalConfig.activeProxyId === proxyId) {
-        globalConfig.activeProxyId = null;
-        globalConfig.enabled = false;
-        globalConfig.updatedAt = new Date().toISOString();
-        await env.YOYO_USER_DB.put('proxy_global_config', JSON.stringify(globalConfig));
+      // 🔧 修复：从统一存储格式中删除代理
+      const existingConfigData = await env.YOYO_USER_DB.get('proxy-config');
+      if (!existingConfigData) {
+        return errorResponse('代理配置不存在', 'PROXY_CONFIG_NOT_FOUND', 404, request);
       }
 
-      return successResponse({ success: true }, '代理删除成功', request);
+      const config = JSON.parse(existingConfigData);
+      if (!config.proxies || !Array.isArray(config.proxies)) {
+        return errorResponse('代理列表不存在', 'PROXY_LIST_NOT_FOUND', 404, request);
+      }
+
+      // 查找要删除的代理
+      const proxyIndex = config.proxies.findIndex(p => p.id === proxyId);
+      if (proxyIndex === -1) {
+        return errorResponse('代理不存在', 'PROXY_NOT_FOUND', 404, request);
+      }
+
+      // 从列表中删除代理
+      const deletedProxy = config.proxies.splice(proxyIndex, 1)[0];
+      config.updatedAt = new Date().toISOString();
+
+      // 检查是否是当前活跃代理，如果是则清除
+      if (config.activeProxyId === proxyId) {
+        config.activeProxyId = null;
+        config.enabled = false;
+        if (config.settings) {
+          config.settings.activeProxyId = null;
+          config.settings.enabled = false;
+        }
+      }
+
+      // 保存更新后的配置
+      await env.YOYO_USER_DB.put('proxy-config', JSON.stringify(config));
+
+      logInfo('代理删除成功', { 
+        admin: auth.user.username,
+        proxyId: proxyId,
+        proxyName: deletedProxy.name,
+        remainingProxies: config.proxies.length
+      });
+
+      return successResponse({ 
+        success: true, 
+        deletedProxy: deletedProxy,
+        remainingCount: config.proxies.length 
+      }, '代理删除成功', request);
 
     } catch (error) {
       logError('删除代理异常', error);
@@ -669,18 +790,28 @@ export const handleProxyManager = {
 
       logInfo('管理员更新代理', { 
         admin: auth.user.username,
-        proxyId: proxyId
+        proxyId: proxyId,
+        updateData: updateData
       });
 
-      // 获取现有代理配置
-      const proxyKey = `proxy_config_${proxyId}`;
-      const existingData = await env.YOYO_USER_DB.get(proxyKey);
-      
-      if (!existingData) {
+      // 🔧 修复：从统一存储格式中更新代理
+      const existingConfigData = await env.YOYO_USER_DB.get('proxy-config');
+      if (!existingConfigData) {
+        return errorResponse('代理配置不存在', 'PROXY_CONFIG_NOT_FOUND', 404, request);
+      }
+
+      const config = JSON.parse(existingConfigData);
+      if (!config.proxies || !Array.isArray(config.proxies)) {
+        return errorResponse('代理列表不存在', 'PROXY_LIST_NOT_FOUND', 404, request);
+      }
+
+      // 查找要更新的代理
+      const proxyIndex = config.proxies.findIndex(p => p.id === proxyId);
+      if (proxyIndex === -1) {
         return errorResponse('代理不存在', 'PROXY_NOT_FOUND', 404, request);
       }
 
-      const existingProxy = JSON.parse(existingData);
+      const existingProxy = config.proxies[proxyIndex];
       
       // 更新代理配置
       const updatedProxy = {
@@ -690,8 +821,19 @@ export const handleProxyManager = {
         updatedAt: new Date().toISOString()
       };
 
+      // 更新数组中的代理
+      config.proxies[proxyIndex] = updatedProxy;
+      config.updatedAt = new Date().toISOString();
+
       // 保存更新后的配置
-      await env.YOYO_USER_DB.put(proxyKey, JSON.stringify(updatedProxy));
+      await env.YOYO_USER_DB.put('proxy-config', JSON.stringify(config));
+
+      logInfo('代理更新成功', { 
+        admin: auth.user.username,
+        proxyId: proxyId,
+        proxyName: updatedProxy.name,
+        updatedFields: Object.keys(updateData)
+      });
 
       return successResponse(updatedProxy, '代理更新成功', request);
 
@@ -722,21 +864,60 @@ export const handleProxyManager = {
       // 根据不同操作处理
       switch (action) {
         case 'enable':
-          // 启用代理 - 转发到VPS
+          // 🔧 修复：获取完整的代理配置信息
+          const configData = await env.YOYO_USER_DB.get('proxy-config');
+          if (!configData) {
+            return errorResponse('代理配置不存在', 'PROXY_CONFIG_NOT_FOUND', 404, request);
+          }
+          
+          const config = JSON.parse(configData);
+          const targetProxy = config.proxies?.find(p => p.id === proxyId);
+          
+          if (!targetProxy) {
+            return errorResponse('指定的代理不存在', 'PROXY_NOT_FOUND', 404, request);
+          }
+          
+          logInfo('启用代理', {
+            admin: auth.user.username,
+            proxyId: proxyId,
+            proxyName: targetProxy.name,
+            proxyType: targetProxy.type
+          });
+          
+          // 启用代理 - 转发完整配置到VPS
           const enableResponse = await fetch(`${env.VPS_API_URL}/api/proxy/connect`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-API-Key': env.VPS_API_KEY
             },
-            body: JSON.stringify({ proxyConfig: { id: proxyId, ...data } })
+            body: JSON.stringify({ 
+              proxyConfig: {
+                id: targetProxy.id,
+                name: targetProxy.name,
+                type: targetProxy.type,
+                config: targetProxy.config
+              }
+            })
           });
           
           if (!enableResponse.ok) {
+            const errorText = await enableResponse.text();
+            logError('VPS代理连接失败', {
+              status: enableResponse.status,
+              error: errorText,
+              proxyId: proxyId
+            });
             return errorResponse('启用代理失败', 'PROXY_ENABLE_FAILED', 502, request);
           }
           
           const enableResult = await enableResponse.json();
+          
+          // 更新本地配置中的活跃代理ID
+          config.activeProxyId = proxyId;
+          config.updatedAt = new Date().toISOString();
+          await env.YOYO_USER_DB.put('proxy-config', JSON.stringify(config));
+          
           return successResponse(enableResult.data, '代理启用成功', request);
 
         case 'disable':

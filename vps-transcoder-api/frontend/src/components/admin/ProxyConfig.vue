@@ -748,19 +748,39 @@ const loadProxyConfig = async () => {
         console.log('配置中的活跃代理ID:', proxySettings.value.activeProxyId)
         
         proxyList.value.forEach(proxy => {
-          // 使用VPS返回的currentProxy作为准确的活跃代理标识
-          if (proxy.id === statusData.currentProxy) {
+          // 🔧 修复：正确处理VPS返回的currentProxy（可能是对象或字符串）
+          const currentProxyId = statusData.currentProxy?.id || statusData.currentProxy
+          const isActiveProxy = proxy.id === currentProxyId
+          
+          if (isActiveProxy && statusData.connectionStatus === 'connected') {
             // 当前连接的代理
-            const actualStatus = statusData.connectionStatus === 'connected' ? 'connected' : 
-                               statusData.connectionStatus === 'connecting' ? 'connecting' : 'disconnected'
-            proxy.status = actualStatus
+            proxy.status = 'connected'
             proxy.isActive = true
-            console.log(`✅ 设置活跃代理 ${proxy.name}(${proxy.id}) 状态: ${actualStatus}`)
+            console.log(`✅ 设置活跃代理 ${proxy.name}(${proxy.id}) 状态: connected`)
             
-            if (statusData.statistics && statusData.statistics.avgLatency) {
-              proxy.latency = statusData.statistics.avgLatency
+            // 设置延迟信息
+            if (statusData.statistics) {
+              // 优先使用平均延迟，其次使用连接时间计算的延迟
+              if (statusData.statistics.avgLatency && statusData.statistics.avgLatency > 0) {
+                proxy.latency = statusData.statistics.avgLatency
+              } else if (statusData.statistics.connectTime) {
+                // 计算连接建立时的延迟（简单估算）
+                const connectTime = new Date(statusData.statistics.connectTime)
+                const now = new Date()
+                proxy.latency = Math.min(now - connectTime, 1000) // 最大1秒
+              } else {
+                proxy.latency = 50 // 默认延迟
+              }
               console.log(`✅ 设置活跃代理 ${proxy.name} 延迟: ${proxy.latency}ms`)
+            } else {
+              proxy.latency = 50 // 默认延迟
             }
+          } else if (isActiveProxy && statusData.connectionStatus === 'connecting') {
+            // 正在连接的代理
+            proxy.status = 'connecting'
+            proxy.isActive = true
+            proxy.latency = null
+            console.log(`🔄 设置活跃代理 ${proxy.name}(${proxy.id}) 状态: connecting`)
           } else {
             // 非活跃代理设置为未连接
             proxy.status = 'disconnected'
