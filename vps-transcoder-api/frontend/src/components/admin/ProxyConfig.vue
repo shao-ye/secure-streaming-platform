@@ -699,7 +699,10 @@ const loadProxyConfig = async () => {
     // 获取代理配置
     const config = await proxyApi.getConfig()
     
-    if (config.success) {
+    console.log('🔍 API返回的完整配置:', config)
+    
+    // 修复：检查正确的响应格式 (status === 'success' 而不是 success)
+    if (config.status === 'success' && config.data) {
       // 更新代理设置
       proxySettings.value = {
         enabled: config.data.settings?.enabled || false,
