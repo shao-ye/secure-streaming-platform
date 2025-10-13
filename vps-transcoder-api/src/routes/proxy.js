@@ -85,7 +85,7 @@ router.get('/status', async (req, res) => {
  */
 router.post('/test', async (req, res) => {
   try {
-    const { proxyId, proxyConfig } = req.body;
+    const { proxyId, proxyConfig, testUrlId } = req.body;
     
     if (!proxyConfig) {
       return res.status(400).json({
@@ -94,12 +94,21 @@ router.post('/test', async (req, res) => {
       });
     }
     
+    // 根据testUrlId确定测试URL
+    const testUrls = {
+      'baidu': 'https://www.baidu.com',
+      'google': 'https://www.google.com'
+    };
+    const testUrl = testUrls[testUrlId] || testUrls['baidu'];
+    
     logger.info('收到代理测试请求:', {
       proxyId,
-      proxyName: proxyConfig.name
+      proxyName: proxyConfig.name,
+      testUrlId,
+      testUrl
     });
     
-    const testResult = await proxyManager.testProxyConfig(proxyConfig);
+    const testResult = await proxyManager.testProxyConfig(proxyConfig, testUrl);
     
     res.json({
       status: 'success',
