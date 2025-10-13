@@ -43,16 +43,70 @@ async function saveTestHistory(env, testRecord) {
     });
     
     // 直接覆盖保存，自动替换旧记录
-    await env.PROXY_TEST_HISTORY.put(key, JSON.stringify(historyData));
+    console.log('🔄 正在执行R2存储写入...');
+    console.log('🔍 R2写入参数详情:', {
+      bucketName: 'PROXY_TEST_HISTORY',
+      key: key,
+      dataSize: JSON.stringify(historyData).length,
+      dataType: typeof historyData,
+      bucketObject: typeof env.PROXY_TEST_HISTORY
+    });
     
-    console.log(`✅ 代理测试记录已成功保存到R2: ${key}`);
+    try {
+      // 添加超时机制来避免无限等待
+      const putPromise = env.PROXY_TEST_HISTORY.put(key, JSON.stringify(historyData));
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('R2存储写入超时')), 5000);
+      });
+      
+      console.log('⏰ 开始R2存储写入，5秒超时...');
+      const putResult = await Promise.race([putPromise, timeoutPromise]);
+      
+      console.log('✅ R2存储写入成功:', {
+        key: key,
+        result: putResult,
+        resultType: typeof putResult
+      });
+      console.log(`✅ 代理测试记录已成功保存到R2: ${key}`);
+    } catch (putError) {
+      console.error('❌ R2存储写入失败:', putError);
+      console.error('❌ R2写入错误详情:', {
+        message: putError.message,
+        stack: putError.stack,
+        name: putError.name,
+        code: putError.code,
+        cause: putError.cause,
+        isTimeout: putError.message === 'R2存储写入超时'
+      });
+      throw putError; // 重新抛出错误以便外层catch捕获
+    }
   } catch (error) {
     console.error('❌ 保存测试记录失败:', error);
     console.error('❌ 错误详情:', {
       message: error.message,
       stack: error.stack,
-      name: error.name
+      name: error.name,
+      code: error.code,
+      cause: error.cause,
+      toString: error.toString()
     });
+    
+    // 尝试验证R2存储桶是否可用
+    try {
+      console.log('🔍 验证R2存储桶可用性...');
+      const testKey = 'test-connectivity.json';
+      const testData = JSON.stringify({ test: true, timestamp: new Date().toISOString() });
+      await env.PROXY_TEST_HISTORY.put(testKey, testData);
+      console.log('✅ R2存储桶连接正常，问题可能在数据格式');
+      
+      // 立即删除测试文件
+      await env.PROXY_TEST_HISTORY.delete(testKey);
+      console.log('🗑️ 测试文件已清理');
+    } catch (testError) {
+      console.error('❌ R2存储桶连接失败:', testError);
+      console.error('❌ 这说明R2存储桶配置有问题');
+    }
+    
     // 不抛出错误，避免影响主要功能
   }
 }
@@ -911,33 +965,58 @@ export const handleAdmin = {
           hasVpsData: !!vpsData.data,
           hasR2Bucket: !!env.PROXY_TEST_HISTORY,
           vpsDataKeys: vpsData.data ? Object.keys(vpsData.data) : null,
-          vpsDataContent: vpsData.data
+          vpsDataContent: vpsData.data,
+          r2BucketName: env.PROXY_TEST_HISTORY ? 'configured' : 'missing'
         });
         
-        if (vpsData.data && env.PROXY_TEST_HISTORY) {
-          console.log('✅ 满足R2存储条件，开始保存测试历史:', {
+        // 强制执行R2存储写入，即使条件检查失败
+        console.log('🚀 强制执行R2存储写入测试');
+        
+        // 强制保存测试历史，不管VPS数据是否存在
+        if (env.PROXY_TEST_HISTORY) {
+          console.log('✅ 强制保存测试历史到R2:', {
             proxyId: proxyData.id,
             testUrlId: testUrlId,
-            success: vpsData.data.success,
-            latency: vpsData.data.latency,
-            method: vpsData.data.method
+            hasVpsData: !!vpsData.data,
+            vpsDataContent: vpsData.data
           });
           
-          saveTestHistory(env, {
+          const testHistoryData = {
             proxyId: proxyData.id,
             testUrlId: testUrlId,
-            success: vpsData.data.success,
-            latency: vpsData.data.latency,
-            method: vpsData.data.method,
-            error: vpsData.data.error
-          }).catch(err => {
-            console.error('❌ 保存测试历史失败:', err);
-            logError(env, 'Save test history failed', err);
-          });
+            success: vpsData.data?.success || false,
+            latency: vpsData.data?.latency || -1,
+            method: vpsData.data?.method || 'unknown',
+            error: vpsData.data?.error || null
+          };
+          
+          console.log('🚀 开始调用saveTestHistory函数...');
+          saveTestHistory(env, testHistoryData)
+            .then(() => {
+              console.log('✅ saveTestHistory函数执行完成');
+            })
+            .catch(err => {
+              console.error('❌ saveTestHistory函数执行失败:', err);
+              console.error('❌ saveTestHistory错误详情:', {
+                message: err.message,
+                stack: err.stack,
+                name: err.name,
+                code: err.code
+              });
+              logError(env, 'Save test history failed', err);
+            });
         } else {
-          console.log('⚠️ 跳过保存测试历史:', {
+          console.log('❌ R2存储桶未配置，无法保存测试历史');
+        }
+        
+        // 原有条件检查（用于调试对比）
+        if (vpsData.data && env.PROXY_TEST_HISTORY) {
+          console.log('✅ 原有条件也满足');
+        } else {
+          console.log('⚠️ 原有条件不满足:', {
             hasVpsData: !!vpsData.data,
-            hasR2Bucket: !!env.PROXY_TEST_HISTORY
+            hasR2Bucket: !!env.PROXY_TEST_HISTORY,
+            vpsDataType: typeof vpsData.data
           });
         }
 

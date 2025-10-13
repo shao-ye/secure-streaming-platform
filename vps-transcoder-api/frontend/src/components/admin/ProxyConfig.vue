@@ -956,8 +956,25 @@ const enableProxy = async (proxy) => {
           connectionStatus.value = status.connectionStatus
           currentProxy.value = status.currentProxy
           
-          if (status.connectionStatus === 'connected') {
+          // 🔧 修复：正确处理VPS返回的currentProxy（可能是对象或字符串）
+          const currentProxyId = status.currentProxy?.id || status.currentProxy
+          const isActiveProxy = proxy.id === currentProxyId
+          
+          console.log(`🔍 连接检查 - 代理ID: ${proxy.id}, VPS当前代理: ${currentProxyId}, 匹配: ${isActiveProxy}, 状态: ${status.connectionStatus}`)
+          
+          if (isActiveProxy && status.connectionStatus === 'connected') {
             proxy.status = 'connected'
+            proxy.isActive = true
+            // 设置延迟信息
+            if (status.statistics?.avgLatency && status.statistics.avgLatency > 0) {
+              proxy.latency = status.statistics.avgLatency
+            } else if (status.statistics?.connectTime) {
+              const connectTime = new Date(status.statistics.connectTime)
+              const now = new Date()
+              proxy.latency = Math.min(now - connectTime, 1000) // 最大1秒
+            } else {
+              proxy.latency = 50 // 默认延迟
+            }
             ElMessage.success(`代理 "${proxy.name}" 连接成功`)
           } else if (status.connectionStatus === 'connecting') {
             proxy.status = 'connecting'
@@ -966,24 +983,34 @@ const enableProxy = async (proxy) => {
             setTimeout(async () => {
               try {
                 const finalStatus = await proxyApi.getStatus()
-                proxy.status = finalStatus.connectionStatus === 'connected' ? 'connected' : 'error'
-                if (proxy.status === 'connected') {
+                const finalProxyId = finalStatus.currentProxy?.id || finalStatus.currentProxy
+                const finalIsActive = proxy.id === finalProxyId
+                
+                if (finalIsActive && finalStatus.connectionStatus === 'connected') {
+                  proxy.status = 'connected'
+                  proxy.isActive = true
+                  proxy.latency = 50 // 默认延迟
                   ElMessage.success(`代理 "${proxy.name}" 连接成功`)
                 } else {
+                  proxy.status = 'error'
+                  proxy.isActive = false
                   ElMessage.warning(`代理 "${proxy.name}" 连接超时，请检查代理配置或网络状况`)
                 }
               } catch (error) {
                 proxy.status = 'error'
+                proxy.isActive = false
                 ElMessage.error(`代理 "${proxy.name}" 连接检查失败`)
               }
             }, 5000)
           } else {
             proxy.status = 'error'
+            proxy.isActive = false
             ElMessage.warning(`代理 "${proxy.name}" 连接失败 - 可能是代理服务器不可达或配置错误`)
           }
         } catch (error) {
           console.error('检查代理状态失败:', error)
           proxy.status = 'error'
+          proxy.isActive = false
           ElMessage.error(`代理 "${proxy.name}" 状态检查失败: ${error.message}`)
         }
       }, 3000) // 增加到3秒，给VPS更多时间
