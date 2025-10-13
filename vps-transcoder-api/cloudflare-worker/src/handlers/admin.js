@@ -1092,5 +1092,177 @@ export const handleAdmin = {
       logError(env, 'Admin create proxy handler error', error);
       return errorResponse('Failed to create proxy', 'ADMIN_CREATE_PROXY_ERROR', 500, request);
     }
+  },
+
+  /**
+   * 获取全局代理配置
+   */
+  async getGlobalConfig(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      // 从KV存储获取全局配置
+      const configData = await env.YOYO_USER_DB.get('proxy_global_config');
+      
+      let globalConfig;
+      if (configData) {
+        globalConfig = JSON.parse(configData);
+      } else {
+        // 返回默认配置
+        globalConfig = {
+          currentTestUrlId: 'baidu',
+          testUrls: {
+            'baidu': {
+              id: 'baidu',
+              name: '百度 (推荐)',
+              url: 'https://www.baidu.com',
+              description: '测试代理对中国用户的加速效果'
+            },
+            'google': {
+              id: 'google',
+              name: '谷歌',
+              url: 'https://www.google.com',
+              description: '测试代理的国际访问能力'
+            }
+          },
+          testTimeout: 10000,
+          maxConcurrentTests: 1,
+          enableTestHistory: true,
+          updatedAt: new Date().toISOString()
+        };
+      }
+
+      logInfo(env, 'Admin retrieved global config', {
+        username: auth.user.username,
+        currentTestUrlId: globalConfig.currentTestUrlId
+      });
+
+      return successResponse(globalConfig, 'Global configuration retrieved successfully', request);
+
+    } catch (error) {
+      logError(env, 'Admin get global config handler error', error);
+      return errorResponse('Failed to retrieve global configuration', 'ADMIN_GLOBAL_CONFIG_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 设置全局测试网站ID
+   */
+  async setGlobalConfig(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      let configData;
+      try {
+        configData = await request.json();
+      } catch (error) {
+        return errorResponse('Invalid JSON in request body', 'INVALID_JSON', 400, request);
+      }
+
+      // 验证测试网站ID
+      const allowedIds = ['baidu', 'google'];
+      if (configData.currentTestUrlId && !allowedIds.includes(configData.currentTestUrlId)) {
+        return errorResponse('不支持的测试网站ID', 'INVALID_TEST_URL_ID', 400, request);
+      }
+
+      // 获取现有配置
+      const existingConfigData = await env.YOYO_USER_DB.get('proxy_global_config');
+      let globalConfig;
+      
+      if (existingConfigData) {
+        globalConfig = JSON.parse(existingConfigData);
+      } else {
+        globalConfig = {
+          currentTestUrlId: 'baidu',
+          testUrls: {
+            'baidu': {
+              id: 'baidu',
+              name: '百度 (推荐)',
+              url: 'https://www.baidu.com',
+              description: '测试代理对中国用户的加速效果'
+            },
+            'google': {
+              id: 'google',
+              name: '谷歌',
+              url: 'https://www.google.com',
+              description: '测试代理的国际访问能力'
+            }
+          },
+          testTimeout: 10000,
+          maxConcurrentTests: 1,
+          enableTestHistory: true
+        };
+      }
+
+      // 更新配置
+      if (configData.currentTestUrlId) {
+        globalConfig.currentTestUrlId = configData.currentTestUrlId;
+      }
+      globalConfig.updatedAt = new Date().toISOString();
+
+      // 保存到KV存储
+      await env.YOYO_USER_DB.put('proxy_global_config', JSON.stringify(globalConfig));
+
+      logInfo(env, 'Admin updated global config', {
+        username: auth.user.username,
+        currentTestUrlId: globalConfig.currentTestUrlId
+      });
+
+      return successResponse(globalConfig, 'Global configuration updated successfully', request);
+
+    } catch (error) {
+      logError(env, 'Admin set global config handler error', error);
+      return errorResponse('Failed to update global configuration', 'ADMIN_SET_GLOBAL_CONFIG_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 获取代理测试历史
+   */
+  async getProxyTestHistory(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      const url = new URL(request.url);
+      const pathParts = url.pathname.split('/');
+      const proxyId = pathParts[pathParts.length - 1]; // 从URL路径获取proxyId
+
+      if (!proxyId) {
+        return errorResponse('Proxy ID is required', 'MISSING_PROXY_ID', 400, request);
+      }
+
+      // 从R2存储获取测试历史
+      let testHistory = [];
+      
+      if (env.PROXY_TEST_HISTORY) {
+        try {
+          const historyKey = `${proxyId}.json`;
+          const historyData = await env.PROXY_TEST_HISTORY.get(historyKey);
+          
+          if (historyData) {
+            const historyRecord = JSON.parse(await historyData.text());
+            testHistory = [historyRecord]; // 只返回最新的一条记录
+          }
+        } catch (r2Error) {
+          console.warn('R2存储访问失败:', r2Error);
+          // 继续执行，返回空历史记录
+        }
+      }
+
+      logInfo(env, 'Admin retrieved proxy test history', {
+        username: auth.user.username,
+        proxyId: proxyId,
+        historyCount: testHistory.length
+      });
+
+      return successResponse(testHistory, 'Proxy test history retrieved successfully', request);
+
+    } catch (error) {
+      logError(env, 'Admin get proxy test history handler error', error);
+      return errorResponse('Failed to retrieve proxy test history', 'ADMIN_PROXY_HISTORY_ERROR', 500, request);
+    }
   }
 };
