@@ -75,18 +75,39 @@ export const useStreamsStore = defineStore('streams', () => {
                     console.log('🚀 使用隧道优化端点');
                   }
                 } else {
-                  // 隧道禁用，检查代理配置
+                  // 隧道禁用，检查代理配置和实际连接状态
                   const proxyConfigStr = localStorage.getItem('proxy_config');
+                  let proxyActuallyConnected = false;
+                  
                   if (proxyConfigStr) {
                     try {
                       const proxyConfig = JSON.parse(proxyConfigStr);
+                      
+                      // 🔥 关键修复：检查代理实际连接状态
                       if (proxyConfig.enabled && proxyConfig.activeProxyId) {
-                        // 代理启用，使用Workers代理模式
+                        // 检查VPS实际代理状态
+                        try {
+                          const proxyStatusResponse = await axios.get('/api/admin/proxy/status');
+                          const proxyStatus = proxyStatusResponse.data?.data;
+                          
+                          if (proxyStatus?.connectionStatus === 'connected' && proxyStatus?.currentProxy) {
+                            proxyActuallyConnected = true;
+                            console.log('✅ 代理已连接，使用代理模式');
+                          } else {
+                            console.log('⚠️ 代理配置已启用但未实际连接，降级到直连模式');
+                          }
+                        } catch (statusError) {
+                          console.log('⚠️ 无法获取代理状态，降级到直连模式:', statusError.message);
+                        }
+                      }
+                      
+                      if (proxyActuallyConnected) {
+                        // 代理实际已连接，使用Workers代理模式
                         useWorkerProxy = true;
                         tunnelBaseURL = 'https://yoyoapi.5202021.xyz';
                         console.log('🔄 使用代理模式（透明代理）');
                       } else {
-                        // 代理禁用，使用直连模式
+                        // 代理未连接或配置禁用，使用直连模式
                         tunnelBaseURL = 'https://yoyo-vps.5202021.xyz';
                         console.log('🔗 使用直连模式');
                       }
