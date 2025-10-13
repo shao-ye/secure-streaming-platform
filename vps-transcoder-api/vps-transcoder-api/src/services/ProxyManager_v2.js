@@ -661,7 +661,7 @@ class ProxyManager {
         return {
           success: false,
           latency: -1,
-          method: 'vps_validation',
+          method: 'real_test',
           error: 'V2Ray/Xray客户端不可用'
         };
       }
@@ -672,7 +672,7 @@ class ProxyManager {
         return {
           success: false,
           latency: -1,
-          method: 'vps_validation',
+          method: 'real_test',
           error: '代理配置格式错误'
         };
       }
@@ -686,13 +686,13 @@ class ProxyManager {
         return {
           success: true,
           latency: latency,
-          method: 'vps_validation'
+          method: 'real_test'
         };
       } catch (error) {
         return {
           success: false,
           latency: -1,
-          method: 'vps_validation',
+          method: 'real_test',
           error: '服务器不可达'
         };
       }
@@ -702,7 +702,7 @@ class ProxyManager {
       return {
         success: false,
         latency: -1,
-        method: 'vps_validation',
+        method: 'real_test',
         error: error.message
       };
     }
