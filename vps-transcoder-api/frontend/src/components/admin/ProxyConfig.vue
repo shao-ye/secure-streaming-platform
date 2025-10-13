@@ -117,7 +117,7 @@
               <el-icon class="is-loading"><Loading /></el-icon>
               测试中...
             </span>
-            <span v-else-if="row.latency === -1" class="failed-status">-1</span>
+            <span v-else-if="row.currentTestFailed" class="failed-status">-1</span>
             <span v-else-if="typeof row.latency === 'number' && row.latency > 0" class="success-status">{{ row.latency }}ms</span>
             <span v-else-if="row.lastTestLatency && row.lastTestLatency > 0" class="history-status">{{ row.lastTestLatency }}ms</span>
             <span v-else class="default-status">-</span>
@@ -599,6 +599,7 @@ const testProxy = async (proxy) => {
     testingCount.value++
     testFrequencyCount.value++
     proxy.testing = true
+    proxy.currentTestFailed = false // 清除之前的测试失败标志
     
     console.log('🚀 开始真实代理测试:', { name: proxy.name, testUrlId: globalTestUrlId.value })
     
@@ -619,14 +620,17 @@ const testProxy = async (proxy) => {
     if (testData && testData.success && testData.method === 'real_test') {
       // 显示真实延迟
       proxy.latency = testData.latency
+      proxy.currentTestFailed = false
       ElMessage.success(`代理测试成功 - 延迟: ${testData.latency}ms`)
     } else {
-      // 显示-1
-      proxy.latency = -1
+      // 标记当前测试失败，但不覆盖历史延迟
+      proxy.currentTestFailed = true
+      proxy.latency = null // 重置当前延迟，让历史延迟显示
       ElMessage.error('代理测试失败 - 连接不可用')
     }
   } catch (error) {
-    proxy.latency = -1
+    proxy.currentTestFailed = true
+    proxy.latency = null // 重置当前延迟，让历史延迟显示
     ElMessage.error(`代理测试失败: ${error.message}`)
   } finally {
     proxy.testing = false
@@ -774,7 +778,10 @@ const loadProxyConfig = async () => {
         testing: false,
         enabling: false,
         disabling: false,
-        isActive: proxy.id === proxySettings.value.activeProxyId
+        isActive: proxy.id === proxySettings.value.activeProxyId,
+        currentTestFailed: false, // 初始化测试失败标志
+        lastTestLatency: null, // 初始化历史延迟
+        lastTestTime: null // 初始化历史测试时间
       }))
       
       console.log('加载的代理列表:', proxyList.value.length, '个代理')

@@ -12,6 +12,11 @@ preview_id = "f36b78f5fd4d493aa567f9e8abf68348"
 binding = "LOGIN_LOGS_BUCKET"
 bucket_name = "yoyo-login-logs"
 
+# R2存储桶配置 - 代理测试历史
+[[r2_buckets]]
+binding = "PROXY_TEST_HISTORY"
+bucket_name = "proxy-test-history"
+
 # 路由配置
 [[routes]]
 pattern = "yoyoapi.5202021.xyz/*"
@@ -53,3 +58,7 @@ id = "edafbcf1042147f9b52f0fc4b5c37543"
 [[env.production.r2_buckets]]
 binding = "LOGIN_LOGS_BUCKET"
 bucket_name = "yoyo-login-logs"
+
+[[env.production.r2_buckets]]
+binding = "PROXY_TEST_HISTORY"
+bucket_name = "proxy-test-history"
