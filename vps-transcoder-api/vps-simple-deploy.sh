@@ -103,6 +103,45 @@ else
     fi
 fi
 
+# 6. 检查和安装系统依赖
+echo "🔍 检查系统依赖..."
+
+# 检查nc命令
+if ! command -v nc >/dev/null 2>&1; then
+    echo "⚠️ nc命令不存在，尝试安装..."
+    
+    # 检测系统类型并安装
+    if command -v yum >/dev/null 2>&1; then
+        echo "📦 使用yum安装netcat..."
+        yum install -y nc || yum install -y netcat || yum install -y nmap-ncat
+    elif command -v apt-get >/dev/null 2>&1; then
+        echo "📦 使用apt-get安装netcat..."
+        apt-get update && apt-get install -y netcat-openbsd
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "📦 使用dnf安装netcat..."
+        dnf install -y nc || dnf install -y netcat || dnf install -y nmap-ncat
+    else
+        echo "❌ 无法识别包管理器，请手动安装nc命令"
+    fi
+    
+    # 再次检查
+    if command -v nc >/dev/null 2>&1; then
+        echo "✅ nc命令安装成功"
+    else
+        echo "❌ nc命令安装失败，代理测试功能可能受限"
+    fi
+else
+    echo "✅ nc命令已存在"
+fi
+
+# 检查V2Ray/Xray
+if ! command -v v2ray >/dev/null 2>&1 && ! command -v xray >/dev/null 2>&1; then
+    echo "⚠️ V2Ray/Xray未安装，代理功能可能受限"
+    echo "💡 建议安装: curl -Ls https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | sudo bash"
+else
+    echo "✅ V2Ray/Xray已安装"
+fi
+
 # 5. 验证proxy.js包含新路由
 echo "🔍 验证代理路由..."
 if grep -q "router.post('/connect'" "$TARGET_DIR/routes/proxy.js"; then
