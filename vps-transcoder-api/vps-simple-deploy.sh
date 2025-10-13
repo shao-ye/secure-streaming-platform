@@ -6,13 +6,13 @@
 echo "🚀 VPS可靠部署 - $(date)"
 
 # 配置路径
-GIT_DIR="/tmp/github/secure-streaming-platform/vps-transcoder-api"
-SOURCE_DIR="$GIT_DIR/vps-transcoder-api/src"
+GIT_DIR="/tmp/github/secure-streaming-platform"
+SOURCE_DIR="$GIT_DIR/vps-transcoder-api/vps-transcoder-api/src"
 TARGET_DIR="/opt/yoyo-transcoder/src"
 
 # 1. 进入Git目录
 echo "📁 进入Git目录..."
-cd "$GIT_DIR" || { echo "❌ Git目录不存在"; exit 1; }
+cd "$GIT_DIR/vps-transcoder-api" || { echo "❌ Git目录不存在"; exit 1; }
 
 # 2. 拉取最新代码
 echo "📥 拉取最新代码..."
