@@ -310,11 +310,16 @@ export default {
       router.get('/api/admin/proxy/config', (req, env, ctx) => handleAdmin.getProxyConfig(req, env, ctx));
       router.post('/api/admin/proxy/config', (req, env, ctx) => handleAdmin.createProxyConfig(req, env, ctx));
       
+      // 🔧 新增：全局配置和测试历史API
+      router.get('/api/admin/proxy/global-config', (req, env, ctx) => handleAdmin.getGlobalConfig(req, env, ctx));
+      router.put('/api/admin/proxy/global-config', (req, env, ctx) => handleAdmin.setGlobalConfig(req, env, ctx));
+      router.get('/api/admin/proxy/test-history/:proxyId', (req, env, ctx) => handleAdmin.getProxyTestHistory(req, env, ctx));
+      router.post('/api/admin/proxy/test', (req, env, ctx) => handleAdmin.testProxy(req, env, ctx));
+      
       // 其他代理功能仍使用ProxyManager处理器
       router.post('/api/admin/proxy/connect', (req, env, ctx) => handleProxyManager.connect(req, env, ctx));
       router.post('/api/admin/proxy/disconnect', (req, env, ctx) => handleProxyManager.disconnect(req, env, ctx));
       router.get('/api/admin/proxy/status', (req, env, ctx) => handleProxyManager.status(req, env, ctx));
-      router.post('/api/admin/proxy/test', (req, env, ctx) => handleProxyManager.test(req, env, ctx));
       router.put('/api/admin/proxy/config/:id', (req, env, ctx) => handleProxyManager.updateProxy(req, env, ctx));
       router.delete('/api/admin/proxy/config/:id', (req, env, ctx) => handleProxyManager.deleteProxy(req, env, ctx));
       router.put('/api/admin/proxy/settings', (req, env, ctx) => handleProxyManager.updateSettings(req, env, ctx));

@@ -156,5 +156,48 @@ export const proxyApi = {
       console.error('代理控制操作失败:', error)
       throw error
     }
+  },
+  
+  /**
+   * 获取全局配置
+   */
+  async getGlobalConfig() {
+    try {
+      const response = await axios.get('/api/admin/proxy/global-config')
+      return response.data
+    } catch (error) {
+      console.error('获取全局配置失败:', error)
+      // 返回默认配置而不是抛出错误
+      return { currentTestUrlId: 'baidu' }
+    }
+  },
+  
+  /**
+   * 设置全局测试网站ID
+   */
+  async setGlobalTestUrlId(testUrlId) {
+    try {
+      const response = await axios.put('/api/admin/proxy/global-config', {
+        currentTestUrlId: testUrlId
+      })
+      return response.data
+    } catch (error) {
+      console.error('设置全局测试网站ID失败:', error)
+      throw error
+    }
+  },
+  
+  /**
+   * 获取代理测试历史
+   */
+  async getProxyTestHistory(proxyId, limit = 10) {
+    try {
+      const response = await axios.get(`/api/admin/proxy/test-history/${proxyId}?limit=${limit}`)
+      return response.data
+    } catch (error) {
+      console.error('获取代理测试历史失败:', error)
+      // 返回空数组而不是抛出错误
+      return { data: [] }
+    }
   }
 }

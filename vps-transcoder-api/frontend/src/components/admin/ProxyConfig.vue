@@ -111,12 +111,16 @@
           </template>
         </el-table-column>
         
-        <el-table-column label="延迟" width="80">
+        <el-table-column label="延迟" width="100" align="center">
           <template #default="{ row }">
-            <span v-if="row.testing">测试中...</span>
-            <span v-else-if="row.latency === -1">-1</span>
-            <span v-else-if="typeof row.latency === 'number' && row.latency > 0">{{ row.latency }}ms</span>
-            <span v-else>-</span>
+            <span v-if="row.testing" class="testing-status">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              测试中...
+            </span>
+            <span v-else-if="row.latency === -1" class="failed-status">-1</span>
+            <span v-else-if="typeof row.latency === 'number' && row.latency > 0" class="success-status">{{ row.latency }}ms</span>
+            <span v-else-if="row.lastTestLatency && row.lastTestLatency > 0" class="history-status">{{ row.lastTestLatency }}ms</span>
+            <span v-else class="default-status">-</span>
           </template>
         </el-table-column>
         
@@ -242,6 +246,7 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
 import { proxyApi } from '../../services/proxyApi'
 
 // 响应式数据
@@ -510,12 +515,63 @@ const validateTestUrlId = (urlId) => {
 // 更新全局测试网站配置
 const updateGlobalTestUrlId = async (newUrlId) => {
   try {
-    // 这里可以添加保存到后端的逻辑
+    await proxyApi.setGlobalTestUrlId(newUrlId)
     ElMessage.success('测试网站配置已更新')
   } catch (error) {
     ElMessage.error('更新配置失败')
     // 回滚到之前的值
     globalTestUrlId.value = 'baidu'
+  }
+}
+
+// 🔧 新增：加载所有代理的历史测试结果
+const loadProxyTestHistory = async () => {
+  try {
+    console.log('🔄 开始加载代理历史测试结果...')
+    
+    for (const proxy of proxyList.value) {
+      try {
+        const historyResult = await proxyApi.getProxyTestHistory(proxy.id, 1) // 只获取最新的一条记录
+        const historyData = historyResult.data || historyResult
+        
+        if (historyData && historyData.length > 0) {
+          const latestTest = historyData[0]
+          if (latestTest.success && latestTest.latency > 0) {
+            proxy.lastTestLatency = latestTest.latency
+            proxy.lastTestTime = latestTest.timestamp
+            console.log(`✅ 代理 ${proxy.name} 历史延迟: ${latestTest.latency}ms`)
+          }
+        }
+      } catch (error) {
+        console.warn(`获取代理 ${proxy.name} 历史测试结果失败:`, error)
+      }
+    }
+    
+    console.log('✅ 代理历史测试结果加载完成')
+  } catch (error) {
+    console.error('加载代理历史测试结果失败:', error)
+  }
+}
+
+// 🔧 新增：自动刷新已连接代理的延迟测试
+const refreshActiveProxyLatency = async () => {
+  try {
+    console.log('🔄 开始刷新已连接代理的延迟...')
+    
+    const activeProxy = proxyList.value.find(proxy => proxy.isActive && proxy.status === 'connected')
+    
+    if (activeProxy) {
+      console.log(`🎯 发现已连接代理: ${activeProxy.name}，开始测试延迟...`)
+      
+      // 异步测试延迟，不阻塞页面加载
+      setTimeout(() => {
+        testProxy(activeProxy)
+      }, 1000) // 延迟1秒执行，确保页面完全加载
+    } else {
+      console.log('ℹ️ 没有发现已连接的代理，跳过延迟刷新')
+    }
+  } catch (error) {
+    console.error('刷新已连接代理延迟失败:', error)
   }
 }
 
@@ -983,20 +1039,32 @@ const testProxyLatency = async (proxy) => {
 }
 
 // 组件挂载时初始化
-onMounted(() => {
+onMounted(async () => {
+  try {
+    // 获取全局测试网站配置
+    const config = await proxyApi.getGlobalConfig()
+    globalTestUrlId.value = config.currentTestUrlId || 'baidu'
+  } catch (error) {
+    console.warn('获取全局配置失败，使用默认值')
+  }
+  
   // 页面加载时重置所有测试状态
   proxyList.value.forEach(proxy => {
     proxy.testing = false // 重置测试状态
   })
   
-  // 重置并发计数器
+  // 重置并发和频率计数器
   testingCount.value = 0
-  
-  // 重置频率限制计数器
   testFrequencyCount.value = 0
   
-  // 加载代理配置
-  loadProxyConfig()
+  // 加载代理配置和历史测试结果
+  await loadProxyConfig()
+  
+  // 为所有代理加载历史测试结果
+  await loadProxyTestHistory()
+  
+  // 自动刷新已连接代理的延迟测试
+  await refreshActiveProxyLatency()
 })
 
 // 🔧 新增：异步测试代理真实延迟
@@ -1165,6 +1233,38 @@ const testProxyPing = async (proxy) => {
 
 .test-config-card .el-text {
   margin-left: 8px;
+  font-size: 12px;
+}
+
+/* 延迟显示状态样式 */
+.testing-status {
+  color: #409eff;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.success-status {
+  color: #67c23a;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.failed-status {
+  color: #f56c6c;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.history-status {
+  color: #909399;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.default-status {
+  color: #c0c4cc;
   font-size: 12px;
 }
 </style>
