@@ -540,7 +540,11 @@ const loadProxyTestHistory = async () => {
             proxy.lastTestLatency = latestTest.latency
             proxy.lastTestTime = latestTest.timestamp
             console.log(`✅ 代理 ${proxy.name} 历史延迟: ${latestTest.latency}ms`)
+          } else {
+            console.log(`⚠️ 代理 ${proxy.name} 历史测试失败或无效延迟:`, latestTest)
           }
+        } else {
+          console.log(`ℹ️ 代理 ${proxy.name} 暂无历史测试记录`)
         }
       } catch (error) {
         console.warn(`获取代理 ${proxy.name} 历史测试结果失败:`, error)
@@ -770,19 +774,29 @@ const loadProxyConfig = async () => {
       }
       proxyEnabled.value = proxySettings.value.enabled
       
-      // 加载代理列表并设置初始状态 - 根据isActive和后台连接状态正确设置
-      proxyList.value = (config.data.proxies || []).map(proxy => ({
-        ...proxy,
-        status: getInitialProxyStatus(proxy, proxySettings.value.activeProxyId),
-        latency: proxy.latency || null,
-        testing: false,
-        enabling: false,
-        disabling: false,
-        isActive: proxy.id === proxySettings.value.activeProxyId,
-        currentTestFailed: false, // 初始化测试失败标志
-        lastTestLatency: null, // 初始化历史延迟
-        lastTestTime: null // 初始化历史测试时间
-      }))
+      // 加载代理列表并设置初始状态 - 使用明确的对象创建避免Vue响应式问题
+      proxyList.value = (config.data.proxies || []).map(proxy => {
+        const proxyObj = {
+          id: proxy.id,
+          name: proxy.name,
+          type: proxy.type,
+          config: proxy.config,
+          createdAt: proxy.createdAt,
+          updatedAt: proxy.updatedAt,
+          priority: proxy.priority || 1,
+          status: getInitialProxyStatus(proxy, proxySettings.value.activeProxyId),
+          latency: proxy.latency || null,
+          testing: false,
+          enabling: false,
+          disabling: false,
+          isActive: proxy.id === proxySettings.value.activeProxyId,
+          currentTestFailed: false, // 初始化测试失败标志
+          lastTestLatency: null, // 初始化历史延迟
+          lastTestTime: null // 初始化历史测试时间
+        }
+        console.log(`✅ 创建代理对象: ${proxy.name}`, proxyObj)
+        return proxyObj
+      })
       
       console.log('加载的代理列表:', proxyList.value.length, '个代理')
       console.log('代理列表内容:', proxyList.value)
