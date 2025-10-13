@@ -709,36 +709,27 @@ class ProxyManager {
         // 检查nc命令是否可用
         try {
           await execAsync('which nc');
-          logger.info('nc命令可用');
-        } catch (ncError) {
-          logger.error('nc命令不可用:', ncError.message);
+          logger.info('nc命令可用，但连通性测试失败');
+          
+          // nc命令可用但测试失败，返回真实的失败结果
           return {
             success: false,
             latency: latency,
             method: 'real_test',
-            error: 'nc命令不可用，无法进行端口测试'
+            error: `代理服务器 ${parsed.address}:${parsed.port} 连接失败`
           };
-        }
-        
-        // 对于VLESS协议，即使连通性测试失败，也可能是网络限制
-        // 如果配置格式正确，给出更友好的提示
-        if (proxyConfig.config.includes('vless://') && parsed.port > 0 && parsed.port < 65536) {
-          logger.info(`VLESS协议配置格式正确，端口 ${parsed.port} 在有效范围内，认为配置可能有效`);
+          
+        } catch (ncError) {
+          logger.error('nc命令不可用:', ncError.message);
+          
+          // nc命令不可用，无法进行真实测试
           return {
-            success: true,
+            success: false,
             latency: latency,
             method: 'real_test',
-            message: '配置验证通过（网络测试受限，但配置可能有效）'
+            error: 'nc命令不可用，无法进行真实连通性测试'
           };
         }
-        
-        logger.warn(`配置验证失败: 不是VLESS协议或端口无效`);
-        return {
-          success: false,
-          latency: latency,
-          method: 'real_test',
-          error: '代理服务器连接测试失败'
-        };
       }
       
     } catch (error) {
