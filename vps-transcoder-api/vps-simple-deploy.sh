@@ -14,9 +14,18 @@ TARGET_DIR="/opt/yoyo-transcoder/src"
 echo "📁 进入Git目录..."
 cd "$GIT_DIR/vps-transcoder-api" || { echo "❌ Git目录不存在"; exit 1; }
 
-# 2. 拉取最新代码
-echo "📥 拉取最新代码..."
-git pull origin master
+# 2. 强制拉取最新代码（放弃本地修改）
+echo "📥 强制拉取最新代码..."
+echo "⚠️ 检查本地修改..."
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "🔄 发现本地修改，强制重置为master版本..."
+    git reset --hard HEAD
+    git clean -fd
+fi
+
+echo "📥 拉取master分支..."
+git fetch origin master
+git reset --hard origin/master
 
 # 3. 使用rsync同步代码（无交互，可靠）
 echo "🔄 同步代码..."
