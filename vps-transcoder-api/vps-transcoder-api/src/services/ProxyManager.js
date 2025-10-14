@@ -445,10 +445,18 @@ class ProxyManager {
    */
   async checkProxyPort() {
     try {
-      const { stdout } = await execAsync(`netstat -tlnp | grep :${this.proxyPort}`);
+      // 使用ss命令检查端口（更现代的替代netstat）
+      const { stdout } = await execAsync(`ss -tlnp | grep :${this.proxyPort}`);
       return stdout.includes(`:${this.proxyPort}`);
     } catch (error) {
-      return false;
+      // 如果ss命令失败，尝试lsof
+      try {
+        const { stdout: lsofOutput } = await execAsync(`lsof -i :${this.proxyPort}`);
+        return lsofOutput.includes(`:${this.proxyPort}`);
+      } catch (lsofError) {
+        logger.warn('端口检查失败:', error.message);
+        return false;
+      }
     }
   }
 
