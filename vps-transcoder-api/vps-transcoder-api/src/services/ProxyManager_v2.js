@@ -650,11 +650,15 @@ class ProxyManager {
   }
 
   /**
-   * 简化的代理延迟测试 - 基于现有连接功能
+   * 真实代理延迟测试 - 类似v2ray客户端的连接测试
    */
   async testProxyLatency(proxyConfig, testUrlId = 'baidu') {
+    const startTime = Date.now();
+    let tempConfigPath = null;
+    let tempProcess = null;
+    
     try {
-      logger.info(`开始代理延迟测试: ${proxyConfig.name}`);
+      logger.info(`开始真实代理延迟测试: ${proxyConfig.name}`);
       
       // 检查V2Ray/Xray客户端
       const clientInfo = await this.checkProxyClientAvailable();
@@ -667,80 +671,302 @@ class ProxyManager {
         };
       }
       
-      // 解析代理配置
-      const parsed = this.parseProxyUrl(proxyConfig.config);
-      if (!parsed.address || !parsed.port) {
+      // 生成测试网站URL
+      const testUrls = {
+        'baidu': 'https://www.baidu.com',
+        'google': 'https://www.google.com'
+      };
+      const testUrl = testUrls[testUrlId] || testUrls['baidu'];
+      
+      logger.info(`使用测试网站: ${testUrl}`);
+      
+      // 1. 生成临时V2Ray配置文件
+      tempConfigPath = `/tmp/v2ray_test_${Date.now()}.json`;
+      const v2rayConfig = await this.generateV2rayConfig(proxyConfig);
+      
+      await fs.writeFile(tempConfigPath, JSON.stringify(v2rayConfig, null, 2));
+      logger.info(`临时配置文件已生成: ${tempConfigPath}`);
+      
+      // 2. 启动临时V2Ray进程
+      logger.info('启动临时V2Ray进程...');
+      tempProcess = spawn(clientInfo.command, ['-config', tempConfigPath], {
+        stdio: 'pipe',
+        detached: false
+      });
+      
+      // 等待V2Ray启动
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('V2Ray启动超时'));
+        }, 5000);
+        
+        let output = '';
+        tempProcess.stdout.on('data', (data) => {
+          output += data.toString();
+          if (output.includes('started') || output.includes('listening')) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        
+        tempProcess.stderr.on('data', (data) => {
+          const errorOutput = data.toString();
+          logger.warn('V2Ray stderr:', errorOutput);
+          if (errorOutput.includes('started') || errorOutput.includes('listening')) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        
+        tempProcess.on('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+        
+        tempProcess.on('exit', (code) => {
+          if (code !== 0) {
+            clearTimeout(timeout);
+            reject(new Error(`V2Ray进程异常退出，代码: ${code}`));
+          }
+        });
+      });
+      
+      logger.info('V2Ray进程启动成功，等待稳定...');
+      await new Promise(resolve => setTimeout(resolve, 2000)); // 等待2秒确保稳定
+      
+      // 3. 通过代理测试网站连接
+      const testStartTime = Date.now();
+      logger.info(`开始通过代理访问: ${testUrl}`);
+      
+      try {
+        // 使用curl通过SOCKS5代理访问测试网站
+        const curlCommand = `curl -x socks5://127.0.0.1:1080 --connect-timeout 10 --max-time 15 -s -o /dev/null -w "%{http_code},%{time_total}" "${testUrl}"`;
+        logger.info(`执行curl命令: ${curlCommand}`);
+        
+        const { stdout } = await execAsync(curlCommand);
+        const [httpCode, timeTotal] = stdout.trim().split(',');
+        const realLatency = Math.round(parseFloat(timeTotal) * 1000); // 转换为毫秒
+        
+        logger.info(`代理测试完成: HTTP ${httpCode}, 延迟: ${realLatency}ms`);
+        
+        if (httpCode === '200' || httpCode === '301' || httpCode === '302') {
+          return {
+            success: true,
+            latency: realLatency,
+            method: 'real_test',
+            message: `通过代理成功访问 ${testUrl}`
+          };
+        } else {
+          return {
+            success: false,
+            latency: -1,
+            method: 'real_test',
+            error: `HTTP响应异常: ${httpCode}`
+          };
+        }
+        
+      } catch (curlError) {
+        logger.error('curl测试失败:', curlError.message);
         return {
           success: false,
           latency: -1,
           method: 'real_test',
-          error: '代理配置格式错误'
+          error: `代理连接测试失败: ${curlError.message}`
         };
-      }
-      
-      // 简化测试：检查代理服务器连通性
-      const startTime = Date.now();
-      
-      logger.info(`开始测试代理服务器连通性: ${parsed.address}:${parsed.port}`);
-      logger.info(`代理配置类型: ${proxyConfig.config.substring(0, 20)}...`);
-      
-      try {
-        // 使用nc测试端口连通性，但增加更详细的错误处理
-        logger.info(`执行命令: timeout 5 nc -z ${parsed.address} ${parsed.port}`);
-        const result = await execAsync(`timeout 5 nc -z ${parsed.address} ${parsed.port}`);
-        const latency = Date.now() - startTime;
-        
-        logger.info(`代理服务器 ${parsed.address}:${parsed.port} 连通性测试成功，延迟: ${latency}ms`);
-        logger.info(`nc命令输出: ${JSON.stringify(result)}`);
-        
-        return {
-          success: true,
-          latency: latency,
-          method: 'real_test',
-          message: `代理服务器连通性测试通过`
-        };
-        
-      } catch (error) {
-        const latency = Date.now() - startTime;
-        
-        logger.warn(`代理服务器连通性测试失败: ${error.message}`);
-        logger.warn(`错误详情: ${JSON.stringify(error)}`);
-        logger.warn(`测试耗时: ${latency}ms`);
-        
-        // 检查nc命令是否可用
-        try {
-          await execAsync('which nc');
-          logger.info('nc命令可用，但连通性测试失败');
-          
-          // nc命令可用但测试失败，返回真实的失败结果
-          return {
-            success: false,
-            latency: latency,
-            method: 'real_test',
-            error: `代理服务器 ${parsed.address}:${parsed.port} 连接失败`
-          };
-          
-        } catch (ncError) {
-          logger.error('nc命令不可用:', ncError.message);
-          
-          // nc命令不可用，无法进行真实测试
-          return {
-            success: false,
-            latency: latency,
-            method: 'real_test',
-            error: 'nc命令不可用，无法进行真实连通性测试'
-          };
-        }
       }
       
     } catch (error) {
-      logger.error('代理延迟测试异常:', error);
+      logger.error('真实代理延迟测试异常:', error);
       return {
         success: false,
         latency: -1,
         method: 'real_test',
         error: `测试异常: ${error.message}`
       };
+    } finally {
+      // 4. 清理资源
+      try {
+        if (tempProcess && !tempProcess.killed) {
+          logger.info('终止临时V2Ray进程...');
+          tempProcess.kill('SIGTERM');
+          
+          // 等待进程退出
+          await new Promise((resolve) => {
+            tempProcess.on('exit', resolve);
+            setTimeout(() => {
+              if (!tempProcess.killed) {
+                tempProcess.kill('SIGKILL');
+              }
+              resolve();
+            }, 3000);
+          });
+        }
+        
+        if (tempConfigPath) {
+          await fs.unlink(tempConfigPath);
+          logger.info('临时配置文件已删除');
+        }
+      } catch (cleanupError) {
+        logger.warn('资源清理失败:', cleanupError.message);
+      }
+    }
+  }
+
+  /**
+   * 生成V2Ray配置文件
+   */
+  async generateV2rayConfig(proxyConfig) {
+    try {
+      if (proxyConfig.type === 'vless') {
+        return await this.generateVlessConfig(proxyConfig.config);
+      } else if (proxyConfig.type === 'vmess') {
+        return await this.generateVmessConfig(proxyConfig.config);
+      } else {
+        throw new Error(`不支持的代理类型: ${proxyConfig.type}`);
+      }
+    } catch (error) {
+      logger.error('生成V2Ray配置失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 生成VLESS配置
+   */
+  async generateVlessConfig(vlessUrl) {
+    try {
+      const url = new URL(vlessUrl);
+      const uuid = url.username;
+      const hostname = url.hostname;
+      const port = parseInt(url.port) || 443;
+      const params = new URLSearchParams(url.search);
+      
+      // 基础配置
+      const config = {
+        log: {
+          loglevel: "warning"
+        },
+        inbounds: [{
+          tag: "socks",
+          port: 1080,
+          listen: "127.0.0.1",
+          protocol: "socks",
+          settings: {
+            auth: "noauth",
+            udp: true
+          }
+        }],
+        outbounds: [{
+          tag: "proxy",
+          protocol: "vless",
+          settings: {
+            vnext: [{
+              address: hostname,
+              port: port,
+              users: [{
+                id: uuid,
+                encryption: params.get('encryption') || 'none'
+              }]
+            }]
+          },
+          streamSettings: {
+            network: params.get('type') || 'tcp'
+          }
+        }]
+      };
+
+      // 处理不同的传输协议
+      const network = params.get('type') || 'tcp';
+      const security = params.get('security') || 'none';
+
+      if (network === 'tcp') {
+        config.outbounds[0].streamSettings.tcpSettings = {};
+      } else if (network === 'xhttp') {
+        config.outbounds[0].streamSettings.xhttpSettings = {
+          host: params.get('host') || hostname,
+          path: params.get('path') || '/',
+          mode: params.get('mode') || 'auto'
+        };
+      }
+
+      // 处理安全设置
+      if (security === 'tls') {
+        config.outbounds[0].streamSettings.security = 'tls';
+        config.outbounds[0].streamSettings.tlsSettings = {
+          serverName: params.get('sni') || hostname,
+          allowInsecure: false
+        };
+      } else if (security === 'reality') {
+        config.outbounds[0].streamSettings.security = 'reality';
+        config.outbounds[0].streamSettings.realitySettings = {
+          serverName: params.get('sni') || hostname,
+          fingerprint: params.get('fp') || 'chrome',
+          publicKey: params.get('pbk') || ''
+        };
+      }
+
+      // 处理flow
+      const flow = params.get('flow');
+      if (flow) {
+        config.outbounds[0].settings.vnext[0].users[0].flow = flow;
+      }
+
+      logger.info('生成VLESS配置成功:', { hostname, port, network, security });
+      return config;
+    } catch (error) {
+      logger.error('生成VLESS配置失败:', error);
+      throw new Error(`VLESS配置生成失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 生成VMess配置
+   */
+  async generateVmessConfig(vmessUrl) {
+    try {
+      // VMess URL解析和配置生成
+      const base64Data = vmessUrl.replace('vmess://', '');
+      const configData = JSON.parse(Buffer.from(base64Data, 'base64').toString());
+      
+      const config = {
+        log: {
+          loglevel: "warning"
+        },
+        inbounds: [{
+          tag: "socks",
+          port: 1080,
+          listen: "127.0.0.1",
+          protocol: "socks",
+          settings: {
+            auth: "noauth",
+            udp: true
+          }
+        }],
+        outbounds: [{
+          tag: "proxy",
+          protocol: "vmess",
+          settings: {
+            vnext: [{
+              address: configData.add,
+              port: parseInt(configData.port),
+              users: [{
+                id: configData.id,
+                alterId: parseInt(configData.aid) || 0,
+                security: configData.scy || 'auto'
+              }]
+            }]
+          },
+          streamSettings: {
+            network: configData.net || 'tcp'
+          }
+        }]
+      };
+
+      logger.info('生成VMess配置成功:', { address: configData.add, port: configData.port });
+      return config;
+    } catch (error) {
+      logger.error('生成VMess配置失败:', error);
+      throw new Error(`VMess配置生成失败: ${error.message}`);
     }
   }
 
