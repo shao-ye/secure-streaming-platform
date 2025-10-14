@@ -577,12 +577,12 @@ const testProxy = async (proxy) => {
     
     console.log('🚀 开始真实代理测试:', { name: proxy.name, testUrlId: globalTestUrlId.value })
     
-    // 调用真实API测试代理，传递ID而不是URL
+    // 调用真实API测试代理，传递正确的数据格式
     const result = await proxyApi.testProxy({
       id: proxy.id,
       name: proxy.name,
       type: proxy.type,
-      config: proxy.config,
+      config: proxy.config, // VPS期望的代理URL在config字段中
       testUrlId: globalTestUrlId.value
     })
     
