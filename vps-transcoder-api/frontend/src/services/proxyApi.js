@@ -96,6 +96,34 @@ export const proxyApi = {
       throw error
     }
   },
+
+  /**
+   * 连接代理（用于延迟测试）
+   */
+  async connectProxy(proxyData) {
+    try {
+      const response = await axios.post('/api/admin/proxy/connect', {
+        proxyConfig: proxyData
+      })
+      return response.data
+    } catch (error) {
+      console.error('连接代理失败:', error)
+      throw error
+    }
+  },
+
+  /**
+   * 断开代理连接
+   */
+  async disconnectProxy() {
+    try {
+      const response = await axios.post('/api/admin/proxy/disconnect')
+      return response.data
+    } catch (error) {
+      console.error('断开代理失败:', error)
+      throw error
+    }
+  },
   
   /**
    * 切换代理状态
