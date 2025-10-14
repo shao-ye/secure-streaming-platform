@@ -1216,8 +1216,29 @@ class ProxyManager {
       // 设置进程事件处理
       this.setupProcessHandlers(proxyConfig);
 
-      // 等待代理启动
-      await this.waitForProxyReady();
+      // 等待代理启动（使用与测试接口相同的逻辑）
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('代理启动超时'));
+        }, 5000);
+        
+        this.v2rayProcess.stdout.on('data', (data) => {
+          if (data.toString().includes('started')) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        
+        this.v2rayProcess.on('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+        
+        this.v2rayProcess.on('exit', (code) => {
+          clearTimeout(timeout);
+          reject(new Error(`V2Ray进程退出，代码: ${code}`));
+        });
+      });
 
       // 验证代理连接
       const isConnected = await this.checkProxyPort();
