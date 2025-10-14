@@ -960,6 +960,164 @@ class ProxyManager {
   }
 
   /**
+   * 生成V2Ray配置文件
+   */
+  async generateV2rayConfig(proxyConfig) {
+    try {
+      if (proxyConfig.type === 'vless') {
+        return await this.generateVlessConfig(proxyConfig.config);
+      } else if (proxyConfig.type === 'vmess') {
+        return await this.generateVmessConfig(proxyConfig.config);
+      } else {
+        throw new Error(`不支持的代理类型: ${proxyConfig.type}`);
+      }
+    } catch (error) {
+      logger.error('生成V2Ray配置失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 生成VLESS配置
+   */
+  async generateVlessConfig(vlessUrl) {
+    try {
+      const url = new URL(vlessUrl);
+      const uuid = url.username;
+      const hostname = url.hostname;
+      const port = parseInt(url.port) || 443;
+      const params = new URLSearchParams(url.search);
+      
+      // 基础配置
+      const config = {
+        log: {
+          loglevel: "warning"
+        },
+        inbounds: [{
+          tag: "socks",
+          port: this.proxyPort,
+          listen: "127.0.0.1",
+          protocol: "socks",
+          settings: {
+            auth: "noauth",
+            udp: true
+          }
+        }],
+        outbounds: [{
+          tag: "proxy",
+          protocol: "vless",
+          settings: {
+            vnext: [{
+              address: hostname,
+              port: port,
+              users: [{
+                id: uuid,
+                encryption: params.get('encryption') || 'none'
+              }]
+            }]
+          },
+          streamSettings: {
+            network: params.get('type') || 'tcp'
+          }
+        }]
+      };
+
+      // 处理不同的传输协议
+      const network = params.get('type') || 'tcp';
+      const security = params.get('security') || 'none';
+
+      if (network === 'tcp') {
+        config.outbounds[0].streamSettings.tcpSettings = {};
+      } else if (network === 'xhttp') {
+        config.outbounds[0].streamSettings.xhttpSettings = {
+          host: params.get('host') || hostname,
+          path: params.get('path') || '/',
+          mode: params.get('mode') || 'auto'
+        };
+      }
+
+      // 处理安全设置
+      if (security === 'tls') {
+        config.outbounds[0].streamSettings.security = 'tls';
+        config.outbounds[0].streamSettings.tlsSettings = {
+          serverName: params.get('sni') || hostname,
+          allowInsecure: false
+        };
+      } else if (security === 'reality') {
+        config.outbounds[0].streamSettings.security = 'reality';
+        config.outbounds[0].streamSettings.realitySettings = {
+          serverName: params.get('sni') || hostname,
+          fingerprint: params.get('fp') || 'chrome',
+          publicKey: params.get('pbk') || ''
+        };
+      }
+
+      // 处理flow
+      const flow = params.get('flow');
+      if (flow) {
+        config.outbounds[0].settings.vnext[0].users[0].flow = flow;
+      }
+
+      logger.info('生成VLESS配置成功:', { hostname, port, network, security });
+      return config;
+    } catch (error) {
+      logger.error('生成VLESS配置失败:', error);
+      throw new Error(`VLESS配置生成失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 生成VMess配置
+   */
+  async generateVmessConfig(vmessUrl) {
+    try {
+      // VMess URL解析和配置生成
+      const base64Data = vmessUrl.replace('vmess://', '');
+      const configData = JSON.parse(Buffer.from(base64Data, 'base64').toString());
+      
+      const config = {
+        log: {
+          loglevel: "warning"
+        },
+        inbounds: [{
+          tag: "socks",
+          port: this.proxyPort,
+          listen: "127.0.0.1",
+          protocol: "socks",
+          settings: {
+            auth: "noauth",
+            udp: true
+          }
+        }],
+        outbounds: [{
+          tag: "proxy",
+          protocol: "vmess",
+          settings: {
+            vnext: [{
+              address: configData.add,
+              port: parseInt(configData.port),
+              users: [{
+                id: configData.id,
+                alterId: parseInt(configData.aid) || 0,
+                security: configData.scy || 'auto'
+              }]
+            }]
+          },
+          streamSettings: {
+            network: configData.net || 'tcp'
+          }
+        }]
+      };
+
+      logger.info('生成VMess配置成功:', { address: configData.add, port: configData.port });
+      return config;
+    } catch (error) {
+      logger.error('生成VMess配置失败:', error);
+      throw new Error(`VMess配置生成失败: ${error.message}`);
+    }
+  }
+
+  /**
    * 清理僵尸进程
    */
   async cleanupZombieProcesses() {
