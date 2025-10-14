@@ -929,7 +929,11 @@ export const handleAdmin = {
 
       const vpsRequestBody = {
         proxyId: proxyData.id,
-        proxyConfig: proxyData,
+        proxyConfig: {
+          name: proxyData.name,
+          type: proxyData.type,
+          config: proxyData.config // VPS期望的代理URL在config字段中
+        },
         testUrlId: testUrlId
       };
 
