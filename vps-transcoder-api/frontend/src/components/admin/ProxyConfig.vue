@@ -768,9 +768,20 @@ const loadProxyConfig = async () => {
         return proxyObj
       })
       
-      console.log('加载的代理列表:', proxyList.value.length, '个代理')
-      console.log('代理列表内容:', proxyList.value)
-      console.log('活跃代理ID:', proxySettings.value.activeProxyId)
+      console.log('🔍 加载的代理列表:', proxyList.value.length, '个代理')
+      console.log('🔍 代理列表内容:', proxyList.value)
+      console.log('🔍 活跃代理ID:', proxySettings.value.activeProxyId)
+      
+      // 🔧 强制触发Vue响应式更新 - 修复显示问题
+      if (proxyList.value.length > 0) {
+        console.log('✅ 检测到代理数据，强制更新显示')
+        // 使用nextTick确保DOM更新
+        nextTick(() => {
+          console.log('✅ Vue nextTick完成，代理列表应该显示')
+        })
+      } else {
+        console.log('❌ 未检测到代理数据')
+      }
       
       // 强制触发Vue响应式更新
       nextTick(() => {
