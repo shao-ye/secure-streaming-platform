@@ -1,12 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const ProxyManager = require('../services/ProxyManager_v2');
+const ProxyManager = require('../services/ProxyManager');
 const logger = require('../utils/logger');
 
 // 创建代理管理器实例
 const proxyManager = new ProxyManager();
 
-// ProxyManager_v2 不需要初始化方法
+// 初始化代理管理器
+proxyManager.initialize().catch(error => {
+  logger.error('ProxyManager初始化失败:', error);
+});
 
 /**
  * 更新代理配置
