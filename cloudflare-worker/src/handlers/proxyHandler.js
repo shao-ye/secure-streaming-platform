@@ -382,24 +382,19 @@ export class ProxyHandler {
     try {
       const proxyData = await request.json();
       
-      // 🔧 修复：支持testUrlId映射到具体URL
-      let testUrl;
-      if (proxyData.testUrlId) {
-        // 使用ID映射到URL（安全防止URL注入）
-        const urlMapping = {
-          'baidu': 'https://www.baidu.com',
-          'google': 'https://www.google.com'
-        };
-        testUrl = urlMapping[proxyData.testUrlId] || 'https://www.baidu.com';
-        console.log('收到代理测试请求:', { name: proxyData.name, testUrlId: proxyData.testUrlId, testUrl });
-      } else {
-        // 向后兼容：支持直接传递testUrl
-        testUrl = proxyData.testUrl || 'https://www.baidu.com';
-        console.log('收到代理测试请求:', { name: proxyData.name, testUrl });
+      // 🔒 安全改进：只验证testUrlId，不处理URL映射
+      const testUrlId = proxyData.testUrlId || 'baidu'; // 默认使用百度
+      
+      // 验证testUrlId的安全性
+      const validTestUrlIds = ['baidu', 'google'];
+      if (!validTestUrlIds.includes(testUrlId)) {
+        throw new Error(`无效的测试网站ID: ${testUrlId}`);
       }
       
-      // 调用VPS进行真实代理测试
-      const testResult = await this.callVPSProxyTest(env, proxyData, testUrl, proxyData.testUrlId);
+      console.log('收到代理测试请求:', { name: proxyData.name, testUrlId });
+      
+      // 调用VPS进行真实代理测试（只传递ID）
+      const testResult = await this.callVPSProxyTest(env, proxyData, null, testUrlId);
       
       return new Response(JSON.stringify({
         status: 'success',
@@ -863,7 +858,7 @@ export class ProxyHandler {
         body: JSON.stringify({
           proxyId: proxy.id,
           proxyConfig: proxy,
-          testUrlId: testUrlId || 'baidu'  // 🔧 修复：传递testUrlId而不是testUrl
+          testUrlId: testUrlId || 'baidu'  // 🔒 安全：只传递ID，由VPS进行映射
         })
       });
       
