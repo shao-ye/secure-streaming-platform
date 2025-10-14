@@ -1501,5 +1501,331 @@ export const handleAdmin = {
       console.error('❌ R2写入测试失败:', error);
       return errorResponse('Failed to test R2 storage write', 'R2_WRITE_TEST_ERROR', 500, request);
     }
+  },
+
+  // ==================== 用户管理功能 ====================
+
+  /**
+   * 获取用户列表
+   */
+  async getUsers(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      // 从KV存储获取所有用户
+      const userKeys = [];
+      const listResult = await env.YOYO_USER_DB.list({ prefix: 'user:' });
+      
+      const users = [];
+      for (const key of listResult.keys) {
+        try {
+          const userData = await env.YOYO_USER_DB.get(key.name);
+          if (userData) {
+            const user = JSON.parse(userData);
+            // 移除敏感信息
+            delete user.hashedPassword;
+            delete user.salt;
+            
+            // 添加统计信息
+            user.id = user.username;
+            user.displayName = user.displayName || user.username;
+            user.status = user.status || 'active';
+            user.lastLogin = user.lastLogin || null;
+            user.loginCount = user.loginCount || 0;
+            
+            users.push(user);
+          }
+        } catch (parseError) {
+          console.error('解析用户数据失败:', parseError);
+        }
+      }
+
+      // 按创建时间排序
+      users.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      logInfo(env, 'Admin retrieved users list', {
+        username: auth.user.username,
+        userCount: users.length
+      });
+
+      return successResponse({
+        users: users,
+        total: users.length,
+        adminCount: users.filter(u => u.role === 'admin').length,
+        userCount: users.filter(u => u.role === 'user').length,
+        activeCount: users.filter(u => u.status === 'active').length
+      }, 'Users retrieved successfully', request);
+
+    } catch (error) {
+      await logError(env, 'Get users failed', error, { username: auth?.user?.username });
+      return errorResponse('Failed to get users', 'GET_USERS_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 创建用户
+   */
+  async createUser(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      const userData = await request.json();
+      const { username, displayName, password, role = 'user' } = userData;
+
+      // 验证必填字段
+      if (!username || !password) {
+        return errorResponse('Username and password are required', 'VALIDATION_ERROR', 400, request);
+      }
+
+      // 检查用户名是否已存在
+      const existingUser = await env.YOYO_USER_DB.get(`user:${username}`);
+      if (existingUser) {
+        return errorResponse('Username already exists', 'USER_EXISTS', 409, request);
+      }
+
+      // 导入密码哈希函数
+      const { hashPassword, generateRandomString } = await import('../utils/crypto.js');
+
+      // 生成密码哈希
+      const salt = generateRandomString(16);
+      const hashedPassword = await hashPassword(password, salt);
+
+      // 创建用户数据
+      const newUser = {
+        username: username,
+        displayName: displayName || username,
+        role: role,
+        status: 'active',
+        hashedPassword: hashedPassword,
+        salt: salt,
+        loginCount: 0,
+        lastLogin: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      // 保存到KV存储
+      await env.YOYO_USER_DB.put(`user:${username}`, JSON.stringify(newUser));
+
+      // 移除敏感信息后返回
+      const responseUser = { ...newUser };
+      delete responseUser.hashedPassword;
+      delete responseUser.salt;
+      responseUser.id = username;
+
+      logInfo(env, 'Admin created new user', {
+        adminUsername: auth.user.username,
+        newUsername: username,
+        newUserRole: role
+      });
+
+      return successResponse(responseUser, 'User created successfully', request);
+
+    } catch (error) {
+      await logError(env, 'Create user failed', error, { username: auth?.user?.username });
+      return errorResponse('Failed to create user', 'CREATE_USER_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 更新用户信息
+   */
+  async updateUser(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      const url = new URL(request.url);
+      const userId = url.pathname.split('/').pop();
+      const updateData = await request.json();
+
+      // 获取现有用户数据
+      const existingUserData = await env.YOYO_USER_DB.get(`user:${userId}`);
+      if (!existingUserData) {
+        return errorResponse('User not found', 'USER_NOT_FOUND', 404, request);
+      }
+
+      const existingUser = JSON.parse(existingUserData);
+
+      // 防止修改admin用户的关键信息
+      if (existingUser.username === 'admin' && auth.user.username !== 'admin') {
+        return errorResponse('Cannot modify admin user', 'ADMIN_PROTECTED', 403, request);
+      }
+
+      // 更新允许的字段
+      const allowedFields = ['displayName', 'role', 'status'];
+      const updatedUser = { ...existingUser };
+
+      for (const field of allowedFields) {
+        if (updateData[field] !== undefined) {
+          updatedUser[field] = updateData[field];
+        }
+      }
+
+      updatedUser.updatedAt = new Date().toISOString();
+
+      // 保存更新后的用户数据
+      await env.YOYO_USER_DB.put(`user:${userId}`, JSON.stringify(updatedUser));
+
+      // 移除敏感信息后返回
+      const responseUser = { ...updatedUser };
+      delete responseUser.hashedPassword;
+      delete responseUser.salt;
+      responseUser.id = userId;
+
+      logInfo(env, 'Admin updated user', {
+        adminUsername: auth.user.username,
+        targetUsername: userId,
+        updatedFields: Object.keys(updateData)
+      });
+
+      return successResponse(responseUser, 'User updated successfully', request);
+
+    } catch (error) {
+      await logError(env, 'Update user failed', error, { username: auth?.user?.username });
+      return errorResponse('Failed to update user', 'UPDATE_USER_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 删除用户
+   */
+  async deleteUser(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      const url = new URL(request.url);
+      const userId = url.pathname.split('/').pop();
+
+      // 防止删除admin用户
+      if (userId === 'admin') {
+        return errorResponse('Cannot delete admin user', 'ADMIN_PROTECTED', 403, request);
+      }
+
+      // 检查用户是否存在
+      const existingUserData = await env.YOYO_USER_DB.get(`user:${userId}`);
+      if (!existingUserData) {
+        return errorResponse('User not found', 'USER_NOT_FOUND', 404, request);
+      }
+
+      // 删除用户
+      await env.YOYO_USER_DB.delete(`user:${userId}`);
+
+      logInfo(env, 'Admin deleted user', {
+        adminUsername: auth.user.username,
+        deletedUsername: userId
+      });
+
+      return successResponse({ userId: userId }, 'User deleted successfully', request);
+
+    } catch (error) {
+      await logError(env, 'Delete user failed', error, { username: auth?.user?.username });
+      return errorResponse('Failed to delete user', 'DELETE_USER_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 修改用户密码
+   */
+  async changeUserPassword(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      const url = new URL(request.url);
+      const userId = url.pathname.split('/')[3]; // /api/users/{userId}/password
+      const { newPassword } = await request.json();
+
+      if (!newPassword) {
+        return errorResponse('New password is required', 'VALIDATION_ERROR', 400, request);
+      }
+
+      // 获取现有用户数据
+      const existingUserData = await env.YOYO_USER_DB.get(`user:${userId}`);
+      if (!existingUserData) {
+        return errorResponse('User not found', 'USER_NOT_FOUND', 404, request);
+      }
+
+      const existingUser = JSON.parse(existingUserData);
+
+      // 导入密码哈希函数
+      const { hashPassword, generateRandomString } = await import('../utils/crypto.js');
+
+      // 生成新的密码哈希
+      const salt = generateRandomString(16);
+      const hashedPassword = await hashPassword(newPassword, salt);
+
+      // 更新用户密码
+      existingUser.hashedPassword = hashedPassword;
+      existingUser.salt = salt;
+      existingUser.updatedAt = new Date().toISOString();
+
+      // 保存更新后的用户数据
+      await env.YOYO_USER_DB.put(`user:${userId}`, JSON.stringify(existingUser));
+
+      logInfo(env, 'Admin changed user password', {
+        adminUsername: auth.user.username,
+        targetUsername: userId
+      });
+
+      return successResponse({ userId: userId }, 'Password changed successfully', request);
+
+    } catch (error) {
+      await logError(env, 'Change user password failed', error, { username: auth?.user?.username });
+      return errorResponse('Failed to change password', 'CHANGE_PASSWORD_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 切换用户状态
+   */
+  async toggleUserStatus(request, env, ctx) {
+    try {
+      const { auth, error } = await requireAdmin(request, env);
+      if (error) return error;
+
+      const url = new URL(request.url);
+      const userId = url.pathname.split('/')[3]; // /api/users/{userId}/status
+      const { status } = await request.json();
+
+      // 防止禁用admin用户
+      if (userId === 'admin' && status === 'disabled') {
+        return errorResponse('Cannot disable admin user', 'ADMIN_PROTECTED', 403, request);
+      }
+
+      // 获取现有用户数据
+      const existingUserData = await env.YOYO_USER_DB.get(`user:${userId}`);
+      if (!existingUserData) {
+        return errorResponse('User not found', 'USER_NOT_FOUND', 404, request);
+      }
+
+      const existingUser = JSON.parse(existingUserData);
+      existingUser.status = status;
+      existingUser.updatedAt = new Date().toISOString();
+
+      // 保存更新后的用户数据
+      await env.YOYO_USER_DB.put(`user:${userId}`, JSON.stringify(existingUser));
+
+      // 移除敏感信息后返回
+      const responseUser = { ...existingUser };
+      delete responseUser.hashedPassword;
+      delete responseUser.salt;
+      responseUser.id = userId;
+
+      logInfo(env, 'Admin toggled user status', {
+        adminUsername: auth.user.username,
+        targetUsername: userId,
+        newStatus: status
+      });
+
+      return successResponse(responseUser, 'User status updated successfully', request);
+
+    } catch (error) {
+      await logError(env, 'Toggle user status failed', error, { username: auth?.user?.username });
+      return errorResponse('Failed to toggle user status', 'TOGGLE_STATUS_ERROR', 500, request);
+    }
   }
 };
