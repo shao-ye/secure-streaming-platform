@@ -577,30 +577,41 @@ const testProxy = async (proxy) => {
     
     console.log('🚀 开始真实代理测试:', { name: proxy.name, testUrlId: globalTestUrlId.value })
     
-    // 调用真实API测试代理，传递正确的数据格式
-    const result = await proxyApi.testProxy({
+    // 使用连接接口测试代理延迟（支持所有协议包括XHTTP）
+    console.log('🚀 开始连接测试:', { name: proxy.name, protocol: proxy.config.split('://')[0] })
+    
+    const startTime = Date.now()
+    const result = await proxyApi.connectProxy({
       id: proxy.id,
       name: proxy.name,
-      type: proxy.type,
-      config: proxy.config, // VPS期望的代理URL在config字段中
-      testUrlId: globalTestUrlId.value
+      config: proxy.config // 传递完整的代理配置URL
     })
+    const endTime = Date.now()
+    const connectionLatency = endTime - startTime
     
-    console.log('代理测试结果:', result)
+    console.log('代理连接结果:', result)
     
-    // 检查API响应结构
-    const testData = result.data || result
+    // 检查连接结果
+    const connectData = result.data || result
     
-    if (testData && testData.success && testData.method === 'real_test') {
-      // 显示真实延迟
-      proxy.latency = testData.latency
+    if (connectData && connectData.success && connectData.status === 'connected') {
+      // 连接成功，显示连接延迟
+      proxy.latency = connectionLatency
       proxy.currentTestFailed = false
-      ElMessage.success(`代理测试成功 - 延迟: ${testData.latency}ms`)
+      ElMessage.success(`代理连接成功 - 延迟: ${connectionLatency}ms`)
+      
+      // 连接成功后立即断开，避免占用资源
+      try {
+        await proxyApi.disconnectProxy()
+        console.log('✅ 代理已断开连接')
+      } catch (disconnectError) {
+        console.warn('断开代理时出错:', disconnectError.message)
+      }
     } else {
-      // 标记当前测试失败，但不覆盖历史延迟
+      // 连接失败
       proxy.currentTestFailed = true
       proxy.latency = null // 重置当前延迟，让历史延迟显示
-      ElMessage.error('代理测试失败 - 连接不可用')
+      ElMessage.error('代理连接失败 - 不可用或配置错误')
     }
   } catch (error) {
     proxy.currentTestFailed = true
