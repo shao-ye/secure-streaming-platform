@@ -1190,6 +1190,18 @@ class ProxyManager {
       // 停止现有连接
       await this.disconnectProxy();
 
+      // 自动检测代理类型（如果未提供）
+      if (!proxyConfig.type && proxyConfig.config) {
+        if (proxyConfig.config.startsWith('vless://')) {
+          proxyConfig.type = 'vless';
+        } else if (proxyConfig.config.startsWith('vmess://')) {
+          proxyConfig.type = 'vmess';
+        } else if (proxyConfig.config.startsWith('ss://')) {
+          proxyConfig.type = 'shadowsocks';
+        }
+        logger.info('自动检测代理类型:', proxyConfig.type);
+      }
+
       // 生成配置文件
       const config = await this.generateV2rayConfig(proxyConfig);
       await fs.writeFile(this.configPath, JSON.stringify(config, null, 2));
