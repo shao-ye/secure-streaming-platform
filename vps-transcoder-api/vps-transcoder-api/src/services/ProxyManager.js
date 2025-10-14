@@ -1140,6 +1140,148 @@ class ProxyManager {
       logger.warn('清理僵尸进程失败:', error.message);
     }
   }
+
+  /**
+   * 连接代理
+   * @param {Object} proxyConfig - 代理配置
+   */
+  async connectProxy(proxyConfig) {
+    try {
+      logger.info('开始连接代理:', proxyConfig.name);
+      this.connectionStatus = 'connecting';
+
+      // 检查代理客户端
+      const clientInfo = await this.checkProxyClientAvailable();
+      if (!clientInfo) {
+        throw new Error('V2Ray/Xray客户端不可用，请先安装');
+      }
+
+      // 停止现有连接
+      await this.disconnectProxy();
+
+      // 生成配置文件
+      const config = await this.generateV2rayConfig(proxyConfig);
+      await fs.writeFile(this.configPath, JSON.stringify(config, null, 2));
+      logger.info('代理配置文件已生成:', this.configPath);
+
+      // 启动代理进程
+      this.v2rayProcess = spawn(clientInfo.client, ['-config', this.configPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false
+      });
+
+      // 设置进程事件处理
+      this.setupProcessHandlers(proxyConfig);
+
+      // 等待代理启动
+      await this.waitForProxyReady();
+
+      // 验证代理连接
+      const isConnected = await this.checkProxyPort();
+      if (!isConnected) {
+        throw new Error('代理连接验证失败');
+      }
+
+      // 设置透明代理规则（用于FFmpeg流量转发）
+      await this.setupTransparentProxy();
+
+      // 更新状态
+      this.activeProxy = proxyConfig;
+      this.connectionStatus = 'connected';
+
+      logger.info('代理连接成功:', proxyConfig.name);
+
+      return {
+        success: true,
+        message: '代理连接成功',
+        proxy: proxyConfig.name,
+        status: 'connected'
+      };
+
+    } catch (error) {
+      this.connectionStatus = 'disconnected';
+      logger.error('连接代理失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 断开代理连接
+   */
+  async disconnectProxy() {
+    try {
+      logger.info('断开代理连接');
+
+      // 清理透明代理规则
+      await this.cleanupTransparentProxy();
+
+      // 停止代理进程
+      if (this.v2rayProcess) {
+        this.v2rayProcess.kill('SIGTERM');
+        
+        // 等待进程退出
+        await new Promise((resolve) => {
+          const timeout = setTimeout(() => {
+            if (this.v2rayProcess) {
+              this.v2rayProcess.kill('SIGKILL');
+            }
+            resolve();
+          }, 3000);
+
+          this.v2rayProcess.on('exit', () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+        });
+
+        this.v2rayProcess = null;
+      }
+
+      // 重置状态
+      this.activeProxy = null;
+      this.connectionStatus = 'disconnected';
+
+      logger.info('代理连接已断开');
+
+      return {
+        success: true,
+        message: '代理连接已断开',
+        status: 'disconnected'
+      };
+
+    } catch (error) {
+      logger.error('断开代理失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 设置进程事件处理
+   */
+  setupProcessHandlers(proxyConfig) {
+    if (!this.v2rayProcess) return;
+
+    this.v2rayProcess.stdout.on('data', (data) => {
+      logger.info('V2Ray输出:', data.toString());
+    });
+
+    this.v2rayProcess.stderr.on('data', (data) => {
+      logger.warn('V2Ray错误:', data.toString());
+    });
+
+    this.v2rayProcess.on('exit', (code) => {
+      logger.info('V2Ray进程退出，代码:', code);
+      this.connectionStatus = 'disconnected';
+      this.activeProxy = null;
+      this.v2rayProcess = null;
+    });
+
+    this.v2rayProcess.on('error', (error) => {
+      logger.error('V2Ray进程错误:', error);
+      this.connectionStatus = 'disconnected';
+      this.activeProxy = null;
+    });
+  }
 }
 
 module.exports = ProxyManager;
