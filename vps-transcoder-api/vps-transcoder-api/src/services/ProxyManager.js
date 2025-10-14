@@ -1240,8 +1240,15 @@ class ProxyManager {
         });
       });
 
-      // 验证代理连接
-      const isConnected = await this.checkProxyPort();
+      // 验证代理连接（添加重试机制）
+      let isConnected = false;
+      for (let i = 0; i < 5; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 等待1秒
+        isConnected = await this.checkProxyPort();
+        if (isConnected) break;
+        logger.info(`代理端口检查重试 ${i + 1}/5`);
+      }
+      
       if (!isConnected) {
         throw new Error('代理连接验证失败');
       }
