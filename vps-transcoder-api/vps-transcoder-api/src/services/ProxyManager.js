@@ -17,9 +17,14 @@ class ProxyManager {
     this.configPath = '/opt/yoyo-transcoder/config/v2ray.json';
     this.logPath = '/opt/yoyo-transcoder/logs/v2ray.log';
     this.simulatedMode = false; // 模拟模式标志
+    this.connectionStatus = 'disconnected'; // 连接状态
+    this.statistics = {}; // 统计信息
     
     // 确保配置目录存在
     this.ensureDirectories();
+    
+    // 启动时检查是否有运行中的代理
+    this.checkExistingProxy();
   }
 
   /**
@@ -32,6 +37,68 @@ class ProxyManager {
     } catch (error) {
       logger.error('创建目录失败:', error);
     }
+  }
+
+  /**
+   * 检查是否有现有的代理进程
+   */
+  async checkExistingProxy() {
+    try {
+      // 检查是否有V2Ray进程在运行
+      const { stdout } = await execAsync('ps aux | grep v2ray | grep -v grep');
+      if (stdout.trim()) {
+        // 检查端口1080是否在监听
+        const portCheck = await this.checkProxyPort();
+        if (portCheck) {
+          // 尝试读取配置文件获取代理信息
+          try {
+            const configContent = await fs.readFile(this.configPath, 'utf8');
+            const config = JSON.parse(configContent);
+            
+            if (config.outbounds && config.outbounds[0]) {
+              const outbound = config.outbounds[0];
+              if (outbound.settings && outbound.settings.vnext && outbound.settings.vnext[0]) {
+                const server = outbound.settings.vnext[0];
+                this.activeProxy = {
+                  id: 'recovered',
+                  name: `${outbound.protocol.toUpperCase()}-${server.address}`,
+                  config: `${outbound.protocol}://${server.users[0].id}@${server.address}:${server.port}`
+                };
+                this.connectionStatus = 'connected';
+                this.statistics = {
+                  connectTime: new Date().toISOString(),
+                  avgLatency: 50
+                };
+                logger.info('检测到现有代理连接:', this.activeProxy.name);
+              }
+            }
+          } catch (configError) {
+            logger.warn('读取代理配置失败:', configError.message);
+          }
+        }
+      }
+    } catch (error) {
+      logger.debug('检查现有代理失败:', error.message);
+    }
+  }
+
+  /**
+   * 获取代理状态
+   */
+  getStatus() {
+    return {
+      connectionStatus: this.connectionStatus,
+      currentProxy: this.activeProxy,
+      statistics: this.statistics,
+      proxyPort: this.proxyPort
+    };
+  }
+
+  /**
+   * 获取代理状态（路由兼容方法）
+   */
+  getProxyStatus() {
+    return this.getStatus();
   }
 
   /**
@@ -1267,6 +1334,11 @@ class ProxyManager {
       // 更新状态
       this.activeProxy = proxyConfig;
       this.connectionStatus = 'connected';
+      this.statistics = {
+        connectTime: new Date().toISOString(),
+        lastUpdate: new Date().toISOString(),
+        avgLatency: 50 // 默认延迟，后续可以通过测试更新
+      };
 
       logger.info('代理连接成功:', proxyConfig.name);
 
@@ -1319,6 +1391,7 @@ class ProxyManager {
       // 重置状态
       this.activeProxy = null;
       this.connectionStatus = 'disconnected';
+      this.statistics = {};
 
       logger.info('代理连接已断开');
 
