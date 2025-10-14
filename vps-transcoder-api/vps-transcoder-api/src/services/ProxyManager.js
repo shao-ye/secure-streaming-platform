@@ -1044,6 +1044,11 @@ class ProxyManager {
       // 重置状态
       this.activeProxy = null;
       this.v2rayProcess = null;
+      this.connectionStatus = 'disconnected';
+      this.statistics = {};
+      
+      // 检查是否有现有的代理进程需要恢复
+      await this.checkExistingProxy();
       
       logger.info('ProxyManager初始化完成');
     } catch (error) {
