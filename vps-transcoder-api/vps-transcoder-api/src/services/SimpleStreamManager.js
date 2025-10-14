@@ -257,46 +257,23 @@ class SimpleStreamManager {
       fs.mkdirSync(outputDir, { recursive: true });
     }
     
-    // 构建FFmpeg命令 - 超低延迟配置 + 网络优化
+    // 构建FFmpeg命令 - 简化且稳定的配置（基于成功测试）
     const outputFile = path.join(outputDir, 'playlist.m3u8');
     const ffmpegArgs = [
-      // 🔥 网络输入优化配置
-      '-fflags', '+genpts',  // 生成时间戳
-      '-timeout', '10000000',  // 10秒网络超时 (微秒)
-      '-reconnect', '1',  // 启用自动重连
-      '-reconnect_at_eof', '1',  // EOF时重连
-      '-reconnect_streamed', '1',  // 流式重连
-      '-reconnect_delay_max', '2',  // 最大重连延迟2秒
-
       // 基本输入配置
       '-i', rtmpUrl,
 
-      // 🔥 输入处理优化
-      '-avoid_negative_ts', 'make_zero',  // 避免负时间戳
-      '-fflags', '+discardcorrupt',  // 丢弃损坏的包
-      '-err_detect', 'ignore_err',  // 忽略某些错误继续处理
-
-      // 视频编码 - 超低延迟配置
+      // 视频编码 - 简化配置
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
-      '-tune', 'zerolatency',
-      '-g', '15',  // 强制关键帧间隔15帧 (0.5秒@30fps)
-      '-keyint_min', '15',  // 最小关键帧间隔
-      '-sc_threshold', '0',  // 禁用场景切换检测
-      '-b:v', '1000k',  // 设置视频比特率
-      '-maxrate', '1200k',  // 最大比特率
-      '-bufsize', '2000k',  // 缓冲区大小
 
-      // 音频编码 - 简化配置
-      '-c:a', 'aac',
-      '-b:a', '128k',  // 音频比特率
-      '-ar', '44100',  // 音频采样率
+      // 🔥 禁用音频输出 - 避免PCM μ-law转码问题
+      '-an',  // 不处理音频流
 
-      // 🔥 HLS输出 - 优化配置
+      // 🔥 HLS输出 - 简化配置
       '-f', 'hls',
-      '-hls_time', '2',  // 增加分片时间到2秒，提高稳定性
-      '-hls_list_size', '6',  // 减少播放列表大小
-      '-hls_flags', 'delete_segments+append_list+split_by_time',
+      '-hls_time', '2',  // 2秒分片
+      '-hls_list_size', '6',  // 保持6个分片
       '-hls_segment_filename', path.join(outputDir, 'segment%03d.ts'),
       '-hls_allow_cache', '0',  // 禁用缓存
       '-start_number', '0',  // 从0开始编号
@@ -338,8 +315,8 @@ class SimpleStreamManager {
       }
     });
 
-    // 等待流准备就绪 - 使用15秒超时，配合优化的检测逻辑
-    await this.waitForStreamReady(channelId, 15000);
+    // 等待流准备就绪 - 使用30秒超时，配合简化的FFmpeg配置
+    await this.waitForStreamReady(channelId, 30000);
 
     logger.info('FFmpeg process started successfully', { channelId, pid: ffmpegProcess.pid });
     return ffmpegProcess;
