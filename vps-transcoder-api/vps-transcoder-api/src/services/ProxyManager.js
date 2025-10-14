@@ -44,16 +44,23 @@ class ProxyManager {
    */
   async checkExistingProxy() {
     try {
+      logger.info('开始检查现有代理进程...');
+      
       // 检查是否有V2Ray进程在运行
       const { stdout } = await execAsync('ps aux | grep v2ray | grep -v grep');
+      logger.info('V2Ray进程检查结果:', stdout.trim());
+      
       if (stdout.trim()) {
         // 检查端口1080是否在监听
         const portCheck = await this.checkProxyPort();
+        logger.info('端口1080检查结果:', portCheck);
+        
         if (portCheck) {
           // 尝试读取配置文件获取代理信息
           try {
             const configContent = await fs.readFile(this.configPath, 'utf8');
             const config = JSON.parse(configContent);
+            logger.info('读取到代理配置文件');
             
             if (config.outbounds && config.outbounds[0]) {
               const outbound = config.outbounds[0];
@@ -67,18 +74,28 @@ class ProxyManager {
                 this.connectionStatus = 'connected';
                 this.statistics = {
                   connectTime: new Date().toISOString(),
+                  lastUpdate: new Date().toISOString(),
                   avgLatency: 50
                 };
-                logger.info('检测到现有代理连接:', this.activeProxy.name);
+                logger.info('✅ 检测到现有代理连接:', this.activeProxy.name);
+                logger.info('代理状态已恢复:', this.connectionStatus);
+              } else {
+                logger.warn('配置文件中缺少服务器信息');
               }
+            } else {
+              logger.warn('配置文件中缺少outbounds配置');
             }
           } catch (configError) {
             logger.warn('读取代理配置失败:', configError.message);
           }
+        } else {
+          logger.warn('端口1080未在监听');
         }
+      } else {
+        logger.info('未发现V2Ray进程');
       }
     } catch (error) {
-      logger.debug('检查现有代理失败:', error.message);
+      logger.warn('检查现有代理失败:', error.message);
     }
   }
 
