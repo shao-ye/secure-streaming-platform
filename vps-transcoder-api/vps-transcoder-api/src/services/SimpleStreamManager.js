@@ -257,12 +257,25 @@ class SimpleStreamManager {
       fs.mkdirSync(outputDir, { recursive: true });
     }
     
-    // 构建FFmpeg命令 - 超低延迟配置
+    // 构建FFmpeg命令 - 超低延迟配置 + 网络优化
     const outputFile = path.join(outputDir, 'playlist.m3u8');
     const ffmpegArgs = [
+      // 🔥 网络输入优化配置
+      '-fflags', '+genpts',  // 生成时间戳
+      '-timeout', '10000000',  // 10秒网络超时 (微秒)
+      '-reconnect', '1',  // 启用自动重连
+      '-reconnect_at_eof', '1',  // EOF时重连
+      '-reconnect_streamed', '1',  // 流式重连
+      '-reconnect_delay_max', '2',  // 最大重连延迟2秒
+
       // 基本输入配置
       '-i', rtmpUrl,
-      
+
+      // 🔥 输入处理优化
+      '-avoid_negative_ts', 'make_zero',  // 避免负时间戳
+      '-fflags', '+discardcorrupt',  // 丢弃损坏的包
+      '-err_detect', 'ignore_err',  // 忽略某些错误继续处理
+
       // 视频编码 - 超低延迟配置
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
@@ -270,44 +283,51 @@ class SimpleStreamManager {
       '-g', '15',  // 强制关键帧间隔15帧 (0.5秒@30fps)
       '-keyint_min', '15',  // 最小关键帧间隔
       '-sc_threshold', '0',  // 禁用场景切换检测
-      
+      '-b:v', '1000k',  // 设置视频比特率
+      '-maxrate', '1200k',  // 最大比特率
+      '-bufsize', '2000k',  // 缓冲区大小
+
       // 音频编码 - 简化配置
       '-c:a', 'aac',
-      
-      // HLS输出 - 基本配置
+      '-b:a', '128k',  // 音频比特率
+      '-ar', '44100',  // 音频采样率
+
+      // 🔥 HLS输出 - 优化配置
       '-f', 'hls',
-      '-hls_time', '0.5',
-      '-hls_list_size', '10',
-      '-hls_flags', 'delete_segments+append_list',
+      '-hls_time', '2',  // 增加分片时间到2秒，提高稳定性
+      '-hls_list_size', '6',  // 减少播放列表大小
+      '-hls_flags', 'delete_segments+append_list+split_by_time',
       '-hls_segment_filename', path.join(outputDir, 'segment%03d.ts'),
+      '-hls_allow_cache', '0',  // 禁用缓存
+      '-start_number', '0',  // 从0开始编号
       '-y',  // 覆盖输出文件
-      
+
       outputFile
     ];
-    
+
     logger.info('Starting FFmpeg process', {
       channelId,
       rtmpUrl,
       command: `${this.ffmpegPath} ${ffmpegArgs.join(' ')}`
     });
-    
+
     // 启动FFmpeg进程
     const ffmpegProcess = spawn(this.ffmpegPath, ffmpegArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false
     });
-    
+
     // 设置进程事件处理
     ffmpegProcess.on('error', (error) => {
       logger.error('FFmpeg process error', { channelId, error: error.message });
       this.activeStreams.delete(channelId);
     });
-    
+
     ffmpegProcess.on('exit', (code, signal) => {
       logger.info('FFmpeg process exited', { channelId, code, signal });
       this.activeStreams.delete(channelId);
     });
-    
+
     // 监听stderr输出
     ffmpegProcess.stderr.on('data', (data) => {
       const output = data.toString();
@@ -317,10 +337,10 @@ class SimpleStreamManager {
         logger.error('FFmpeg error detected', { channelId, output: output.trim() });
       }
     });
-    
+
     // 等待流准备就绪 - 使用15秒超时，配合优化的检测逻辑
     await this.waitForStreamReady(channelId, 15000);
-    
+
     logger.info('FFmpeg process started successfully', { channelId, pid: ffmpegProcess.pid });
     return ffmpegProcess;
   }
@@ -352,7 +372,7 @@ class SimpleStreamManager {
     try {
       const { stdout } = await execAsync('ps aux | grep ffmpeg | grep -v grep || true');
       const processes = stdout.split('\n').filter(line => line.trim());
-      
+
       for (const processLine of processes) {
         const pid = processLine.split(/\s+/)[1];
         if (pid) {
@@ -391,62 +411,93 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    * @param {number} timeout - 超时时间（毫秒）
    */
-  async waitForStreamReady(channelId, timeout = 15000) {
+  async waitForStreamReady(channelId, timeout = 30000) {
     const outputDir = path.join(this.hlsOutputDir, channelId);
     const playlistFile = path.join(outputDir, 'playlist.m3u8');
-    
+
     const startTime = Date.now();
-    
+
     logger.info('Waiting for stream to be ready', { channelId, timeout });
-    
+
     while (Date.now() - startTime < timeout) {
       if (fs.existsSync(playlistFile)) {
         try {
           const content = fs.readFileSync(playlistFile, 'utf8');
-          
-          // 🔥 优化：只要playlist文件存在且有内容就认为准备就绪
-          if (content.length > 50) {
-            logger.info('Stream ready - playlist file exists with content', { 
-              channelId, 
+
+          // 🔥 优化：检查playlist文件是否包含有效的HLS内容
+          if (content.includes('#EXTM3U') && content.includes('#EXT-X-VERSION')) {
+            logger.info('Stream ready - valid HLS playlist detected', {
+              channelId,
               contentLength: content.length,
-              elapsed: Date.now() - startTime 
+              elapsed: Date.now() - startTime
             });
             return;
           }
-          
-          // 检查是否有分片文件
+
+          // 检查是否有分片文件引用
           const segments = content.match(/segment\d+\.ts/g) || [];
-          
+
           if (segments.length > 0) {
-            // 检查最新分片文件
-            const latestSegment = segments[segments.length - 1];
-            const segmentPath = path.join(outputDir, latestSegment);
-            
+            // 检查至少一个分片文件存在
+            const firstSegment = segments[0];
+            const segmentPath = path.join(outputDir, firstSegment);
+
             if (fs.existsSync(segmentPath)) {
               const stats = fs.statSync(segmentPath);
-              const segmentAge = Date.now() - stats.mtime.getTime();
-              
-              // 分片文件应该是最近10秒内生成的（放宽限制）
-              if (segmentAge < 10000) {
-                logger.info('Stream ready with segments', { 
-                  channelId, 
+              const segmentSize = stats.size;
+
+              // 分片文件应该有合理的大小（至少1KB）
+              if (segmentSize > 1024) {
+                logger.info('Stream ready with valid segments', {
+                  channelId,
                   segmentCount: segments.length,
-                  latestSegmentAge: segmentAge
+                  firstSegmentSize: segmentSize,
+                  elapsed: Date.now() - startTime
                 });
                 return;
               }
             }
           }
+
+          // 🔥 新增：如果playlist存在但没有分片，检查是否刚开始生成
+          if (content.includes('#EXTM3U') && content.length > 20) {
+            logger.info('Stream starting - playlist exists, waiting for segments', {
+              channelId,
+              elapsed: Date.now() - startTime
+            });
+          }
+
         } catch (error) {
           logger.warn('Error reading playlist file', { channelId, error: error.message });
         }
       }
-      
-      // 🔥 优化：减少检查间隔，提高响应速度
-      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // 🔥 优化：更频繁的检查，更快响应
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
-    
-    throw new Error(`Stream not ready within ${timeout}ms`);
+
+    // 🔥 增强错误信息：提供更多诊断信息
+    const diagnostics = {
+      playlistExists: fs.existsSync(playlistFile),
+      outputDirExists: fs.existsSync(outputDir),
+      outputDirContents: []
+    };
+
+    if (diagnostics.outputDirExists) {
+      try {
+        diagnostics.outputDirContents = fs.readdirSync(outputDir);
+      } catch (e) {
+        diagnostics.outputDirError = e.message;
+      }
+    }
+
+    logger.error('Stream failed to be ready within timeout', {
+      channelId,
+      timeout,
+      diagnostics
+    });
+
+    throw new Error(`Stream not ready within ${timeout}ms - diagnostics: ${JSON.stringify(diagnostics)}`);
   }
 
   /**
