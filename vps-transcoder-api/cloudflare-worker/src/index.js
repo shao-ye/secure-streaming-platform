@@ -287,6 +287,14 @@ export default {
       // 登录日志API
       router.get('/api/admin/login/logs', (req, env, ctx) => handleAdmin.getLoginLogs(req, env, ctx));
       
+      // 用户管理API - 新增
+      router.get('/api/users', (req, env, ctx) => handleAdmin.getUsers(req, env, ctx));
+      router.post('/api/users', (req, env, ctx) => handleAdmin.createUser(req, env, ctx));
+      router.put('/api/users/:id', (req, env, ctx) => handleAdmin.updateUser(req, env, ctx));
+      router.delete('/api/users/:id', (req, env, ctx) => handleAdmin.deleteUser(req, env, ctx));
+      router.put('/api/users/:id/password', (req, env, ctx) => handleAdmin.changeUserPassword(req, env, ctx));
+      router.put('/api/users/:id/status', (req, env, ctx) => handleAdmin.toggleUserStatus(req, env, ctx));
+      
       // 代理管理API (已移至proxyManager处理器)
       
       // 隧道管理API路由
