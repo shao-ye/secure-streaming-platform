@@ -1142,6 +1142,37 @@ class ProxyManager {
   }
 
   /**
+   * 检查V2Ray/Xray是否可用
+   */
+  async checkProxyClientAvailable() {
+    try {
+      // 优先检查v2ray
+      const v2rayResult = await execAsync('which v2ray');
+      if (v2rayResult.stdout.trim()) {
+        const versionResult = await execAsync('v2ray version');
+        logger.info('V2Ray可用:', versionResult.stdout.split('\n')[0]);
+        return { client: 'v2ray', path: v2rayResult.stdout.trim() };
+      }
+    } catch (error) {
+      logger.debug('V2Ray不可用，尝试Xray');
+    }
+
+    try {
+      // 检查xray
+      const xrayResult = await execAsync('which xray');
+      if (xrayResult.stdout.trim()) {
+        const versionResult = await execAsync('xray version');
+        logger.info('Xray可用:', versionResult.stdout.split('\n')[0]);
+        return { client: 'xray', path: xrayResult.stdout.trim() };
+      }
+    } catch (error) {
+      logger.error('V2Ray和Xray都不可用');
+    }
+
+    return null;
+  }
+
+  /**
    * 连接代理
    * @param {Object} proxyConfig - 代理配置
    */
