@@ -382,13 +382,24 @@ export class ProxyHandler {
     try {
       const proxyData = await request.json();
       
-      // 获取测试网站URL，默认为百度
-      const testUrl = proxyData.testUrl || 'https://www.baidu.com';
-      
-      console.log('收到代理测试请求:', { name: proxyData.name, testUrl });
+      // 🔧 修复：支持testUrlId映射到具体URL
+      let testUrl;
+      if (proxyData.testUrlId) {
+        // 使用ID映射到URL（安全防止URL注入）
+        const urlMapping = {
+          'baidu': 'https://www.baidu.com',
+          'google': 'https://www.google.com'
+        };
+        testUrl = urlMapping[proxyData.testUrlId] || 'https://www.baidu.com';
+        console.log('收到代理测试请求:', { name: proxyData.name, testUrlId: proxyData.testUrlId, testUrl });
+      } else {
+        // 向后兼容：支持直接传递testUrl
+        testUrl = proxyData.testUrl || 'https://www.baidu.com';
+        console.log('收到代理测试请求:', { name: proxyData.name, testUrl });
+      }
       
       // 调用VPS进行真实代理测试
-      const testResult = await this.callVPSProxyTest(env, proxyData, testUrl);
+      const testResult = await this.callVPSProxyTest(env, proxyData, testUrl, proxyData.testUrlId);
       
       return new Response(JSON.stringify({
         status: 'success',
@@ -574,8 +585,8 @@ export class ProxyHandler {
         throw new Error('代理不存在');
       }
       
-      // 调用VPS测试代理
-      const testResult = await this.callVPSProxyTest(env, proxy);
+      // 调用VPS测试代理（使用默认百度测试）
+      const testResult = await this.callVPSProxyTest(env, proxy, 'https://www.baidu.com', 'baidu');
       
       // 更新代理状态
       proxy.status = testResult.success ? 'active' : 'error';
@@ -832,8 +843,8 @@ export class ProxyHandler {
   /**
    * 调用VPS进行真实代理测试
    */
-  async callVPSProxyTest(env, proxy, testUrl = 'https://www.baidu.com') {
-    console.log('🚀 开始真实代理延迟测试:', { name: proxy.name, testUrl });
+  async callVPSProxyTest(env, proxy, testUrl = 'https://www.baidu.com', testUrlId = 'baidu') {
+    console.log('🚀 开始真实代理延迟测试:', { name: proxy.name, testUrl, testUrlId });
     
     try {
       // 调用VPS进行真实代理测试，10秒超时
@@ -852,7 +863,7 @@ export class ProxyHandler {
         body: JSON.stringify({
           proxyId: proxy.id,
           proxyConfig: proxy,
-          testUrl: testUrl
+          testUrlId: testUrlId || 'baidu'  // 🔧 修复：传递testUrlId而不是testUrl
         })
       });
       
