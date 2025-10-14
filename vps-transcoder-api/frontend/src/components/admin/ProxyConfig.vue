@@ -512,49 +512,19 @@ const validateTestUrlId = (urlId) => {
   return allowedIds.includes(urlId)
 }
 
-// 更新全局测试网站配置
+// 🔧 修复：移除对不存在API的调用
 const updateGlobalTestUrlId = async (newUrlId) => {
-  try {
-    await proxyApi.setGlobalTestUrlId(newUrlId)
-    ElMessage.success('测试网站配置已更新')
-  } catch (error) {
-    ElMessage.error('更新配置失败')
-    // 回滚到之前的值
-    globalTestUrlId.value = 'baidu'
-  }
+  // 暂时只更新本地值，不调用API
+  globalTestUrlId.value = newUrlId
+  console.log('测试网站已更新为:', newUrlId)
+  ElMessage.success('测试网站配置已更新')
 }
 
-// 🔧 新增：加载所有代理的历史测试结果
+// 🔧 修复：移除对不存在API的调用
 const loadProxyTestHistory = async () => {
-  try {
-    console.log('🔄 开始加载代理历史测试结果...')
-    
-    for (const proxy of proxyList.value) {
-      try {
-        const historyResult = await proxyApi.getProxyTestHistory(proxy.id, 1) // 只获取最新的一条记录
-        const historyData = historyResult.data || historyResult
-        
-        if (historyData && historyData.length > 0) {
-          const latestTest = historyData[0]
-          if (latestTest.success && latestTest.latency > 0) {
-            proxy.lastTestLatency = latestTest.latency
-            proxy.lastTestTime = latestTest.timestamp
-            console.log(`✅ 代理 ${proxy.name} 历史延迟: ${latestTest.latency}ms`)
-          } else {
-            console.log(`⚠️ 代理 ${proxy.name} 历史测试失败或无效延迟:`, latestTest)
-          }
-        } else {
-          console.log(`ℹ️ 代理 ${proxy.name} 暂无历史测试记录`)
-        }
-      } catch (error) {
-        console.warn(`获取代理 ${proxy.name} 历史测试结果失败:`, error)
-      }
-    }
-    
-    console.log('✅ 代理历史测试结果加载完成')
-  } catch (error) {
-    console.error('加载代理历史测试结果失败:', error)
-  }
+  console.log('🔄 跳过历史测试结果加载（API不存在）')
+  // 暂时禁用历史数据加载，直到API实现
+  return Promise.resolve()
 }
 
 // 🔧 新增：自动刷新已连接代理的延迟测试
@@ -1113,13 +1083,9 @@ const testProxyLatency = async (proxy) => {
 
 // 组件挂载时初始化
 onMounted(async () => {
-  try {
-    // 获取全局测试网站配置
-    const config = await proxyApi.getGlobalConfig()
-    globalTestUrlId.value = config.currentTestUrlId || 'baidu'
-  } catch (error) {
-    console.warn('获取全局配置失败，使用默认值')
-  }
+  // 🔧 修复：移除对不存在API的调用，使用默认值
+  globalTestUrlId.value = 'baidu' // 默认使用百度
+  console.log('使用默认测试网站:', globalTestUrlId.value)
   
   // 页面加载时重置所有测试状态
   proxyList.value.forEach(proxy => {
@@ -1133,8 +1099,8 @@ onMounted(async () => {
   // 加载代理配置和历史测试结果
   await loadProxyConfig()
   
-  // 为所有代理加载历史测试结果
-  await loadProxyTestHistory()
+  // 🔧 修复：暂时禁用历史数据加载
+  // await loadProxyTestHistory()
   
   // 自动刷新已连接代理的延迟测试
   await refreshActiveProxyLatency()
