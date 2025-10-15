@@ -141,11 +141,16 @@ export const proxyApi = {
   /**
    * 启用代理
    */
-  async enableProxy(proxyId) {
+  async enableProxy(proxyConfig) {
     try {
-      // 🔧 修改：直接调用连接API，让Workers处理proxyId到配置的转换
+      // 🔧 修复：直接发送完整配置到VPS，绕过Workers KV查询
       const response = await axios.post('/api/admin/proxy/connect', {
-        proxyId: proxyId
+        proxyConfig: {
+          id: proxyConfig.id || proxyConfig,
+          name: proxyConfig.name || 'Unknown',
+          type: proxyConfig.type || 'vless',
+          config: proxyConfig.config
+        }
       })
       return response.data
     } catch (error) {

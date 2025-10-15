@@ -831,8 +831,8 @@ const enableProxy = async (proxy) => {
       }
     })
     
-    // 调用API启用代理
-    const result = await proxyApi.enableProxy(proxy.id)
+    // 调用API启用代理 - 传递完整配置
+    const result = await proxyApi.enableProxy(proxy)
     
     if (result.success) {
       // 更新本地状态
