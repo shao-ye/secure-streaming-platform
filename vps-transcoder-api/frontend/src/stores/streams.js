@@ -8,6 +8,10 @@ export const useStreamsStore = defineStore('streams', () => {
   const streams = ref([])
   const loading = ref(false)
   const currentStream = ref(null)
+  
+  // 🔧 新增：代理状态监控
+  const proxyStatusMonitor = ref(null)
+  const lastProxyStatus = ref(null)
 
   const fetchStreams = async () => {
     loading.value = true
@@ -165,6 +169,9 @@ export const useStreamsStore = defineStore('streams', () => {
         // 启动心跳保持频道活跃
         startHeartbeat(streamId)
         
+        // 🔧 新增：启动代理状态监控
+        startProxyStatusMonitoring()
+        
         return hlsUrl
       }
       throw new Error(response.data.message)
@@ -219,6 +226,9 @@ export const useStreamsStore = defineStore('streams', () => {
     
     // 停止心跳
     stopHeartbeat()
+    
+    // 🔧 新增：停止代理状态监控
+    stopProxyStatusMonitoring()
     
     // 清除当前流
     currentStream.value = null
@@ -319,6 +329,72 @@ export const useStreamsStore = defineStore('streams', () => {
     }
   }
 
+  // 🔧 新增：启动代理状态监控
+  const startProxyStatusMonitoring = () => {
+    if (proxyStatusMonitor.value) {
+      clearInterval(proxyStatusMonitor.value)
+    }
+    
+    proxyStatusMonitor.value = setInterval(async () => {
+      if (currentStream.value) {
+        try {
+          const response = await axios.get('/api/admin/proxy/status')
+          const currentProxyStatus = response.data?.data?.connectionStatus
+          
+          // 检查代理状态是否发生变化
+          if (lastProxyStatus.value && lastProxyStatus.value !== currentProxyStatus) {
+            console.log(`🔄 代理状态变化: ${lastProxyStatus.value} → ${currentProxyStatus}`)
+            
+            if (lastProxyStatus.value === 'connected' && currentProxyStatus === 'disconnected') {
+              console.log('🚨 代理断开，执行智能通道切换')
+              await handleProxyDisconnection()
+            }
+          }
+          
+          lastProxyStatus.value = currentProxyStatus
+        } catch (error) {
+          console.error('代理状态监控失败:', error)
+        }
+      }
+    }, 10000) // 每10秒检查一次
+  }
+
+  // 🔧 新增：停止代理状态监控
+  const stopProxyStatusMonitoring = () => {
+    if (proxyStatusMonitor.value) {
+      clearInterval(proxyStatusMonitor.value)
+      proxyStatusMonitor.value = null
+    }
+  }
+
+  // 🔧 新增：处理代理断开事件
+  const handleProxyDisconnection = async () => {
+    if (!currentStream.value) return
+    
+    try {
+      console.log('🔄 代理断开，尝试切换到直连模式...')
+      
+      // 重新播放当前流，这会触发通道选择逻辑
+      const streamId = currentStream.value.channelId
+      
+      // 清除当前流状态，强制重新选择通道
+      currentStream.value = null
+      
+      // 等待一秒后重新播放
+      setTimeout(async () => {
+        try {
+          await playStream(streamId)
+          console.log('✅ 智能切换到直连模式成功')
+        } catch (error) {
+          console.error('❌ 智能切换失败:', error)
+        }
+      }, 1000)
+      
+    } catch (error) {
+      console.error('处理代理断开失败:', error)
+    }
+  }
+
   return {
     streams,
     loading,
@@ -331,6 +407,10 @@ export const useStreamsStore = defineStore('streams', () => {
     addStream,
     updateStream,
     deleteStream,
-    updateStreamSort
+    updateStreamSort,
+    // 🔧 新增：代理状态监控方法
+    startProxyStatusMonitoring,
+    stopProxyStatusMonitoring,
+    handleProxyDisconnection
   }
 })
