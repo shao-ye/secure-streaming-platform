@@ -79,6 +79,7 @@ class ProxyManager {
                 };
                 logger.info('✅ 检测到现有代理连接:', this.activeProxy.name);
                 logger.info('代理状态已恢复:', this.connectionStatus);
+                return true; // 找到现有代理
               } else {
                 logger.warn('配置文件中缺少服务器信息');
               }
@@ -97,6 +98,8 @@ class ProxyManager {
     } catch (error) {
       logger.warn('检查现有代理失败:', error.message);
     }
+    
+    return false; // 没有找到现有代理
   }
 
   /**
@@ -1046,14 +1049,19 @@ class ProxyManager {
       // 清理旧的iptables规则
       await this.cleanupTransparentProxy();
       
-      // 重置状态
-      this.activeProxy = null;
-      this.v2rayProcess = null;
-      this.connectionStatus = 'disconnected';
-      this.statistics = {};
-      
       // 检查是否有现有的代理进程需要恢复
-      await this.checkExistingProxy();
+      const hasExistingProxy = await this.checkExistingProxy();
+      
+      // 只有在没有现有代理时才重置状态
+      if (!hasExistingProxy) {
+        this.activeProxy = null;
+        this.v2rayProcess = null;
+        this.connectionStatus = 'disconnected';
+        this.statistics = {};
+        logger.info('没有现有代理，重置状态');
+      } else {
+        logger.info('检测到现有代理，保持当前状态');
+      }
       
       logger.info('ProxyManager初始化完成');
     } catch (error) {
