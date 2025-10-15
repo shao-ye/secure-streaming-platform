@@ -70,6 +70,14 @@ export class ProxyHandler {
       if (path === '/api/admin/proxy/control' && method === 'POST') {
         return await this.controlProxy(request, env, corsHeaders);
       }
+      
+      if (path === '/api/admin/proxy/connect' && method === 'POST') {
+        return await this.connectProxy(request, env, corsHeaders);
+      }
+      
+      if (path === '/api/admin/proxy/disconnect' && method === 'POST') {
+        return await this.disconnectProxy(request, env, corsHeaders);
+      }
 
       // 路由不匹配
       return new Response(JSON.stringify({
@@ -1283,5 +1291,113 @@ export class ProxyHandler {
       config: config.config.trim(),
       priority: parseInt(config.priority) || 1
     };
+  }
+
+  /**
+   * 连接代理 - 用于测试延迟
+   */
+  async connectProxy(request, env, corsHeaders) {
+    try {
+      const body = await request.json();
+      const { proxyConfig } = body;
+      
+      if (!proxyConfig || !proxyConfig.config) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '缺少代理配置'
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+
+      console.log('🚀 Workers代理连接请求:', { name: proxyConfig.name, id: proxyConfig.id });
+
+      // 调用VPS的连接接口
+      const vpsResponse = await fetch(`${env.VPS_API_URL}/api/proxy/connect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.VPS_API_KEY}`
+        },
+        body: JSON.stringify({ proxyConfig }),
+        timeout: 30000
+      });
+
+      if (!vpsResponse.ok) {
+        throw new Error(`VPS连接失败: HTTP ${vpsResponse.status}`);
+      }
+
+      const vpsResult = await vpsResponse.json();
+      console.log('✅ VPS代理连接结果:', vpsResult);
+
+      return new Response(JSON.stringify({
+        status: 'success',
+        message: '代理连接成功',
+        data: vpsResult.data || vpsResult
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+
+    } catch (error) {
+      console.error('Workers代理连接失败:', error);
+      return new Response(JSON.stringify({
+        status: 'error',
+        message: `代理连接失败: ${error.message}`,
+        data: {
+          success: false,
+          status: 'error'
+        }
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+    }
+  }
+
+  /**
+   * 断开代理连接
+   */
+  async disconnectProxy(request, env, corsHeaders) {
+    try {
+      console.log('🔄 Workers代理断开请求');
+
+      // 调用VPS的断开接口
+      const vpsResponse = await fetch(`${env.VPS_API_URL}/api/proxy/disconnect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.VPS_API_KEY}`
+        },
+        timeout: 15000
+      });
+
+      if (!vpsResponse.ok) {
+        throw new Error(`VPS断开失败: HTTP ${vpsResponse.status}`);
+      }
+
+      const vpsResult = await vpsResponse.json();
+      console.log('✅ VPS代理断开结果:', vpsResult);
+
+      return new Response(JSON.stringify({
+        status: 'success',
+        message: '代理已断开',
+        data: vpsResult.data || vpsResult
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+
+    } catch (error) {
+      console.error('Workers代理断开失败:', error);
+      return new Response(JSON.stringify({
+        status: 'error',
+        message: `代理断开失败: ${error.message}`
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+    }
   }
 }
