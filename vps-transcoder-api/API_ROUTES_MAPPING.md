@@ -69,19 +69,58 @@
 2. 进行端到端测试
 3. 验证完整的调用链路
 
+## PowerShell脚本编写规范
+
+### 常见问题和解决方案
+
+#### ❌ 问题：URL特殊字符解析错误
+```powershell
+# 错误写法 - & 字符会被解释为命令操作符
+$proxyConfig = "vless://test@example.com:443?encryption=none&security=tls&type=tcp#test"
+```
+
+#### ✅ 解决方案
+```powershell
+# 方案1: 使用单引号（推荐）
+$proxyConfig = 'vless://test@example.com:443?encryption=none&security=tls&type=tcp#test'
+
+# 方案2: 使用转义字符
+$proxyConfig = "vless://test@example.com:443?encryption=none`&security=tls`&type=tcp#test"
+
+# 方案3: 复杂URL使用Here-String
+$proxyConfig = @'
+vless://f57c1ece-0062-4c18-8e5e-7a5dbfbf33aa@136.0.11.251:52142?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.iij.ad.jp&fp=chrome&pbk=XSIEcTZ1NnjyY-BhYuiW74fAwFfve-8YJ-T855r0f1c&type=tcp&headerType=none#JP-Evoxt
+'@
+```
+
+#### 哈希表中的URL处理
+```powershell
+# ✅ 正确的哈希表语法
+$testData = @{
+    proxyConfig = @{
+        id = "test"
+        name = "测试代理"
+        config = 'vless://test@example.com:443?encryption=none&security=tls&type=tcp#test'
+    }
+} | ConvertTo-Json -Depth 3
+```
+
 ## 维护建议
 
 1. **每次API修改时**
    - 更新此映射表
    - 检查三层一致性
    - 进行完整测试
+   - 使用正确的PowerShell语法
 
 2. **定期检查**
    - 验证所有路由可用性
    - 检查API文档一致性
    - 更新测试用例
+   - 检查PowerShell脚本语法
 
 3. **文档同步**
    - 保持此表格最新
    - 记录API变更历史
    - 维护测试脚本
+   - 更新PowerShell编写规范

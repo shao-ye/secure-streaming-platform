@@ -3,11 +3,11 @@
 Write-Host "🔍 API路由完整性检查" -ForegroundColor Cyan
 Write-Host "=" * 50 -ForegroundColor Cyan
 
-# 测试配置
+# 测试配置 - 使用单引号避免特殊字符解析问题
 $testProxy = @{
     id = "test"
     name = "测试代理"
-    config = "vless://test@example.com:443?encryption=none&security=tls&type=tcp#test"
+    config = 'vless://test@example.com:443?encryption=none&security=tls&type=tcp#test'
 }
 
 # 创建认证会话
@@ -47,7 +47,7 @@ $apiTests = @(
         Name = "代理连接测试"
         Method = "POST"
         Url = "https://yoyoapi.5202021.xyz/api/admin/proxy/connect"
-        Body = @{ proxyConfig = $testProxy } | ConvertTo-Json -Depth 3
+        Body = (@{ proxyConfig = $testProxy } | ConvertTo-Json -Depth 3)
         Expected = "200,500"  # 可能成功或失败，但不应该404
     },
     @{
@@ -61,7 +61,7 @@ $apiTests = @(
         Name = "代理测试接口"
         Method = "POST"
         Url = "https://yoyoapi.5202021.xyz/api/admin/proxy/test"
-        Body = @{ proxyId = "test"; testUrlId = "baidu" } | ConvertTo-Json
+        Body = (@{ proxyId = "test"; testUrlId = "baidu" } | ConvertTo-Json)
         Expected = "200,500"  # 可能成功或失败，但不应该404
     }
 )
