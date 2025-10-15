@@ -110,36 +110,48 @@ app.get('/health', (req, res) => {
     });
 });
 
-// API路由
+// API路由 - 每个路由独立加载，避免相互影响
+// 🔥 新增：集成流媒体服务API（简化版）
 try {
-    // 🔥 新增：集成流媒体服务API（简化版）
-    try {
-      const { router: integratedStreamingRoutes } = require('./routes/integrated-streaming-simple');
-      app.use('/api/integrated-streaming', integratedStreamingRoutes);
-      logger.info('✅ 集成流媒体服务API路由已加载（简化版）');
-    } catch (error) {
-      logger.warn('集成流媒体服务API加载失败，使用基础API:', error.message);
-    }
-    
-    // 使用新的简化流管理API（向后兼容）
-    const { router: simpleStreamRoutes } = require('./routes/simple-stream');
-    app.use('/api/simple-stream', simpleStreamRoutes);
-    logger.info('✅ 简化流管理API路由已加载');
-    
-    // 代理管理API路由
-    const proxyRoutes = require('./routes/proxy');
-    app.use('/api/proxy', proxyRoutes);
-    logger.info('✅ 代理管理API路由已加载');
-    
-    // 部署管理API路由
-    const deploymentRoutes = require('./routes/deployment');
-    app.use('/api/deployment', deploymentRoutes);
-    logger.info('✅ 部署管理API路由已加载');
-    
-    // 保留原有API路由（向后兼容）
-    const apiRoutes = require('./routes/api');
-    app.use('/api', apiRoutes);
-    logger.info('✅ 基础API路由已加载');
+  const { router: integratedStreamingRoutes } = require('./routes/integrated-streaming-simple');
+  app.use('/api/integrated-streaming', integratedStreamingRoutes);
+  logger.info('✅ 集成流媒体服务API路由已加载（简化版）');
+} catch (error) {
+  logger.warn('集成流媒体服务API加载失败:', error.message);
+}
+
+// 使用新的简化流管理API（向后兼容）
+try {
+  const { router: simpleStreamRoutes } = require('./routes/simple-stream');
+  app.use('/api/simple-stream', simpleStreamRoutes);
+  logger.info('✅ 简化流管理API路由已加载');
+} catch (error) {
+  logger.error('简化流管理API路由加载失败:', error.message);
+}
+
+// 代理管理API路由
+try {
+  const proxyRoutes = require('./routes/proxy');
+  app.use('/api/proxy', proxyRoutes);
+  logger.info('✅ 代理管理API路由已加载');
+} catch (error) {
+  logger.error('代理管理API路由加载失败:', error.message);
+}
+
+// 部署管理API路由
+try {
+  const deploymentRoutes = require('./routes/deployment');
+  app.use('/api/deployment', deploymentRoutes);
+  logger.info('✅ 部署管理API路由已加载');
+} catch (error) {
+  logger.error('部署管理API路由加载失败:', error.message);
+}
+
+// 保留原有API路由（向后兼容）
+try {
+  const apiRoutes = require('./routes/api');
+  app.use('/api', apiRoutes);
+  logger.info('✅ 基础API路由已加载');
 } catch (error) {
     logger.warn('API routes not found, creating basic structure...', error.message);
 

@@ -7,7 +7,7 @@ const axios = require('axios');
 const chalk = require('chalk');
 
 // 配置
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = 'https://yoyo-vps.5202021.xyz/api';
 const TEST_CHANNEL_ID = 'test-channel-001';
 const TEST_RTMP_URL = 'rtmp://example.com/live/test';
 
