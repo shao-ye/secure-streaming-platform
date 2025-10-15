@@ -840,9 +840,22 @@ const enableProxy = async (proxy) => {
   try {
     console.log(`🔄 开始连接代理: ${proxy.name}`)
     
-    // 🔧 第一步：先清空VPS上所有连接
-    console.log('🧹 清空VPS上所有V2Ray连接...')
-    setAllProxiesDisconnected() // 立即更新UI显示
+    // 🔧 第一步：先断开VPS上现有的代理连接
+    console.log('🧹 断开VPS上现有的V2Ray连接...')
+    const activeProxy = proxyList.value.find(p => p.isActive)
+    if (activeProxy && activeProxy.id !== proxy.id) {
+      console.log(`🔌 断开现有代理: ${activeProxy.name}`)
+      try {
+        await proxyApi.disableProxy(activeProxy.id)
+        console.log(`✅ 现有代理已断开: ${activeProxy.name}`)
+      } catch (error) {
+        console.warn('断开现有代理失败:', error)
+        // 继续执行，不阻断新连接
+      }
+    }
+    
+    // 立即更新UI显示所有代理为未连接
+    setAllProxiesDisconnected()
     
     // 🔧 第二步：创建新的代理连接
     console.log(`🚀 创建新代理连接: ${proxy.name}`)
