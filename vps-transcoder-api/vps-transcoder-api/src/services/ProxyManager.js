@@ -105,7 +105,10 @@ class ProxyManager {
   /**
    * 获取代理状态
    */
-  getStatus() {
+  async getStatus() {
+    // 实时检查代理状态
+    await this.syncProxyStatus();
+    
     const status = {
       connectionStatus: this.connectionStatus || 'disconnected',
       currentProxy: this.activeProxy || null,
@@ -117,6 +120,77 @@ class ProxyManager {
     
     logger.debug('获取代理状态:', status);
     return status;
+  }
+
+  /**
+   * 同步代理状态 - 检查实际运行状态并更新内存状态
+   */
+  async syncProxyStatus() {
+    try {
+      // 检查V2Ray进程是否在运行
+      const { stdout } = await execAsync('ps aux | grep v2ray | grep -v grep');
+      const hasV2RayProcess = stdout.trim().length > 0;
+      
+      // 检查端口是否在监听
+      const portListening = await this.checkProxyPort();
+      
+      if (hasV2RayProcess && portListening) {
+        // 如果进程在运行但状态未设置，尝试恢复状态
+        if (this.connectionStatus !== 'connected') {
+          logger.info('检测到V2Ray进程运行，恢复代理状态');
+          
+          // 尝试从配置文件恢复代理信息
+          try {
+            const configContent = await fs.readFile(this.configPath, 'utf8');
+            const config = JSON.parse(configContent);
+            
+            if (config.outbounds && config.outbounds[0]) {
+              const outbound = config.outbounds[0];
+              if (outbound.settings && outbound.settings.vnext && outbound.settings.vnext[0]) {
+                const server = outbound.settings.vnext[0];
+                this.activeProxy = {
+                  id: 'recovered_' + Date.now(),
+                  name: `${outbound.protocol.toUpperCase()}-${server.address}`,
+                  type: outbound.protocol,
+                  config: `${outbound.protocol}://${server.users[0].id}@${server.address}:${server.port}`
+                };
+                this.connectionStatus = 'connected';
+                this.statistics = {
+                  connectTime: new Date().toISOString(),
+                  lastUpdate: new Date().toISOString(),
+                  avgLatency: 50
+                };
+                logger.info('✅ 代理状态已恢复:', this.activeProxy.name);
+              }
+            }
+          } catch (configError) {
+            // 如果无法读取配置，创建一个基本的状态
+            this.activeProxy = {
+              id: 'unknown_' + Date.now(),
+              name: '未知代理',
+              type: 'vless'
+            };
+            this.connectionStatus = 'connected';
+            this.statistics = {
+              connectTime: new Date().toISOString(),
+              lastUpdate: new Date().toISOString(),
+              avgLatency: 50
+            };
+            logger.warn('无法读取配置文件，使用默认代理状态');
+          }
+        }
+      } else {
+        // 如果进程不在运行，确保状态为断开
+        if (this.connectionStatus === 'connected') {
+          logger.info('V2Ray进程未运行，重置代理状态');
+          this.connectionStatus = 'disconnected';
+          this.activeProxy = null;
+          this.statistics = {};
+        }
+      }
+    } catch (error) {
+      logger.warn('同步代理状态失败:', error.message);
+    }
   }
 
   /**
