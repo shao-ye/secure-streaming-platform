@@ -765,12 +765,12 @@ const loadProxyConfig = async () => {
           createdAt: proxy.createdAt,
           updatedAt: proxy.updatedAt,
           priority: proxy.priority || 1,
-          status: getInitialProxyStatus(proxy, proxySettings.value.activeProxyId),
+          status: 'disconnected', // 🔧 修复：初始设为未连接，由syncVPSStatusToTable()更新真实状态
           latency: proxy.latency || null,
           testing: false,
           enabling: false,
           disabling: false,
-          isActive: proxy.id === proxySettings.value.activeProxyId,
+          isActive: false, // 🔧 修复：初始设为false，由syncVPSStatusToTable()更新真实状态
           currentTestFailed: false, // 初始化测试失败标志
           lastTestLatency: null, // 初始化历史延迟
           lastTestTime: null // 初始化历史测试时间
@@ -800,7 +800,9 @@ const loadProxyConfig = async () => {
       })
       
       // 🔧 简化逻辑：直接获取VPS连接状态并匹配表格
+      console.log('🔄 页面加载完成，开始同步VPS状态...')
       await syncVPSStatusToTable()
+      console.log('✅ VPS状态同步完成，当前代理状态:', proxyList.value.map(p => ({ name: p.name, status: p.status, isActive: p.isActive })))
       
     } else {
       console.log('❌ 代理配置加载失败 - API响应格式错误')
