@@ -66,9 +66,14 @@ class ProxyManager {
               const outbound = config.outbounds[0];
               if (outbound.settings && outbound.settings.vnext && outbound.settings.vnext[0]) {
                 const server = outbound.settings.vnext[0];
+                // 🔧 改进：尝试从配置文件中恢复原始代理ID
+                const originalId = config.metadata?.originalId || `recovered_${Date.now()}`;
+                const originalName = config.metadata?.originalName || `${outbound.protocol.toUpperCase()}-${server.address}`;
+                
                 this.activeProxy = {
-                  id: 'recovered',
-                  name: `${outbound.protocol.toUpperCase()}-${server.address}`,
+                  id: originalId,
+                  name: originalName,
+                  type: outbound.protocol,
                   config: `${outbound.protocol}://${server.users[0].id}@${server.address}:${server.port}`
                 };
                 this.connectionStatus = 'connected';
@@ -382,6 +387,13 @@ class ProxyManager {
           "inboundTag": ["socks-in"],
           "outboundTag": "proxy-out"
         }]
+      },
+      // 🔧 新增：保存原始代理信息用于状态恢复
+      "metadata": {
+        "originalId": proxyConfig.id,
+        "originalName": proxyConfig.name,
+        "originalType": proxyConfig.type,
+        "createdAt": new Date().toISOString()
       }
     };
 
@@ -1302,19 +1314,37 @@ class ProxyManager {
   }
 
   /**
-   * 清理僵尸进程
+   * 清理僵尸进程 - 修复：不杀死正在工作的代理进程
    */
   async cleanupZombieProcesses() {
     try {
       const { stdout } = await execAsync('ps aux | grep v2ray | grep -v grep || true');
       const processes = stdout.split('\n').filter(line => line.trim());
       
+      if (processes.length === 0) {
+        logger.info('没有发现V2Ray进程');
+        return;
+      }
+      
+      logger.info(`发现 ${processes.length} 个V2Ray进程`);
+      
+      // 🔧 关键修复：检查端口1080是否在监听，如果在监听说明有活跃代理
+      const portCheck = await this.checkProxyPort();
+      if (portCheck) {
+        logger.info('检测到活跃的代理连接，跳过进程清理');
+        return;
+      }
+      
+      // 🔧 只有在没有活跃代理时才清理进程
+      logger.info('没有活跃代理，开始清理V2Ray进程');
       for (const processLine of processes) {
         const pid = processLine.split(/\s+/)[1];
         if (pid) {
-          logger.warn('清理僵尸V2Ray进程:', pid);
+          logger.info('清理V2Ray进程:', pid);
           try {
             process.kill(pid, 'SIGTERM');
+            // 等待进程优雅退出
+            await new Promise(resolve => setTimeout(resolve, 1000));
           } catch (error) {
             logger.warn('清理进程失败:', pid, error.message);
           }
