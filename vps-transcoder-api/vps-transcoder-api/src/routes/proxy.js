@@ -126,7 +126,7 @@ router.post('/disconnect', async (req, res) => {
  */
 router.get('/status', async (req, res) => {
   try {
-    const status = proxyManager.getProxyStatus();
+    const status = await proxyManager.getProxyStatus();
     
     res.json({
       status: 'success',
