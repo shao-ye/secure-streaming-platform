@@ -799,8 +799,26 @@ const loadProxyConfig = async () => {
         console.log('Vue nextTick - 代理列表长度:', proxyList.value.length)
       })
       
-      // 🔧 改进：获取VPS代理状态 - 使用重试机制确保状态准确
-      await syncProxyStatusWithRetry()
+      // 🔧 修复：直接获取代理状态，避免复杂的重试逻辑导致竞态条件
+      try {
+        const status = await proxyApi.getStatus()
+        console.log('🔍 获取到的真实代理状态:', status)
+        
+        if (status && status.status === 'success') {
+          const statusData = status.data
+          
+          // 直接更新全局状态
+          connectionStatus.value = statusData.connectionStatus || 'disconnected'
+          currentProxy.value = statusData.currentProxy
+          
+          // 🔧 关键修复：立即更新代理列表状态，避免状态不一致
+          updateProxyListStatus(statusData)
+          
+          console.log('✅ 代理状态同步完成')
+        }
+      } catch (error) {
+        console.warn('获取代理状态失败:', error.message)
+      }
       
     } else {
       console.log('❌ 代理配置加载失败 - API响应格式错误')
@@ -978,33 +996,41 @@ const updateProxyListStatus = (statusData) => {
 }
 
 // 🔧 简化的代理连接状态检查函数
-const checkProxyConnectionStatus = async (proxy, expectedProxyId, maxRetries = 4) => {
+const checkProxyConnectionStatus = async (proxy, expectedProxyId, maxRetries = 3) => {
   console.log(`🔍 开始检查代理连接状态: ${proxy.name} (${expectedProxyId})`)
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // 等待VPS处理连接
-      await new Promise(resolve => setTimeout(resolve, 2500))
+      // 🔧 修复：减少等待时间，避免用户等待过久
+      await new Promise(resolve => setTimeout(resolve, 2000))
       
-      // 直接调用状态同步函数
-      const syncSuccess = await syncProxyStatusWithRetry(1) // 只尝试1次，避免嵌套重试
+      // 🔧 修复：直接调用API而不是复杂的同步函数，避免嵌套重试
+      const status = await proxyApi.getStatus()
       
-      if (syncSuccess) {
-        // 检查是否是我们期望的代理
-        const currentProxyId = currentProxy.value?.id || currentProxy.value
+      if (status && status.status === 'success') {
+        const statusData = status.data
+        const currentProxyId = statusData.currentProxy?.id || statusData.currentProxy
         const isExpectedProxy = expectedProxyId === currentProxyId
         
         console.log(`📊 状态检查 ${attempt}/${maxRetries}:`, {
           expected: expectedProxyId,
           current: currentProxyId,
           match: isExpectedProxy,
-          status: connectionStatus.value
+          status: statusData.connectionStatus
         })
         
-        if (isExpectedProxy && connectionStatus.value === 'connected') {
+        // 🔧 修复：直接更新状态，避免复杂的同步逻辑
+        if (isExpectedProxy && statusData.connectionStatus === 'connected') {
+          // 直接更新全局状态
+          connectionStatus.value = 'connected'
+          currentProxy.value = statusData.currentProxy
+          
+          // 直接更新代理列表状态
+          updateProxyListStatus(statusData)
+          
           ElMessage.success(`代理 "${proxy.name}" 连接成功`)
           return true
-        } else if (connectionStatus.value === 'connecting') {
+        } else if (statusData.connectionStatus === 'connecting') {
           console.log(`🔄 代理仍在连接中，继续等待... (${attempt}/${maxRetries})`)
           continue
         }
