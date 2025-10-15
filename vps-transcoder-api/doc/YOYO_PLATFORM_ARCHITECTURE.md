@@ -3423,6 +3423,48 @@ if (duration > 5000) {
 }
 ```
 
+#### 4. PowerShell脚本编写规范
+```powershell
+# ❌ 错误：URL中的特殊字符会导致解析错误
+$proxyConfig = "vless://test@example.com:443?encryption=none&security=tls&type=tcp#test"
+
+# ✅ 正确：使用单引号包裹完整URL，避免特殊字符解析
+$proxyConfig = 'vless://test@example.com:443?encryption=none&security=tls&type=tcp#test'
+
+# ✅ 或者使用转义字符
+$proxyConfig = "vless://test@example.com:443?encryption=none`&security=tls`&type=tcp#test"
+
+# ✅ 最佳实践：复杂URL使用Here-String
+$proxyConfig = @'
+vless://f57c1ece-0062-4c18-8e5e-7a5dbfbf33aa@136.0.11.251:52142?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.iij.ad.jp&fp=chrome&pbk=XSIEcTZ1NnjyY-BhYuiW74fAwFfve-8YJ-T855r0f1c&type=tcp&headerType=none#JP-Evoxt
+'@
+```
+
+#### 5. PowerShell常见错误和解决方案
+```powershell
+# 问题1: & 字符被解释为命令操作符
+# 错误: config = "vless://test@example.com:443?encryption=none&security=tls"
+# 解决: config = 'vless://test@example.com:443?encryption=none&security=tls'
+
+# 问题2: 哈希表语法错误
+# 错误: 
+$data = @{
+    config = "url&with&ampersands"
+}
+# 解决:
+$data = @{
+    config = 'url&with&ampersands'
+}
+
+# 问题3: JSON转换中的特殊字符
+# 正确做法:
+$jsonData = @{
+    proxyConfig = @{
+        config = 'vless://...'  # 使用单引号
+    }
+} | ConvertTo-Json -Depth 3
+```
+
 ### 持续改进机制
 
 #### 1. 定期检查
