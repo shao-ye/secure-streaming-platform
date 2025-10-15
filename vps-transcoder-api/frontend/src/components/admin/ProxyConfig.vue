@@ -252,6 +252,7 @@ import { proxyApi } from '../../services/proxyApi'
 // 响应式数据
 const proxyEnabled = ref(false)
 const switchLoading = ref(false)
+const isInitializing = ref(true) // 🔧 添加初始化标志，防止页面加载时触发开关事件
 const connectionStatus = ref('disconnected')
 const currentProxy = ref(null)
 const loading = ref(false)
@@ -437,6 +438,12 @@ const estimateLatencyByServer = (config) => {
 
 // 处理代理开关切换
 const handleProxyToggle = async (enabled) => {
+  // 🔧 修复：初始化期间跳过开关事件，防止误触发断开连接
+  if (isInitializing.value) {
+    console.log('🔧 初始化期间跳过开关事件')
+    return
+  }
+  
   switchLoading.value = true
   try {
     // 更新代理设置
@@ -753,7 +760,9 @@ const loadProxyConfig = async () => {
         enabled: config.data.settings?.enabled || false,
         activeProxyId: config.data.settings?.activeProxyId || null
       }
+      // 🔧 修复：设置开关状态，完成后标记初始化结束
       proxyEnabled.value = proxySettings.value.enabled
+      console.log('🔧 设置代理开关状态:', proxySettings.value.enabled)
       
       // 加载代理列表并设置初始状态 - 使用明确的对象创建避免Vue响应式问题
       proxyList.value = (config.data.proxies || []).map(proxy => {
@@ -803,6 +812,10 @@ const loadProxyConfig = async () => {
       console.log('🔄 页面加载完成，开始同步VPS状态...')
       await syncVPSStatusToTable()
       console.log('✅ VPS状态同步完成，当前代理状态:', proxyList.value.map(p => ({ name: p.name, status: p.status, isActive: p.isActive })))
+      
+      // 🔧 标记初始化完成，允许开关事件正常触发
+      isInitializing.value = false
+      console.log('🔧 页面初始化完成，开关事件已启用')
       
     } else {
       console.log('❌ 代理配置加载失败 - API响应格式错误')
@@ -897,9 +910,8 @@ const syncVPSStatusToTable = async () => {
     console.log('📡 VPS状态:', status)
     
     if (!status || status.status !== 'success') {
-      console.log('❌ VPS状态获取失败，设置所有代理为未连接')
-      setAllProxiesDisconnected()
-      return
+      console.log('❌ VPS状态获取失败，保持当前状态不变')
+      return // 🔧 修复：API失败时不清理状态，保持现有状态
     }
     
     const statusData = status.data
@@ -927,7 +939,8 @@ const syncVPSStatusToTable = async () => {
     
   } catch (error) {
     console.error('❌ VPS状态同步失败:', error)
-    setAllProxiesDisconnected()
+    console.log('🔧 网络异常，保持当前状态不变')
+    // 🔧 修复：网络异常时不清理状态，避免误清理正常连接
   }
 }
 
