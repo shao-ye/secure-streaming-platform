@@ -3133,9 +3133,318 @@ curl -X GET "http://localhost:3000/api/deployment/status"
 
 ---
 
+## 🏗️ API架构设计规范 (v5.5新增)
+
+### 三层API架构原理
+
+#### 架构概览
+```mermaid
+graph TD
+    A[前端 Vue.js] -->|HTTP请求| B[Cloudflare Workers]
+    B -->|转发请求| C[VPS Node.js]
+    C -->|返回数据| B
+    B -->|返回响应| A
+    
+    subgraph "前端层"
+        A1[proxyApi.js]
+        A2[组件调用]
+    end
+    
+    subgraph "业务逻辑层"
+        B1[proxyHandler.js]
+        B2[路由分发]
+        B3[权限验证]
+    end
+    
+    subgraph "服务层"
+        C1[proxy.js路由]
+        C2[ProxyManager.js]
+        C3[业务逻辑]
+    end
+    
+    A --> A1
+    A1 --> A2
+    B --> B1
+    B1 --> B2
+    B2 --> B3
+    C --> C1
+    C1 --> C2
+    C2 --> C3
+```
+
+#### 数据流向
+```
+用户操作 → 前端方法 → Workers路由 → VPS端点 → 业务逻辑 → 数据返回
+    ↓         ↓          ↓          ↓         ↓         ↓
+  点击按钮   API调用    路由匹配    接口处理   逻辑执行   响应返回
+```
+
+### API路由映射表
+
+#### 代理管理API完整映射
+
+| 功能描述 | 前端方法 | Workers路由 | VPS端点 | 实现状态 |
+|----------|----------|-------------|---------|----------|
+| 获取代理配置 | `proxyApi.getConfig()` | `GET /api/admin/proxy/config` | `GET /api/proxy/config` | ✅ |
+| 创建代理 | `proxyApi.createProxy()` | `POST /api/admin/proxy/config` | `POST /api/proxy/config` | ✅ |
+| 更新代理 | `proxyApi.updateProxy()` | `PUT /api/admin/proxy/config/:id` | `PUT /api/proxy/config/:id` | ✅ |
+| 删除代理 | `proxyApi.deleteProxy()` | `DELETE /api/admin/proxy/config/:id` | `DELETE /api/proxy/config/:id` | ✅ |
+| 获取代理状态 | `proxyApi.getStatus()` | `GET /api/admin/proxy/status` | `GET /api/proxy/status` | ✅ |
+| 测试代理延迟 | `proxyApi.testProxy()` | `POST /api/admin/proxy/test` | `POST /api/proxy/test` | ✅ |
+| **连接代理** | `proxyApi.connectProxy()` | `POST /api/admin/proxy/connect` | `POST /api/proxy/connect` | ✅ |
+| **断开代理** | `proxyApi.disconnectProxy()` | `POST /api/admin/proxy/disconnect` | `POST /api/proxy/disconnect` | ✅ |
+| 代理控制操作 | `proxyApi.controlProxy()` | `POST /api/admin/proxy/control` | `POST /api/proxy/control` | ✅ |
+
+#### 视频流管理API映射
+
+| 功能描述 | 前端方法 | Workers路由 | VPS端点 | 实现状态 |
+|----------|----------|-------------|---------|----------|
+| 获取频道列表 | `streamApi.getStreams()` | `GET /api/streams` | `GET /api/simple-stream/channels` | ✅ |
+| 启动观看 | `streamApi.startWatching()` | `POST /api/simple-stream/start-watching` | `POST /api/simple-stream/start-watching` | ✅ |
+| 停止观看 | `streamApi.stopWatching()` | `POST /api/simple-stream/stop-watching` | `POST /api/simple-stream/stop-watching` | ✅ |
+| 心跳保持 | `streamApi.heartbeat()` | `POST /api/simple-stream/heartbeat` | `POST /api/simple-stream/heartbeat` | ✅ |
+| 频道状态 | `streamApi.getChannelStatus()` | `GET /api/simple-stream/channel/:id/status` | `GET /api/simple-stream/channel/:id/status` | ✅ |
+| 系统状态 | `streamApi.getSystemStatus()` | `GET /api/simple-stream/system/status` | `GET /api/simple-stream/system/status` | ✅ |
+
+### 关键架构原则
+
+#### 1. 三层一致性原则
+```javascript
+// ❌ 错误：只在某一层添加功能
+// 只在VPS添加端点，忘记Workers路由
+
+// ✅ 正确：三层同步添加
+// 1. 前端: 添加API方法
+// 2. Workers: 添加路由处理
+// 3. VPS: 实现具体端点
+```
+
+#### 2. 路由命名规范
+```javascript
+// 前端调用
+proxyApi.connectProxy()
+
+// Workers路由 (添加admin前缀)
+POST /api/admin/proxy/connect
+
+// VPS端点 (去掉admin前缀)
+POST /api/proxy/connect
+```
+
+#### 3. 数据格式统一
+```javascript
+// 统一的响应格式
+{
+  "status": "success|error",
+  "message": "操作描述",
+  "data": {}, // 具体数据
+  "timestamp": "2025-10-15T10:30:00Z"
+}
+```
+
+### 常见错误模式分析
+
+#### ❌ 错误模式1: 只修改单层
+```javascript
+// 只在VPS添加端点
+router.post('/new-endpoint', handler);
+
+// 忘记在Workers添加路由 ← 导致404错误
+// 忘记在前端添加方法 ← 导致调用失败
+```
+
+#### ❌ 错误模式2: 路由不匹配
+```javascript
+// 前端调用
+POST /api/admin/proxy/connect
+
+// Workers路由缺失
+// 没有对应的路由处理 ← 导致404错误
+```
+
+#### ❌ 错误模式3: 测试不完整
+```javascript
+// 只测试VPS端点
+curl http://localhost:3000/api/proxy/connect ✅
+
+// 没有测试完整链路
+// 前端 → Workers → VPS ← 实际用户使用路径
+```
+
+#### ✅ 正确模式: 三层同步开发
+```javascript
+// 1. 前端方法
+async connectProxy(proxyData) {
+  return await axios.post('/api/admin/proxy/connect', { proxyConfig: proxyData });
+}
+
+// 2. Workers路由
+if (path === '/api/admin/proxy/connect' && method === 'POST') {
+  return await this.connectProxy(request, env, corsHeaders);
+}
+
+// 3. VPS端点
+router.post('/connect', async (req, res) => {
+  // 实现具体逻辑
+});
+```
+
+---
+
+## 📋 开发规范和流程 (v5.5新增)
+
+### API开发标准流程
+
+#### 1. 需求分析阶段
+- [ ] 确定功能需求和API设计
+- [ ] 设计数据格式和错误处理
+- [ ] 规划三层架构实现方案
+
+#### 2. 开发实施阶段
+```bash
+# 开发检查清单
+□ 前端API方法已添加 (frontend/src/services/*.js)
+□ Workers路由已实现 (cloudflare-worker/src/handlers/*.js)  
+□ VPS端点已开发 (vps-transcoder-api/src/routes/*.js)
+□ 业务逻辑已完成 (vps-transcoder-api/src/services/*.js)
+```
+
+#### 3. 测试验证阶段
+```bash
+# 测试检查清单
+□ VPS端点单独测试通过
+□ Workers路由测试通过  
+□ 前端到VPS端到端测试通过
+□ 错误处理和边界情况测试
+□ 性能和并发测试
+```
+
+#### 4. 部署发布阶段
+```bash
+# 部署检查清单
+□ 代码提交并推送到Git
+□ VPS代码同步和服务重启
+□ Cloudflare Workers重新部署
+□ 前端代码部署到Cloudflare Pages
+□ 生产环境功能验证
+```
+
+### 文档维护规范
+
+#### 1. API变更时必须更新
+- [ ] 更新本文档的路由映射表
+- [ ] 更新API_ROUTES_MAPPING.md
+- [ ] 更新相关的测试脚本
+- [ ] 更新版本说明
+
+#### 2. 文档更新模板
+```markdown
+### 新增API: [功能名称]
+
+#### 路由信息
+- 前端方法: `apiName.methodName()`
+- Workers路由: `METHOD /api/path`
+- VPS端点: `METHOD /api/path`
+
+#### 实现文件
+- 前端: `frontend/src/services/[service].js`
+- Workers: `cloudflare-worker/src/handlers/[handler].js`
+- VPS: `vps-transcoder-api/src/routes/[route].js`
+
+#### 测试验证
+- [ ] 单元测试通过
+- [ ] 集成测试通过
+- [ ] 端到端测试通过
+```
+
+### 问题排查指南
+
+#### API调用失败排查步骤
+1. **检查前端调用**
+   ```javascript
+   // 检查网络请求
+   console.log('API调用:', url, method, data);
+   ```
+
+2. **检查Workers路由**
+   ```javascript
+   // 确认路由是否存在
+   if (path === '/api/admin/proxy/connect' && method === 'POST') {
+     // 路由处理逻辑
+   }
+   ```
+
+3. **检查VPS端点**
+   ```bash
+   # 直接测试VPS端点
+   curl -X POST http://localhost:3000/api/proxy/connect
+   ```
+
+4. **检查完整链路**
+   ```bash
+   # 运行完整性测试脚本
+   ./test-api-routes-completeness.ps1
+   ```
+
+### 代码质量标准
+
+#### 1. 错误处理规范
+```javascript
+// ✅ 正确的错误处理
+try {
+  const result = await apiCall();
+  return { status: 'success', data: result };
+} catch (error) {
+  console.error('API调用失败:', error);
+  return { 
+    status: 'error', 
+    message: error.message,
+    code: error.code 
+  };
+}
+```
+
+#### 2. 日志记录规范
+```javascript
+// ✅ 完整的日志记录
+console.log('🚀 开始处理请求:', { path, method, timestamp: new Date().toISOString() });
+console.log('✅ 请求处理成功:', { result, duration: Date.now() - startTime });
+console.error('❌ 请求处理失败:', { error: error.message, stack: error.stack });
+```
+
+#### 3. 性能监控规范
+```javascript
+// ✅ 性能监控
+const startTime = Date.now();
+// ... 业务逻辑
+const duration = Date.now() - startTime;
+if (duration > 5000) {
+  console.warn('⚠️ API响应时间过长:', { path, duration });
+}
+```
+
+### 持续改进机制
+
+#### 1. 定期检查
+- **每周**: 运行API完整性测试
+- **每月**: 检查文档更新情况
+- **每季度**: 评估架构优化需求
+
+#### 2. 问题反馈
+- **发现问题**: 立即记录到Issues
+- **解决问题**: 更新相关文档
+- **预防措施**: 完善检查清单
+
+#### 3. 知识积累
+- **经验总结**: 记录常见问题和解决方案
+- **最佳实践**: 提炼开发和部署经验
+- **工具改进**: 优化测试和部署脚本
+
+---
+
 **文档创建时间**: 2025年10月2日  
-**文档更新时间**: 2025年10月15日 09:50  
-**文档版本**: v5.4 (频道配置存储架构更新)  
+**文档更新时间**: 2025年10月15日 10:55  
+**文档版本**: v5.5 (API架构规范完善)  
 **维护人员**: YOYO开发团队  
 **联系方式**: 项目仓库Issues
 
@@ -3151,3 +3460,4 @@ curl -X GET "http://localhost:3000/api/deployment/status"
 - **v5.2**: SSH会话卡死问题完整解决方案，HTTP API替代SSH命令，提升部署效率
 - **v5.3**: HTTP部署API完整实现，Git认证问题解决，实现完全自动化部署管理
 - **v5.4**: 频道配置存储架构更新，从VPS无状态设计改为KV集中存储，简化API调用流程
+- **v5.5**: API架构规范完善，建立三层路由映射机制，完善开发规范和文档维护流程
