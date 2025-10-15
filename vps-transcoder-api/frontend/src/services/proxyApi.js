@@ -143,8 +143,8 @@ export const proxyApi = {
    */
   async enableProxy(proxyId) {
     try {
-      const response = await axios.post('/api/admin/proxy/control', {
-        action: 'enable',
+      // 🔧 修改：直接调用连接API，让Workers处理proxyId到配置的转换
+      const response = await axios.post('/api/admin/proxy/connect', {
         proxyId: proxyId
       })
       return response.data
