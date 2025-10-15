@@ -112,23 +112,30 @@ app.get('/health', (req, res) => {
 
 // API路由
 try {
-    // 使用新的简化流管理API
+    // 🔥 新增：集成流媒体服务API（主要入口）
+    const { router: integratedStreamingRoutes } = require('./routes/integrated-streaming');
+    app.use('/api/integrated-streaming', integratedStreamingRoutes);
+    logger.info('✅ 集成流媒体服务API路由已加载');
+    
+    // 使用新的简化流管理API（向后兼容）
     const { router: simpleStreamRoutes } = require('./routes/simple-stream');
     app.use('/api/simple-stream', simpleStreamRoutes);
+    logger.info('✅ 简化流管理API路由已加载');
     
     // 代理管理API路由
     const proxyRoutes = require('./routes/proxy');
     app.use('/api/proxy', proxyRoutes);
-    logger.info('代理管理API路由已加载');
+    logger.info('✅ 代理管理API路由已加载');
     
     // 部署管理API路由
     const deploymentRoutes = require('./routes/deployment');
     app.use('/api/deployment', deploymentRoutes);
-    logger.info('部署管理API路由已加载');
+    logger.info('✅ 部署管理API路由已加载');
     
     // 保留原有API路由（向后兼容）
     const apiRoutes = require('./routes/api');
     app.use('/api', apiRoutes);
+    logger.info('✅ 基础API路由已加载');
 } catch (error) {
     logger.warn('API routes not found, creating basic structure...', error.message);
 
