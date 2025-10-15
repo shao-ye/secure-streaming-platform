@@ -1595,23 +1595,12 @@ class ProxyManager {
       logger.info('V2Ray进程退出，代码:', code);
       this.connectionStatus = 'disconnected';
       
-      // 🔧 新增：进程退出时尝试自动重启
-      if (this.autoRestartEnabled && this.activeProxy && this.restartAttempts < this.maxRestartAttempts) {
-        this.restartAttempts++;
-        logger.info(`尝试自动重启V2Ray进程 (${this.restartAttempts}/${this.maxRestartAttempts})`);
-        
-        setTimeout(async () => {
-          try {
-            await this.restartProxy();
-          } catch (error) {
-            logger.error('自动重启失败:', error);
-          }
-        }, 5000); // 5秒后重启
-      } else {
-        this.activeProxy = null;
-        this.v2rayProcess = null;
-        this.restartAttempts = 0;
-      }
+      // 🔧 修复：只记录进程退出，让进程监控机制处理重启
+      // 避免两个重启机制冲突
+      this.activeProxy = null;
+      this.v2rayProcess = null;
+      
+      logger.info('V2Ray进程已退出，等待进程监控机制处理重启');
     });
 
     this.v2rayProcess.on('error', (error) => {
@@ -1730,12 +1719,35 @@ class ProxyManager {
       this.connectionStatus = 'connecting';
       this.v2rayProcess = null;
       
-      // 🔧 修复：直接启动V2Ray，不调用connectProxy避免递归
-      await this.startV2RayProcess(proxyConfig);
+      // 🔧 修复：使用正确的V2Ray启动逻辑
+      // 检查代理客户端
+      const clientInfo = await this.checkProxyClientAvailable();
+      if (!clientInfo) {
+        throw new Error('V2Ray/Xray客户端不可用，请先安装');
+      }
+      
+      // 生成配置文件
+      const config = await this.generateV2rayConfig(proxyConfig);
+      await fs.writeFile(this.configPath, JSON.stringify(config, null, 2));
+      logger.info('代理配置文件已重新生成');
+      
+      // 启动代理进程
+      this.v2rayProcess = spawn(clientInfo.client, ['-config', this.configPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false
+      });
+      
+      // 设置进程事件处理
+      this.setupProcessHandlers(proxyConfig);
       
       // 更新状态
       this.activeProxy = proxyConfig;
       this.connectionStatus = 'connected';
+      this.statistics = {
+        connectTime: new Date().toISOString(),
+        lastUpdate: new Date().toISOString(),
+        avgLatency: 50
+      };
       
       // 🔧 修复：重启进程监控
       this.startProcessMonitoring();
@@ -1744,6 +1756,8 @@ class ProxyManager {
     } catch (error) {
       logger.error('代理重启失败:', error);
       this.connectionStatus = 'error';
+      // 确保重启监控，即使失败也要监控
+      this.startProcessMonitoring();
       throw error;
     }
   }
