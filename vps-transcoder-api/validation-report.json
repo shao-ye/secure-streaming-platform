@@ -1,0 +1,47 @@
+{
+  "summary": {
+    "totalTests": 5,
+    "passedTests": 0,
+    "failedTests": 5,
+    "successRate": "0.0",
+    "duration": 1835
+  },
+  "results": [
+    {
+      "testName": "系统健康检查",
+      "success": false,
+      "message": "连接失败: Request failed with status code 503",
+      "data": null,
+      "timestamp": 1760505864794
+    },
+    {
+      "testName": "系统状态获取",
+      "success": false,
+      "message": "请求失败: Request failed with status code 503",
+      "data": null,
+      "timestamp": 1760505865175
+    },
+    {
+      "testName": "可用路由获取",
+      "success": false,
+      "message": "请求失败: Request failed with status code 503",
+      "data": null,
+      "timestamp": 1760505865519
+    },
+    {
+      "testName": "启动观看功能",
+      "success": false,
+      "message": "请求失败: Request failed with status code 503",
+      "data": null,
+      "timestamp": 1760505865870
+    },
+    {
+      "testName": "向后兼容性",
+      "success": false,
+      "message": "向后兼容性测试失败: Request failed with status code 503",
+      "data": null,
+      "timestamp": 1760505866221
+    }
+  ],
+  "timestamp": "2025-10-15T05:24:26.222Z"
+}
