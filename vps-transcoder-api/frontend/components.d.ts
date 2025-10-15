@@ -58,6 +58,7 @@ declare module 'vue' {
     StreamManager: typeof import('./src/components/StreamManager.vue')['default']
     SystemDiagnostics: typeof import('./src/components/SystemDiagnostics.vue')['default']
     TunnelConfig: typeof import('./src/components/admin/TunnelConfig.vue')['default']
+    UnifiedVideoPlayer: typeof import('./src/components/video/UnifiedVideoPlayer.vue')['default']
     UserForm: typeof import('./src/components/user/UserForm.vue')['default']
     UserFormFixed: typeof import('./src/components/user/UserForm-fixed.vue')['default']
     UserList: typeof import('./src/components/user/UserList.vue')['default']
