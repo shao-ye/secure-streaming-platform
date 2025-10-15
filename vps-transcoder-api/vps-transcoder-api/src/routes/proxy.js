@@ -95,6 +95,47 @@ router.post('/connect', async (req, res) => {
 });
 
 /**
+ * 启用代理（接收完整配置）
+ * POST /api/proxy/enable
+ */
+router.post('/enable', async (req, res) => {
+  try {
+    const { proxyConfig } = req.body;
+    
+    if (!proxyConfig) {
+      return res.status(400).json({
+        status: 'error',
+        message: '缺少代理配置数据'
+      });
+    }
+    
+    logger.info('收到代理启用请求:', {
+      proxyId: proxyConfig.id,
+      proxyName: proxyConfig.name
+    });
+    
+    // 直接使用传入的完整配置连接代理
+    const result = await proxyManager.connectProxy(proxyConfig);
+    
+    res.json({
+      status: 'success',
+      message: '代理启用成功',
+      data: {
+        proxyId: proxyConfig.id,
+        proxyName: proxyConfig.name,
+        connectionStatus: 'connected'
+      }
+    });
+  } catch (error) {
+    logger.error('启用代理失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || '启用代理失败'
+    });
+  }
+});
+
+/**
  * 断开代理连接
  * POST /api/proxy/disconnect
  */
