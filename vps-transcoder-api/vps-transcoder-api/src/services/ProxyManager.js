@@ -771,14 +771,29 @@ class ProxyManager {
         };
       }
 
-      // 检测代理连接状态
+      // 🔧 简化方案：优化连接状态判断逻辑
       let connectionStatus;
       if (this.simulatedMode) {
         // 模拟模式下显示为已连接
         connectionStatus = 'connected';
+      } else if (this.activeProxy && this.v2rayProcess) {
+        // 🔧 关键修复：如果有活跃代理和进程，优先检查进程状态
+        const processRunning = this.v2rayProcess && !this.v2rayProcess.killed;
+        const portListening = await this.checkProxyPort();
+        
+        if (processRunning && portListening) {
+          // 进程运行且端口监听，认为连接成功
+          connectionStatus = 'connected';
+          logger.info('代理状态：进程运行且端口监听 → connected');
+        } else {
+          // 尝试连接测试作为备用验证
+          const isConnected = await this.testProxyConnection();
+          connectionStatus = isConnected ? 'connected' : 'error';
+          logger.info(`代理状态：连接测试结果 → ${connectionStatus}`);
+        }
       } else {
-        const isConnected = await this.testProxyConnection();
-        connectionStatus = isConnected ? 'connected' : 'error';
+        // 没有活跃代理，状态为断开
+        connectionStatus = 'disconnected';
       }
       
       // 获取网络统计
