@@ -802,58 +802,13 @@ const loadProxyConfig = async () => {
       // 🔧 改进：获取VPS代理状态 - 使用重试机制确保状态准确
       await syncProxyStatusWithRetry()
       
-    } catch (error) {
-        console.warn('获取代理状态失败:', error)
-        
-        // 🔧 修复：改进错误处理逻辑，避免误设为error状态
-        proxyList.value.forEach(proxy => {
-          if (proxy.id !== proxySettings.value.activeProxyId) {
-            proxy.status = 'disconnected'
-            proxy.isActive = false
-            proxy.latency = null
-          } else {
-            // 🔧 修复：活跃代理在状态获取失败时，保持为connecting而不是error
-            // 这样用户知道代理可能正在连接，而不是完全失败
-            proxy.status = 'connecting'
-            proxy.isActive = true
-            proxy.latency = null
-            console.log(`⚠️ 活跃代理 ${proxy.name} 状态获取失败，设为连接中状态`)
-            
-            // 延迟重试获取状态
-            setTimeout(() => {
-              loadProxyConfig() // 重新加载配置和状态
-            }, 3000)
-          }
-        })
-      }
-      
-      // 保存代理配置到localStorage供前端路由使用
-      const proxyConfig = {
-        enabled: proxySettings.value.enabled,
-        activeProxyId: proxySettings.value.activeProxyId,
-        updatedAt: new Date().toISOString()
-      }
-      localStorage.setItem('proxy_config', JSON.stringify(proxyConfig))
-      console.log('代理配置已保存到localStorage:', proxyConfig)
+    } else {
+      console.log('❌ 代理配置加载失败 - API响应格式错误')
     }
-  } catch (error) {
-    console.warn('加载代理配置失败:', error)
-    ElMessage.warning('加载代理配置失败，使用离线模式')
     
-    // 如果API失败，显示示例数据
-    proxyList.value = [
-      {
-        id: 'example_1',
-        name: '示例节点（请添加真实代理）',
-        type: 'vless',
-        config: 'vless://example-uuid@example.com:443?params',
-        status: 'disconnected',
-        latency: null,
-        priority: 1,
-        remarks: '这是示例数据，请添加真实的代理配置',
-        testing: false
-      }
-    ]
+  } catch (error) {
+    console.error('加载代理配置失败:', error)
+    ElMessage.error('加载代理配置失败，请刷新页面重试')
   } finally {
     loading.value = false
   }
