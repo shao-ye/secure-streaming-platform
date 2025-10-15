@@ -66,15 +66,38 @@ class ProxyManager {
               const outbound = config.outbounds[0];
               if (outbound.settings && outbound.settings.vnext && outbound.settings.vnext[0]) {
                 const server = outbound.settings.vnext[0];
-                // 🔧 改进：尝试从配置文件中恢复原始代理ID
+                // 🔧 兼容性修复：处理有metadata和无metadata的配置文件
                 const originalId = config.metadata?.originalId || `recovered_${Date.now()}`;
                 const originalName = config.metadata?.originalName || `${outbound.protocol.toUpperCase()}-${server.address}`;
+                
+                // 构建配置URL - 兼容不同的outbound配置格式
+                let configUrl = `${outbound.protocol}://${server.users[0].id}@${server.address}:${server.port}`;
+                
+                // 如果有streamSettings，尝试添加参数
+                if (outbound.streamSettings) {
+                  const params = new URLSearchParams();
+                  if (outbound.streamSettings.security) {
+                    params.append('security', outbound.streamSettings.security);
+                  }
+                  if (outbound.streamSettings.network) {
+                    params.append('type', outbound.streamSettings.network);
+                  }
+                  if (outbound.streamSettings.xhttpSettings?.host) {
+                    params.append('host', outbound.streamSettings.xhttpSettings.host);
+                  }
+                  if (outbound.streamSettings.xhttpSettings?.path) {
+                    params.append('path', outbound.streamSettings.xhttpSettings.path);
+                  }
+                  if (params.toString()) {
+                    configUrl += '?' + params.toString();
+                  }
+                }
                 
                 this.activeProxy = {
                   id: originalId,
                   name: originalName,
                   type: outbound.protocol,
-                  config: `${outbound.protocol}://${server.users[0].id}@${server.address}:${server.port}`
+                  config: configUrl
                 };
                 this.connectionStatus = 'connected';
                 this.statistics = {
