@@ -25,6 +25,7 @@ class ProxyManager {
     this.autoRestartEnabled = true;
     this.maxRestartAttempts = 3;
     this.restartAttempts = 0;
+    this.lastRestartTime = 0;
     
     // 确保配置目录存在
     this.ensureDirectories();
@@ -1635,15 +1636,56 @@ class ProxyManager {
       if (this.activeProxy && this.connectionStatus === 'connected') {
         try {
           const portListening = await this.checkProxyPort();
-          const processRunning = this.v2rayProcess && !this.v2rayProcess.killed;
+          
+          // 🔧 修复：更准确的进程状态检查
+          let processRunning = false;
+          if (this.v2rayProcess) {
+            try {
+              // 发送信号0检查进程是否存在，不会杀死进程
+              process.kill(this.v2rayProcess.pid, 0);
+              processRunning = true;
+            } catch (error) {
+              // 进程不存在
+              processRunning = false;
+              this.v2rayProcess = null;
+            }
+          }
           
           if (!portListening || !processRunning) {
-            logger.warn('检测到代理进程异常，尝试重启');
+            logger.warn(`检测到代理进程异常: 端口监听=${portListening}, 进程运行=${processRunning}`);
             this.connectionStatus = 'error';
             
-            if (this.autoRestartEnabled && this.restartAttempts < this.maxRestartAttempts) {
+            // 🔧 修复：防止重启循环，添加重启间隔检查
+            const now = Date.now();
+            const lastRestartTime = this.lastRestartTime || 0;
+            const restartInterval = 60000; // 最少60秒间隔
+            
+            if (this.autoRestartEnabled && 
+                this.restartAttempts < this.maxRestartAttempts && 
+                (now - lastRestartTime) > restartInterval) {
+              
+              this.lastRestartTime = now;
               this.restartAttempts++;
-              await this.restartProxy();
+              logger.info(`尝试重启代理 (${this.restartAttempts}/${this.maxRestartAttempts})`);
+              
+              // 🔧 修复：异步重启，避免阻塞监控循环
+              setImmediate(async () => {
+                try {
+                  await this.restartProxy();
+                } catch (error) {
+                  logger.error('异步重启失败:', error);
+                }
+              });
+            } else if (this.restartAttempts >= this.maxRestartAttempts) {
+              logger.error('达到最大重启次数，停止自动重启');
+              this.autoRestartEnabled = false;
+            }
+          } else {
+            // 🔧 新增：进程正常时重置重启计数
+            if (this.restartAttempts > 0) {
+              logger.info('代理进程恢复正常，重置重启计数');
+              this.restartAttempts = 0;
+              this.lastRestartTime = 0;
             }
           }
         } catch (error) {
@@ -1664,7 +1706,7 @@ class ProxyManager {
   }
 
   /**
-   * 🔧 新增：重启代理
+   * 🔧 修复：重启代理（防止递归调用）
    */
   async restartProxy() {
     if (!this.activeProxy) {
@@ -1675,16 +1717,33 @@ class ProxyManager {
     logger.info('开始重启代理:', this.activeProxy.name);
     
     try {
+      // 🔧 修复：暂时停止进程监控，防止重启过程中的干扰
+      this.stopProcessMonitoring();
+      
       // 强制清理现有进程
       await this.forceCleanAllV2RayProcesses();
       
-      // 重新连接
-      await this.connectProxy(this.activeProxy);
+      // 保存代理配置
+      const proxyConfig = { ...this.activeProxy };
+      
+      // 重置状态
+      this.connectionStatus = 'connecting';
+      this.v2rayProcess = null;
+      
+      // 🔧 修复：直接启动V2Ray，不调用connectProxy避免递归
+      await this.startV2RayProcess(proxyConfig);
+      
+      // 更新状态
+      this.activeProxy = proxyConfig;
+      this.connectionStatus = 'connected';
+      
+      // 🔧 修复：重启进程监控
+      this.startProcessMonitoring();
       
       logger.info('代理重启成功');
-      this.restartAttempts = 0; // 重置重启计数
     } catch (error) {
       logger.error('代理重启失败:', error);
+      this.connectionStatus = 'error';
       throw error;
     }
   }
