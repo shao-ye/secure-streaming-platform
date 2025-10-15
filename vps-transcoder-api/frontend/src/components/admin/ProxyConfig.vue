@@ -799,88 +799,10 @@ const loadProxyConfig = async () => {
         console.log('Vue nextTick - 代理列表长度:', proxyList.value.length)
       })
       
-      // 获取VPS代理状态 - 总是尝试获取状态以确保显示正确
-      try {
-        const status = await proxyApi.getStatus()
-        console.log('获取到的代理状态:', status)
-        
-        // 🔧 修复：增强API响应验证
-        if (!status || (status.status && status.status !== 'success')) {
-          throw new Error(`API返回错误状态: ${status?.status || 'unknown'}`)
-        }
-        
-        // 处理API响应的数据结构 - 可能有data嵌套
-        const statusData = status.data || status
-        console.log('解析后的状态数据:', statusData)
-        
-        // 🔧 修复：验证statusData的有效性
-        if (!statusData || typeof statusData !== 'object') {
-          throw new Error('状态数据格式无效')
-        }
-        
-        connectionStatus.value = statusData.connectionStatus || 'disconnected'
-        currentProxy.value = statusData.currentProxy
-        
-        // 强制更新所有代理的连接状态，使用API返回的真实状态
-        console.log('开始更新代理状态，代理列表长度:', proxyList.value.length)
-        console.log('VPS返回的活跃代理ID:', statusData.currentProxy)
-        console.log('配置中的活跃代理ID:', proxySettings.value.activeProxyId)
-        
-        proxyList.value.forEach(proxy => {
-          // 🔧 修复：正确处理VPS返回的currentProxy（可能是对象或字符串）
-          const currentProxyId = statusData.currentProxy?.id || statusData.currentProxy
-          const isActiveProxy = proxy.id === currentProxyId
-          
-          if (isActiveProxy && statusData.connectionStatus === 'connected') {
-            // 🔧 修复：当前连接的代理，确保状态正确映射
-            proxy.status = 'connected'  // 确保映射为connected而不是error
-            proxy.isActive = true
-            console.log(`✅ 设置活跃代理 ${proxy.name}(${proxy.id}) 状态: connected`)
-            
-            // 🔧 修复：智能延迟设置逻辑
-            if (statusData.statistics?.avgLatency && statusData.statistics.avgLatency > 0) {
-              // 优先使用平均延迟（真实的网络延迟）
-              proxy.latency = statusData.statistics.avgLatency
-              console.log(`✅ 设置活跃代理 ${proxy.name} 真实延迟: ${proxy.latency}ms`)
-            } else if (statusData.statistics?.connectTime) {
-              // 使用连接时间计算大概延迟
-              const connectTime = new Date(statusData.statistics.connectTime)
-              const now = new Date()
-              const timeDiff = Math.min(now - connectTime, 1000) // 最大1秒
-              proxy.latency = timeDiff > 0 ? timeDiff : 50 // 默认50ms
-              console.log(`✅ 设置活跃代理 ${proxy.name} 估算延迟: ${proxy.latency}ms`)
-            } else {
-              // 设置默认延迟，避免显示null
-              proxy.latency = 50
-              console.log(`⚠️ 活跃代理 ${proxy.name} 使用默认延迟: ${proxy.latency}ms`)
-              
-              // 异步测试真实延迟（不阻塞UI）
-              setTimeout(() => {
-                testProxyLatencyAsync(proxy)
-              }, 100)
-            }
-          } else if (isActiveProxy && statusData.connectionStatus === 'connecting') {
-            // 正在连接的代理
-            proxy.status = 'connecting'
-            proxy.isActive = true
-            proxy.latency = null
-            console.log(`🔄 设置活跃代理 ${proxy.name}(${proxy.id}) 状态: connecting`)
-          } else {
-            // 非活跃代理设置为未连接
-            proxy.status = 'disconnected'
-            proxy.isActive = false
-            proxy.latency = null
-            console.log(`❌ 设置非活跃代理 ${proxy.name}(${proxy.id}) 为未连接`)
-          }
-        })
-        
-        // 🔧 修复：同步更新activeProxyId以确保一致性
-        const currentProxyId = statusData.currentProxy?.id || statusData.currentProxy
-        if (currentProxyId && currentProxyId !== proxySettings.value.activeProxyId) {
-          console.log(`🔄 同步活跃代理ID: ${proxySettings.value.activeProxyId} -> ${currentProxyId}`)
-          proxySettings.value.activeProxyId = currentProxyId
-        }
-      } catch (error) {
+      // 🔧 改进：获取VPS代理状态 - 使用重试机制确保状态准确
+      await syncProxyStatusWithRetry()
+      
+    } catch (error) {
         console.warn('获取代理状态失败:', error)
         
         // 🔧 修复：改进错误处理逻辑，避免误设为error状态
@@ -966,71 +888,8 @@ const enableProxy = async (proxy) => {
       // 测试网络延迟
       await testProxyLatency(proxy)
       
-      // 检查连接状态 - 给VPS更多时间建立连接
-      setTimeout(async () => {
-        try {
-          const status = await proxyApi.getStatus()
-          connectionStatus.value = status.connectionStatus
-          currentProxy.value = status.currentProxy
-          
-          // 🔧 修复：正确处理VPS返回的currentProxy（可能是对象或字符串）
-          const currentProxyId = status.currentProxy?.id || status.currentProxy
-          const isActiveProxy = proxy.id === currentProxyId
-          
-          console.log(`🔍 连接检查 - 代理ID: ${proxy.id}, VPS当前代理: ${currentProxyId}, 匹配: ${isActiveProxy}, 状态: ${status.connectionStatus}`)
-          
-          if (isActiveProxy && status.connectionStatus === 'connected') {
-            proxy.status = 'connected'
-            proxy.isActive = true
-            // 设置延迟信息
-            if (status.statistics?.avgLatency && status.statistics.avgLatency > 0) {
-              proxy.latency = status.statistics.avgLatency
-            } else if (status.statistics?.connectTime) {
-              const connectTime = new Date(status.statistics.connectTime)
-              const now = new Date()
-              proxy.latency = Math.min(now - connectTime, 1000) // 最大1秒
-            } else {
-              proxy.latency = 50 // 默认延迟
-            }
-            ElMessage.success(`代理 "${proxy.name}" 连接成功`)
-          } else if (status.connectionStatus === 'connecting') {
-            proxy.status = 'connecting'
-            ElMessage.info(`代理 "${proxy.name}" 正在连接中...`)
-            // 如果还在连接中，再等待一段时间
-            setTimeout(async () => {
-              try {
-                const finalStatus = await proxyApi.getStatus()
-                const finalProxyId = finalStatus.currentProxy?.id || finalStatus.currentProxy
-                const finalIsActive = proxy.id === finalProxyId
-                
-                if (finalIsActive && finalStatus.connectionStatus === 'connected') {
-                  proxy.status = 'connected'
-                  proxy.isActive = true
-                  proxy.latency = 50 // 默认延迟
-                  ElMessage.success(`代理 "${proxy.name}" 连接成功`)
-                } else {
-                  proxy.status = 'error'
-                  proxy.isActive = false
-                  ElMessage.warning(`代理 "${proxy.name}" 连接超时，请检查代理配置或网络状况`)
-                }
-              } catch (error) {
-                proxy.status = 'error'
-                proxy.isActive = false
-                ElMessage.error(`代理 "${proxy.name}" 连接检查失败`)
-              }
-            }, 5000)
-          } else {
-            proxy.status = 'error'
-            proxy.isActive = false
-            ElMessage.warning(`代理 "${proxy.name}" 连接失败 - 可能是代理服务器不可达或配置错误`)
-          }
-        } catch (error) {
-          console.error('检查代理状态失败:', error)
-          proxy.status = 'error'
-          proxy.isActive = false
-          ElMessage.error(`代理 "${proxy.name}" 状态检查失败: ${error.message}`)
-        }
-      }, 3000) // 增加到3秒，给VPS更多时间
+      // 🔧 改进状态检查逻辑 - 使用轮询而不是嵌套setTimeout
+      await checkProxyConnectionStatus(proxy, result.data?.proxyId || proxy.id)
       
     } else {
       ElMessage.error(`连接代理失败: ${result.message || '未知错误'}`)
@@ -1071,6 +930,134 @@ const disableProxy = async (proxy) => {
   } finally {
     proxy.disabling = false
   }
+}
+
+// 🔧 新增：带重试机制的状态同步函数
+const syncProxyStatusWithRetry = async (maxRetries = 3) => {
+  let retries = 0
+  
+  while (retries < maxRetries) {
+    try {
+      const status = await proxyApi.getStatus()
+      console.log(`状态同步尝试 ${retries + 1}/${maxRetries}:`, status)
+      
+      // 验证API响应
+      if (!status || (status.status && status.status !== 'success')) {
+        throw new Error(`API返回错误状态: ${status?.status || 'unknown'}`)
+      }
+      
+      // 处理API响应的数据结构
+      const statusData = status.data || status
+      
+      if (!statusData || typeof statusData !== 'object') {
+        throw new Error('状态数据格式无效')
+      }
+      
+      // 更新全局状态
+      connectionStatus.value = statusData.connectionStatus || 'disconnected'
+      currentProxy.value = statusData.currentProxy
+      
+      // 更新代理列表状态
+      proxyList.value.forEach(proxy => {
+        const currentProxyId = statusData.currentProxy?.id || statusData.currentProxy
+        const isActiveProxy = proxy.id === currentProxyId
+        
+        if (isActiveProxy && statusData.connectionStatus === 'connected') {
+          proxy.status = 'connected'
+          proxy.isActive = true
+          proxy.latency = statusData.statistics?.avgLatency || 50
+          console.log(`✅ 同步活跃代理 ${proxy.name} 状态: connected`)
+        } else if (isActiveProxy && statusData.connectionStatus === 'connecting') {
+          proxy.status = 'connecting'
+          proxy.isActive = true
+          proxy.latency = null
+          console.log(`🔄 同步活跃代理 ${proxy.name} 状态: connecting`)
+        } else {
+          proxy.status = 'disconnected'
+          proxy.isActive = false
+          proxy.latency = null
+        }
+      })
+      
+      // 同步activeProxyId
+      const currentProxyId = statusData.currentProxy?.id || statusData.currentProxy
+      if (currentProxyId && currentProxyId !== proxySettings.value.activeProxyId) {
+        console.log(`🔄 同步活跃代理ID: ${proxySettings.value.activeProxyId} -> ${currentProxyId}`)
+        proxySettings.value.activeProxyId = currentProxyId
+      }
+      
+      return true // 成功
+    } catch (error) {
+      console.error(`状态同步失败 (${retries + 1}/${maxRetries}):`, error)
+      retries++
+      
+      if (retries < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 1000)) // 等待1秒后重试
+      }
+    }
+  }
+  
+  // 所有重试都失败了
+  console.warn('状态同步完全失败，保持当前状态')
+  return false
+}
+
+// 🔧 改进的代理连接状态检查函数
+const checkProxyConnectionStatus = async (proxy, expectedProxyId, maxRetries = 6) => {
+  let retries = 0
+  
+  while (retries < maxRetries) {
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2000)) // 等待2秒
+      
+      const status = await proxyApi.getStatus()
+      connectionStatus.value = status.connectionStatus
+      currentProxy.value = status.currentProxy
+      
+      // 正确处理VPS返回的currentProxy
+      const currentProxyId = status.currentProxy?.id || status.currentProxy
+      const isActiveProxy = expectedProxyId === currentProxyId
+      
+      console.log(`🔍 状态检查 ${retries + 1}/${maxRetries} - 期望ID: ${expectedProxyId}, VPS当前: ${currentProxyId}, 匹配: ${isActiveProxy}, 状态: ${status.connectionStatus}`)
+      
+      if (isActiveProxy && status.connectionStatus === 'connected') {
+        // 连接成功
+        proxy.status = 'connected'
+        proxy.isActive = true
+        
+        // 设置延迟信息
+        if (status.statistics?.avgLatency && status.statistics.avgLatency > 0) {
+          proxy.latency = status.statistics.avgLatency
+        } else {
+          proxy.latency = 50 // 默认延迟
+        }
+        
+        ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+        return true
+      } else if (status.connectionStatus === 'connecting') {
+        // 还在连接中，继续等待
+        proxy.status = 'connecting'
+        retries++
+        continue
+      } else if (status.connectionStatus === 'disconnected' && retries < 3) {
+        // 可能还没开始连接，继续等待
+        retries++
+        continue
+      } else {
+        // 连接失败或其他错误状态
+        break
+      }
+    } catch (error) {
+      console.error(`状态检查失败 (${retries + 1}/${maxRetries}):`, error)
+      retries++
+    }
+  }
+  
+  // 所有重试都失败了
+  proxy.status = 'error'
+  proxy.isActive = false
+  ElMessage.warning(`代理 "${proxy.name}" 连接失败 - 请检查代理配置或网络状况`)
+  return false
 }
 
 // 测试代理延迟（启用时调用）
