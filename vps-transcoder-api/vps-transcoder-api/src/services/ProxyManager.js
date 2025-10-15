@@ -1148,31 +1148,25 @@ class ProxyManager {
   }
 
   /**
-   * 初始化清理
+   * 🔧 简化方案：初始化清理
    */
   async initialize() {
     try {
-      // 清理僵尸进程
-      await this.cleanupZombieProcesses();
+      logger.info('开始ProxyManager初始化...');
+      
+      // 🔧 简化：启动时强制清理所有进程，不需要复杂的状态恢复
+      await this.forceCleanAllV2RayProcesses();
       
       // 清理旧的iptables规则
       await this.cleanupTransparentProxy();
       
-      // 检查是否有现有的代理进程需要恢复
-      const hasExistingProxy = await this.checkExistingProxy();
+      // 🔧 简化：直接重置状态，不需要检查现有代理
+      this.activeProxy = null;
+      this.v2rayProcess = null;
+      this.connectionStatus = 'disconnected';
+      this.statistics = {};
       
-      // 只有在没有现有代理时才重置状态
-      if (!hasExistingProxy) {
-        this.activeProxy = null;
-        this.v2rayProcess = null;
-        this.connectionStatus = 'disconnected';
-        this.statistics = {};
-        logger.info('没有现有代理，重置状态');
-      } else {
-        logger.info('检测到现有代理，保持当前状态');
-      }
-      
-      logger.info('ProxyManager初始化完成');
+      logger.info('✅ ProxyManager初始化完成 - 采用简化方案');
     } catch (error) {
       logger.error('ProxyManager初始化失败:', error);
     }
@@ -1337,45 +1331,45 @@ class ProxyManager {
   }
 
   /**
-   * 清理僵尸进程 - 修复：不杀死正在工作的代理进程
+   * 🔧 简化方案：强制清理所有V2Ray进程
+   */
+  async forceCleanAllV2RayProcesses() {
+    try {
+      logger.info('开始强制清理所有V2Ray进程...');
+      
+      // 无条件杀死所有V2Ray进程（包括主代理和测试进程）
+      await execAsync('pkill -f v2ray || true');
+      logger.info('已发送终止信号给所有V2Ray进程');
+      
+      // 等待进程完全退出
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // 验证是否还有残留进程
+      try {
+        const { stdout } = await execAsync('ps aux | grep v2ray | grep -v grep || true');
+        const remainingProcesses = stdout.split('\n').filter(line => line.trim());
+        
+        if (remainingProcesses.length > 0) {
+          logger.warn(`发现 ${remainingProcesses.length} 个残留进程，强制杀死`);
+          await execAsync('pkill -9 -f v2ray || true');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      } catch (error) {
+        // 忽略检查错误
+      }
+      
+      logger.info('✅ 所有V2Ray进程已清理完成');
+    } catch (error) {
+      logger.warn('清理V2Ray进程失败:', error.message);
+    }
+  }
+
+  /**
+   * 🔧 保留原方法作为备用（已废弃，使用forceCleanAllV2RayProcesses）
    */
   async cleanupZombieProcesses() {
-    try {
-      const { stdout } = await execAsync('ps aux | grep v2ray | grep -v grep || true');
-      const processes = stdout.split('\n').filter(line => line.trim());
-      
-      if (processes.length === 0) {
-        logger.info('没有发现V2Ray进程');
-        return;
-      }
-      
-      logger.info(`发现 ${processes.length} 个V2Ray进程`);
-      
-      // 🔧 关键修复：检查端口1080是否在监听，如果在监听说明有活跃代理
-      const portCheck = await this.checkProxyPort();
-      if (portCheck) {
-        logger.info('检测到活跃的代理连接，跳过进程清理');
-        return;
-      }
-      
-      // 🔧 只有在没有活跃代理时才清理进程
-      logger.info('没有活跃代理，开始清理V2Ray进程');
-      for (const processLine of processes) {
-        const pid = processLine.split(/\s+/)[1];
-        if (pid) {
-          logger.info('清理V2Ray进程:', pid);
-          try {
-            process.kill(pid, 'SIGTERM');
-            // 等待进程优雅退出
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          } catch (error) {
-            logger.warn('清理进程失败:', pid, error.message);
-          }
-        }
-      }
-    } catch (error) {
-      logger.warn('清理僵尸进程失败:', error.message);
-    }
+    // 简化方案：直接调用强制清理
+    await this.forceCleanAllV2RayProcesses();
   }
 
   /**
@@ -1525,43 +1519,25 @@ class ProxyManager {
   }
 
   /**
-   * 断开代理连接
+   * 🔧 简化方案：断开代理连接
    */
   async disconnectProxy() {
     try {
-      logger.info('断开代理连接');
+      logger.info('开始断开代理连接...');
+
+      // 🔧 简化：强制清理所有V2Ray进程
+      await this.forceCleanAllV2RayProcesses();
 
       // 清理透明代理规则
       await this.cleanupTransparentProxy();
 
-      // 停止代理进程
-      if (this.v2rayProcess) {
-        this.v2rayProcess.kill('SIGTERM');
-        
-        // 等待进程退出
-        await new Promise((resolve) => {
-          const timeout = setTimeout(() => {
-            if (this.v2rayProcess) {
-              this.v2rayProcess.kill('SIGKILL');
-            }
-            resolve();
-          }, 3000);
-
-          this.v2rayProcess.on('exit', () => {
-            clearTimeout(timeout);
-            resolve();
-          });
-        });
-
-        this.v2rayProcess = null;
-      }
-
       // 重置状态
       this.activeProxy = null;
+      this.v2rayProcess = null;
       this.connectionStatus = 'disconnected';
       this.statistics = {};
 
-      logger.info('代理连接已断开');
+      logger.info('✅ 代理连接已完全断开');
 
       return {
         success: true,
