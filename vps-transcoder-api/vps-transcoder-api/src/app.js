@@ -112,10 +112,14 @@ app.get('/health', (req, res) => {
 
 // API路由
 try {
-    // 🔥 新增：集成流媒体服务API（主要入口）
-    const { router: integratedStreamingRoutes } = require('./routes/integrated-streaming');
-    app.use('/api/integrated-streaming', integratedStreamingRoutes);
-    logger.info('✅ 集成流媒体服务API路由已加载');
+    // 🔥 新增：集成流媒体服务API（简化版）
+    try {
+      const { router: integratedStreamingRoutes } = require('./routes/integrated-streaming-simple');
+      app.use('/api/integrated-streaming', integratedStreamingRoutes);
+      logger.info('✅ 集成流媒体服务API路由已加载（简化版）');
+    } catch (error) {
+      logger.warn('集成流媒体服务API加载失败，使用基础API:', error.message);
+    }
     
     // 使用新的简化流管理API（向后兼容）
     const { router: simpleStreamRoutes } = require('./routes/simple-stream');
