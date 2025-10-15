@@ -66,7 +66,7 @@ fi
 echo "🔍 检查关键文件..."
 KEY_FILES=(
     "$TARGET_DIR/routes/proxy.js"
-    "$TARGET_DIR/services/ProxyManager_v2.js"
+    "$TARGET_DIR/services/ProxyManager.js"
     "$TARGET_DIR/app.js"
 )
 
@@ -81,10 +81,10 @@ done
 
 # 5. 验证代码版本同步
 echo "🔍 验证代码版本同步..."
-PROXY_MANAGER_FILE="$TARGET_DIR/services/ProxyManager_v2.js"
+PROXY_MANAGER_FILE="$TARGET_DIR/services/ProxyManager.js"
 
 # 检查是否包含最新的调试日志
-if grep -q "配置解析结果" "$PROXY_MANAGER_FILE" && grep -q "开始调用testProxyLatency" "$PROXY_MANAGER_FILE"; then
+if grep -q "进程监控" "$PROXY_MANAGER_FILE" && grep -q "自动重启" "$PROXY_MANAGER_FILE"; then
     echo "✅ 代码版本验证通过 - 包含最新调试功能"
 else
     echo "⚠️ 代码版本可能不是最新 - 缺少调试日志"
@@ -160,15 +160,15 @@ fi
 
 # 6. 检查ProxyManager引用是否正确
 echo "🔍 检查ProxyManager引用..."
-if grep -q "require('../services/ProxyManager_v2')" "$TARGET_DIR/routes/proxy.js"; then
-    echo "✅ ProxyManager_v2引用正确"
+if grep -q "require('../services/ProxyManager')" "$TARGET_DIR/routes/proxy.js"; then
+    echo "✅ ProxyManager引用正确"
 else
     echo "⚠️ 修复ProxyManager引用..."
-    # 使用更精确的sed命令
-    sed -i "s|require('../services/ProxyManager')|require('../services/ProxyManager_v2')|g" "$TARGET_DIR/routes/proxy.js"
+    # 🔧 修复：确保使用正确的ProxyManager（不是_v2版本）
+    sed -i "s|require('../services/ProxyManager_v2')|require('../services/ProxyManager')|g" "$TARGET_DIR/routes/proxy.js"
     
     # 验证修复结果
-    if grep -q "require('../services/ProxyManager_v2')" "$TARGET_DIR/routes/proxy.js"; then
+    if grep -q "require('../services/ProxyManager')" "$TARGET_DIR/routes/proxy.js"; then
         echo "✅ ProxyManager引用已修复"
     else
         echo "❌ ProxyManager引用修复失败"
