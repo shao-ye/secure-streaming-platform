@@ -864,13 +864,49 @@ const enableProxy = async (proxy) => {
     if (result.success) {
       console.log(`✅ 代理连接API调用成功: ${proxy.name}`)
       
-      // 🔧 第三步：等待连接建立并验证
-      await new Promise(resolve => setTimeout(resolve, 3000)) // 等待3秒让VPS建立连接
+      // 🔧 第三步：等待连接建立并验证（增加重试机制）
+      let retryCount = 0
+      const maxRetries = 6 // 最多重试6次，每次2秒
+      let connectionVerified = false
       
-      // 🔧 第四步：重新同步VPS状态到表格
-      await syncVPSStatusToTable()
+      while (retryCount < maxRetries && !connectionVerified) {
+        await new Promise(resolve => setTimeout(resolve, 2000)) // 等待2秒
+        retryCount++
+        
+        try {
+          // 检查VPS状态
+          const status = await proxyApi.getStatus()
+          if (status?.data?.connectionStatus === 'connected' && 
+              (status.data.currentProxy === proxy.id || status.data.currentProxy?.id === proxy.id)) {
+            connectionVerified = true
+            console.log(`✅ 连接验证成功 (${retryCount}/${maxRetries}): ${proxy.name}`)
+            break
+          } else {
+            console.log(`🔄 连接验证中 (${retryCount}/${maxRetries}): VPS状态=${status?.data?.connectionStatus}`)
+          }
+        } catch (error) {
+          console.log(`⚠️ 状态检查失败 (${retryCount}/${maxRetries}):`, error.message)
+        }
+      }
       
-      ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+      if (connectionVerified) {
+        // 🔧 第四步：连接成功，更新本地状态
+        proxy.status = 'connected'
+        proxy.isActive = true
+        proxy.latency = 50 // 默认延迟，后续会通过状态同步更新
+        proxySettings.value.activeProxyId = proxy.id
+        connectionStatus.value = 'connected'
+        currentProxy.value = proxy.id
+        
+        // 同步VPS状态到表格
+        await syncVPSStatusToTable()
+        
+        ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+      } else {
+        // 连接超时或失败
+        proxy.status = 'error'
+        ElMessage.error(`代理 "${proxy.name}" 连接超时，请检查配置或网络`)
+      }
       
     } else {
       ElMessage.error(`连接代理失败: ${result.message || '未知错误'}`)
