@@ -143,22 +143,28 @@ graph LR
     C --> D[配置立即生效]
 ```
 
-#### 2. VPS无状态设计原则
-- **无配置存储**: VPS不存储任何频道配置信息
-- **按需传递**: 每次API调用时传递channelId和rtmpUrl参数
-- **进程管理**: VPS只管理活跃的转码进程状态
+#### 2. 频道配置集中存储设计
+- **KV集中存储**: 频道配置统一存储在Cloudflare KV中
+- **简化API调用**: 前端只需传递channelId，后端自动获取RTMP配置
+- **配置缓存**: VPS缓存频道配置，减少KV读取次数
 - **自动清理**: 无用户观看时自动停止转码进程
 
 #### 3. 数据流转机制
 ```mermaid
 graph TD
-    A[用户选择频道] --> B[前端从KV获取频道信息]
-    B --> C[调用VPS API传递channelId+rtmpUrl]
-    C --> D{VPS检查是否有活跃进程}
-    D -->|有| E[复用现有转码进程]
-    D -->|无| F[启动新转码进程]
-    E --> G[返回HLS URL]
-    F --> G
+    A[用户选择频道] --> B[前端发送channelId]
+    B --> C[Cloudflare Workers API]
+    C --> D[从KV获取频道配置]
+    D --> E[调用VPS API传递channelId]
+    E --> F{VPS检查本地缓存}
+    F -->|有配置| G[使用缓存的RTMP URL]
+    F -->|无配置| H[从Workers获取配置]
+    G --> I{检查是否有活跃进程}
+    H --> I
+    I -->|有| J[复用现有转码进程]
+    I -->|无| K[启动新转码进程]
+    J --> L[返回HLS URL]
+    K --> L
 ```
 
 ### API设计规范
@@ -181,59 +187,129 @@ Response: {
   }
 }
 
-// 2. 启动观看 (传递完整参数给VPS)
+// 2. 启动观看 (只传递channelId，配置从KV获取)
 POST /api/simple-stream/start-watching
 Body: {
-  "channelId": "stream_ensxma2g",
-  "rtmpUrl": "rtmp://push229.dodool.com.cn/55/4?auth_key=...",
-  "userId": "user_xxx",
-  "sessionId": "session_xxx"
+  "channelId": "stream_ensxma2g"
 }
 Response: {
   "status": "success",
+  "message": "Started watching successfully",
   "data": {
-    "hlsUrl": "https://yoyo-vps.5202021.xyz/hls/stream_ensxma2g/playlist.m3u8?t=xxx",
-    "isFirstViewer": true,
-    "totalViewers": 1
-  }
+    "channelId": "stream_ensxma2g",
+    "channelName": "二楼教室1",
+    "hlsUrl": "https://yoyo-vps.5202021.xyz/hls/stream_ensxma2g/playlist.m3u8",
+    "timestamp": 1760492764233
+  },
+  "timestamp": "2025-10-15T01:46:04.247Z"
 }
 ```
 
 #### VPS进程管理逻辑
 ```javascript
-// VPS按RTMP源管理转码进程 (无需存储频道配置)
+// VPS按频道管理转码进程 (配置从KV缓存或Workers获取)
 class SimpleStreamManager {
   constructor() {
     this.activeStreams = new Map(); // channelId -> processInfo
-    this.rtmpProcessMap = new Map(); // rtmpUrl -> processInfo
-    this.channelViewers = new Map(); // channelId -> Set<sessionId>
+    this.channelConfig = new Map(); // channelId -> {rtmpUrl, name, ...}
+    this.channelHeartbeats = new Map(); // channelId -> lastHeartbeatTime
   }
 
-  async startWatching(channelId, rtmpUrl, userId, sessionId) {
-    // 检查是否已有相同RTMP源的进程
-    if (this.rtmpProcessMap.has(rtmpUrl)) {
-      // 复用现有进程
-      const existingProcess = this.rtmpProcessMap.get(rtmpUrl);
-      await this.addViewerToChannel(channelId, sessionId);
-      return {
-        hlsUrl: `https://yoyo-vps.5202021.xyz/hls/${channelId}/playlist.m3u8?t=${Date.now()}`,
-        isFirstViewer: false,
-        totalViewers: this.channelViewers.get(channelId).size
-      };
+  async startWatching(channelId) {
+    // 检查频道是否已在处理
+    const existingChannel = this.activeStreams.get(channelId);
+    if (existingChannel) {
+      logger.debug('Channel already active, returning existing stream', { channelId });
+      return existingChannel.hlsUrl;
+    }
+    
+    // 获取频道配置
+    let channelConfig = this.channelConfig.get(channelId);
+    if (!channelConfig) {
+      // 从Workers API获取配置
+      channelConfig = await this.fetchChannelConfig(channelId);
+      this.channelConfig.set(channelId, channelConfig);
     }
     
     // 启动新的转码进程
-    await this.startStream(channelId, rtmpUrl);
-    await this.addViewerToChannel(channelId, sessionId);
-    
-    return {
-      hlsUrl: `https://yoyo-vps.5202021.xyz/hls/${channelId}/playlist.m3u8?t=${Date.now()}`,
-      isFirstViewer: true,
-      totalViewers: 1
-    };
+    return await this.startNewStream(channelId, channelConfig.rtmpUrl);
+  }
+  
+  async fetchChannelConfig(channelId) {
+    // 从Cloudflare Workers获取频道配置
+    const response = await fetch(`${this.workersApiUrl}/api/streams/${channelId}`);
+    const data = await response.json();
+    return data.data;
   }
 }
 ```
+
+---
+
+## 📈 架构演进说明 (v5.4更新)
+
+### 频道配置存储架构变更
+
+#### 变更背景
+通过Chrome DevTools深度调试发现，当前系统实际运行的架构与文档描述存在差异：
+- **文档描述**: VPS无状态设计，每次API调用传递完整的channelId和rtmpUrl参数
+- **实际实现**: 频道配置集中存储在KV中，前端只传递channelId，后端自动获取配置
+
+#### 架构对比
+
+**原设计 (文档v5.3及之前)**:
+```javascript
+// 前端发送完整参数
+POST /api/simple-stream/start-watching
+Body: {
+  "channelId": "stream_xxx",
+  "rtmpUrl": "rtmp://...",
+  "userId": "user_xxx",
+  "sessionId": "session_xxx"
+}
+```
+
+**当前实现 (v5.4更新)**:
+```javascript
+// 前端只发送channelId
+POST /api/simple-stream/start-watching
+Body: {
+  "channelId": "stream_xxx"
+}
+
+// 后端从KV获取完整配置
+// Cloudflare Workers: 从KV读取频道配置
+// VPS: 缓存配置或从Workers获取
+```
+
+#### 技术优势
+1. **简化前端逻辑**: 前端无需管理RTMP URL，只需要频道ID
+2. **集中配置管理**: 所有频道配置统一存储在KV中，便于管理
+3. **配置缓存优化**: VPS缓存频道配置，减少KV读取次数
+4. **更好的安全性**: RTMP URL不在前端暴露，提高安全性
+5. **配置热更新**: 管理员更新配置后立即生效，无需重启服务
+
+#### 数据流优化
+```mermaid
+graph TD
+    A[用户点击频道] --> B[前端发送channelId]
+    B --> C[Cloudflare Workers]
+    C --> D{检查KV缓存}
+    D -->|命中| E[直接使用缓存配置]
+    D -->|未命中| F[从KV读取配置]
+    E --> G[调用VPS API]
+    F --> G
+    G --> H[VPS检查本地缓存]
+    H -->|有配置| I[启动转码进程]
+    H -->|无配置| J[从Workers获取配置]
+    J --> I
+    I --> K[返回HLS URL]
+```
+
+#### 兼容性说明
+- **向后兼容**: VPS端仍支持接收rtmpUrl参数，保证系统稳定性
+- **渐进式迁移**: 新的API调用使用简化格式，旧的调用方式仍然有效
+- **配置验证**: 增加配置有效性检查，确保RTMP源可用性
 
 ---
 
@@ -3058,8 +3134,8 @@ curl -X GET "http://localhost:3000/api/deployment/status"
 ---
 
 **文档创建时间**: 2025年10月2日  
-**文档更新时间**: 2025年10月11日 12:00  
-**文档版本**: v5.3 (HTTP部署API完整解决方案)  
+**文档更新时间**: 2025年10月15日 09:50  
+**文档版本**: v5.4 (频道配置存储架构更新)  
 **维护人员**: YOYO开发团队  
 **联系方式**: 项目仓库Issues
 
@@ -3074,3 +3150,4 @@ curl -X GET "http://localhost:3000/api/deployment/status"
 - **v5.1**: 代理测试功能优化，实现真实延迟测试，解决连接错误问题
 - **v5.2**: SSH会话卡死问题完整解决方案，HTTP API替代SSH命令，提升部署效率
 - **v5.3**: HTTP部署API完整实现，Git认证问题解决，实现完全自动化部署管理
+- **v5.4**: 频道配置存储架构更新，从VPS无状态设计改为KV集中存储，简化API调用流程
