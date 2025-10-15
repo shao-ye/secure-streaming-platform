@@ -1593,14 +1593,13 @@ class ProxyManager {
 
     this.v2rayProcess.on('exit', (code) => {
       logger.info('V2Ray进程退出，代码:', code);
-      this.connectionStatus = 'disconnected';
+      this.connectionStatus = 'error'; // 设置为error而不是disconnected，触发重启
       
-      // 🔧 修复：只记录进程退出，让进程监控机制处理重启
-      // 避免两个重启机制冲突
-      this.activeProxy = null;
+      // 🔧 修复：保留activeProxy信息，让进程监控机制能够重启
+      // 只清空进程引用
       this.v2rayProcess = null;
       
-      logger.info('V2Ray进程已退出，等待进程监控机制处理重启');
+      logger.info('V2Ray进程已退出，进程监控将尝试重启');
     });
 
     this.v2rayProcess.on('error', (error) => {
@@ -1622,7 +1621,7 @@ class ProxyManager {
     }
     
     this.processMonitorInterval = setInterval(async () => {
-      if (this.activeProxy && this.connectionStatus === 'connected') {
+      if (this.activeProxy && (this.connectionStatus === 'connected' || this.connectionStatus === 'error')) {
         try {
           const portListening = await this.checkProxyPort();
           
