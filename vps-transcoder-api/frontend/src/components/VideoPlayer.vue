@@ -500,7 +500,7 @@ const reloadStream = () => {
 // 获取连接模式信息 - 优化版本，防止阻塞视频播放
 const fetchConnectionMode = async () => {
   try {
-    debugLog('手动获取连接模式信息')
+    debugLog('手动获取连接模式信息 - 优化版本')
     
     // 🔥 关键修复：添加3秒超时机制，防止代理重连后请求卡死
     const controller = new AbortController()
