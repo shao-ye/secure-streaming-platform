@@ -284,21 +284,31 @@ const updateProxyListFromVPS = () => {
   
   const { connectionStatus: vpsConnectionStatus, currentProxy: vpsCurrentProxy } = vpsStatus.value
   
+  console.log('🔄 更新代理列表显示')
+  console.log('VPS连接状态:', vpsConnectionStatus)
+  console.log('VPS当前代理:', vpsCurrentProxy)
+  
   proxyList.value.forEach(proxy => {
-    // 提取当前代理ID（支持对象和字符串格式）
-    const currentProxyId = vpsCurrentProxy?.id || vpsCurrentProxy
+    // 🔧 修复：VPS返回的currentProxy就是字符串ID
+    const currentProxyId = vpsCurrentProxy // 直接使用，不需要提取.id
     const isActiveProxy = proxy.id === currentProxyId
+    
+    console.log(`检查代理 ${proxy.name}(${proxy.id}): 是否匹配=${isActiveProxy}`)
     
     if (isActiveProxy && vpsConnectionStatus === 'connected') {
       proxy.status = 'connected'
       proxy.isActive = true
-      proxy.latency = vpsStatus.value.statistics?.avgLatency || 50
+      proxy.latency = vpsStatus.value.statistics?.avgLatency || 125
+      console.log(`✅ 设置代理 ${proxy.name} 为已连接`)
     } else {
       proxy.status = 'disconnected'
       proxy.isActive = false
       proxy.latency = null
+      console.log(`❌ 设置代理 ${proxy.name} 为未连接`)
     }
   })
+  
+  console.log('✅ 代理列表更新完成')
 }
 const loading = ref(false)
 const saving = ref(false)
@@ -513,19 +523,22 @@ const handleProxyToggle = async (enabled) => {
       // 如果有活跃代理，尝试获取状态
       if (proxySettings.value.activeProxyId) {
         try {
-          const status = await proxyApi.getStatus()
-          connectionStatus.value = status.connectionStatus || 'disconnected'
-          currentProxy.value = status.currentProxy
+          await refreshVPSStatus()
+          updateProxyListFromVPS()
         } catch (error) {
           console.warn('获取代理状态失败:', error)
         }
       }
     } else {
-      // 禁用代理功能时，同时禁用所有活跃代理
+      console.log('🔧 用户主动关闭代理总开关')
+      
+      // 🔧 修复：只有用户主动关闭时才断开VPS连接
+      // 页面切换时的初始化不会触发这里，因为有isInitializing保护
       if (proxySettings.value.activeProxyId) {
         const activeProxy = proxyList.value.find(p => p.isActive)
         if (activeProxy) {
           try {
+            console.log(`🔌 用户主动断开代理: ${activeProxy.name}`)
             await proxyApi.disableProxy(activeProxy.id)
             activeProxy.isActive = false
             activeProxy.status = 'disconnected'
@@ -536,10 +549,8 @@ const handleProxyToggle = async (enabled) => {
         }
       }
       
-      // 重置状态
+      // 重置本地状态（不影响VPS）
       proxySettings.value.activeProxyId = null
-      connectionStatus.value = 'disconnected'
-      currentProxy.value = null
       
       // 更新所有代理状态
       proxyList.value.forEach(proxy => {
@@ -904,12 +915,6 @@ const enableProxy = async (proxy) => {
       updateProxyListFromVPS()
       
       ElMessage.success(`代理 "${proxy.name}" 连接成功`)
-      } else {
-        // 连接超时或失败
-        proxy.status = 'error'
-        ElMessage.error(`代理 "${proxy.name}" 连接超时，请检查配置或网络`)
-      }
-      
     } else {
       ElMessage.error(`连接代理失败: ${result.message || '未知错误'}`)
       proxy.status = 'error'
