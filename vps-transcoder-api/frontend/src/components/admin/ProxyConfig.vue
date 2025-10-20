@@ -914,7 +914,10 @@ const enableProxy = async (proxy) => {
     // 调用API连接代理
     const result = await proxyApi.enableProxy(proxy)
     
-    if (result.success) {
+    // 🔧 修复：根据API响应内容判断成功或失败
+    const isSuccess = result.success || (result.message && result.message.includes('连接成功'))
+    
+    if (isSuccess) {
       console.log(`✅ 代理连接API调用成功: ${proxy.name}`)
       
       // 🔧 简化逻辑：设置连接中状态
@@ -937,7 +940,7 @@ const enableProxy = async (proxy) => {
       ElMessage.success(`代理 "${proxy.name}" 连接请求已发送`)
     } else {
       // 🔧 API调用失败
-      const errorMsg = result.message || result.error || '未知错误'
+      const errorMsg = result.error || result.message || '未知错误'
       console.error(`代理连接API失败: ${errorMsg}`)
       ElMessage.error(`连接代理失败: ${errorMsg}`)
       proxy.status = 'disconnected'
