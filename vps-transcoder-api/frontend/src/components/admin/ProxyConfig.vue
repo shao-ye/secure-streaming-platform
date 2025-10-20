@@ -440,9 +440,11 @@ const estimateLatencyByServer = (config) => {
 const handleProxyToggle = async (enabled) => {
   // 🔧 修复：初始化期间跳过开关事件，防止误触发断开连接
   if (isInitializing.value) {
-    console.log('🔧 初始化期间跳过开关事件')
+    console.log('🔧 初始化期间跳过开关事件，避免意外断开VPS连接')
     return
   }
+  
+  console.log('🔄 用户主动切换代理总开关:', enabled)
   
   switchLoading.value = true
   try {
@@ -819,11 +821,15 @@ const loadProxyConfig = async () => {
       
     } else {
       console.log('❌ 代理配置加载失败 - API响应格式错误')
+      // 🔧 即使配置加载失败，也要结束初始化状态，允许用户操作开关
+      isInitializing.value = false
     }
     
   } catch (error) {
     console.error('加载代理配置失败:', error)
     ElMessage.error('加载代理配置失败，请刷新页面重试')
+    // 🔧 即使出现异常，也要结束初始化状态，允许用户操作开关
+    isInitializing.value = false
   } finally {
     loading.value = false
   }
