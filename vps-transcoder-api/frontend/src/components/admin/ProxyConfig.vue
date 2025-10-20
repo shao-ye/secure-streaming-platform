@@ -540,22 +540,29 @@ const handleProxyToggle = async (enabled) => {
           try {
             console.log(`🔌 用户主动断开代理: ${activeProxy.name}`)
             await proxyApi.disableProxy(activeProxy.id)
-            activeProxy.isActive = false
-            activeProxy.status = 'disconnected'
-            activeProxy.latency = null
+            console.log('✅ 代理断开API调用成功')
+            
+            // 🔧 立即查询VPS状态确认断开成功
+            await refreshVPSStatus()
+            updateProxyListFromVPS()
+            
+            ElMessage.success(`代理 "${activeProxy.name}" 已断开`)
           } catch (error) {
-            console.warn('禁用活跃代理失败:', error)
+            console.error('禁用活跃代理失败:', error)
+            ElMessage.error(`断开代理失败: ${error.message || '网络错误'}`)
+            return // 断开失败时不继续执行
           }
         }
       }
       
-      // 重置本地状态（不影响VPS）
+      // 重置本地状态
       proxySettings.value.activeProxyId = null
       
-      // 更新所有代理状态
+      // 更新所有代理状态为未连接
       proxyList.value.forEach(proxy => {
         proxy.isActive = false
         proxy.status = 'disconnected'
+        proxy.latency = null
       })
       
       ElMessage.info('代理功能已禁用')
