@@ -665,13 +665,9 @@ const testProxy = async (proxy) => {
       proxy.currentTestFailed = false
       ElMessage.success(`代理连接成功 - 延迟: ${connectionLatency}ms`)
       
-      // 连接成功后立即断开，避免占用资源
-      try {
-        await proxyApi.disconnectProxy()
-        console.log('✅ 代理已断开连接')
-      } catch (disconnectError) {
-        console.warn('断开代理时出错:', disconnectError.message)
-      }
+      // 🔧 修复：不要断开正在使用的代理连接
+      // 延迟测试不应该影响正在使用的代理
+      console.log('✅ 代理延迟测试完成，保持连接状态')
     } else {
       // 连接失败
       proxy.currentTestFailed = true
