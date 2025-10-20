@@ -387,38 +387,22 @@ export const handleProxyManager = {
   },
 
   /**
-   * 获取所有代理配置（适配现有KV格式）
+   * 获取所有代理配置（统一存储格式）
    */
   async getAllProxyConfigs(env) {
     try {
-      // 先尝试分布式存储格式
-      const { keys } = await env.YOYO_USER_DB.list({ prefix: 'proxy_config_' });
-      let proxies = [];
-      
-      for (const key of keys) {
-        try {
-          const proxyData = await env.YOYO_USER_DB.get(key.name);
-          if (proxyData) {
-            proxies.push(JSON.parse(proxyData));
-          }
-        } catch (parseError) {
-          logError('解析代理配置失败', { key: key.name, error: parseError });
+      // 🔥 简化：只从统一存储格式读取，移除冗余的分布式存储逻辑
+      const existingConfig = await env.YOYO_USER_DB.get('proxy-config');
+      if (existingConfig) {
+        const config = JSON.parse(existingConfig);
+        if (config.proxies && Array.isArray(config.proxies)) {
+          logInfo('从统一存储格式加载代理列表', { count: config.proxies.length });
+          return config.proxies;
         }
       }
       
-      // 如果分布式存储没有数据，尝试从现有的proxy-config中获取
-      if (proxies.length === 0) {
-        const existingConfig = await env.YOYO_USER_DB.get('proxy-config');
-        if (existingConfig) {
-          const config = JSON.parse(existingConfig);
-          if (config.proxies && Array.isArray(config.proxies)) {
-            proxies = config.proxies;
-            logInfo('从现有proxy-config格式加载代理列表', { count: proxies.length });
-          }
-        }
-      }
-      
-      return proxies;
+      logInfo('未找到代理配置数据，返回空列表');
+      return [];
     } catch (error) {
       logError('获取代理配置列表失败', error);
       return [];
@@ -430,42 +414,36 @@ export const handleProxyManager = {
    */
   async getGlobalConfig(env) {
     try {
-      // 先尝试新格式
-      let globalConfigData = await env.YOYO_USER_DB.get('proxy_global_config');
-      
-      // 如果新格式不存在，尝试从现有的proxy-config中提取
-      if (!globalConfigData) {
-        const existingConfig = await env.YOYO_USER_DB.get('proxy-config');
-        if (existingConfig) {
-          const config = JSON.parse(existingConfig);
-          // 从现有配置中提取全局设置
-          return {
-            enabled: config.enabled || false,
-            activeProxyId: config.activeProxyId || null,
-            autoSwitch: config.autoSwitch || false,
-            testInterval: config.testInterval || 300,
-            currentTestUrlId: config.currentTestUrlId || 'baidu',
-            testUrls: {
-              "baidu": {
-                id: "baidu",
-                name: "百度 (推荐)",
-                url: "https://www.baidu.com",
-                description: "测试代理对中国用户的加速效果"
-              },
-              "google": {
-                id: "google", 
-                name: "谷歌",
-                url: "https://www.google.com",
-                description: "测试代理的国际访问能力"
-              }
+      // 🔥 简化：只从统一存储格式读取，移除冗余的双重数据源逻辑
+      const existingConfig = await env.YOYO_USER_DB.get('proxy-config');
+      if (existingConfig) {
+        const config = JSON.parse(existingConfig);
+        // 从统一配置中提取全局设置
+        return {
+          enabled: config.enabled || false,
+          activeProxyId: config.activeProxyId || null,
+          autoSwitch: config.autoSwitch || false,
+          testInterval: config.testInterval || 300,
+          currentTestUrlId: config.currentTestUrlId || 'baidu',
+          testUrls: {
+            "baidu": {
+              id: "baidu",
+              name: "百度 (推荐)",
+              url: "https://www.baidu.com",
+              description: "测试代理对中国用户的加速效果"
+            },
+            "google": {
+              id: "google", 
+              name: "谷歌",
+              url: "https://www.google.com",
+              description: "测试代理的国际访问能力"
             }
-          };
-        }
-      } else {
-        return JSON.parse(globalConfigData);
+          }
+        };
       }
       
       // 返回默认配置
+      logInfo('未找到代理配置，返回默认全局配置');
       return {
         enabled: false,
         activeProxyId: null,
