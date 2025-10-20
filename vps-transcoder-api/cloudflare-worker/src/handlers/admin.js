@@ -1067,14 +1067,12 @@ export const handleAdmin = {
       const { auth, error } = await requireAdmin(request, env);
       if (error) return error;
 
-      // 🔥 强制只从统一存储读取，忽略分布式存储
+      // 直接从KV读取代理配置
       const proxyConfigData = await env.YOYO_USER_DB.get('proxy-config');
       
-      logInfo(env, '📦 强制使用统一存储格式', {
+      logInfo(env, 'Admin retrieved proxy config', {
         username: auth.user.username,
-        hasData: !!proxyConfigData,
-        source: 'proxy-config键',
-        note: '已忽略所有proxy_config_*键'
+        hasData: !!proxyConfigData
       });
 
       let response;
