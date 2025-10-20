@@ -158,9 +158,12 @@ const statusType = computed(() => {
 const connectionModeType = computed(() => {
   switch (connectionMode.value) {
     case 'tunnel': return 'success'
+    case 'proxy': return 'success'
     case 'smart-fallback': return 'warning'
     case 'direct-fallback': return 'warning'
     case 'direct': return 'info'
+    case 'unknown': return 'danger'
+    case 'error': return 'danger'
     default: return 'info'
   }
 })
@@ -168,6 +171,7 @@ const connectionModeType = computed(() => {
 const connectionModeIcon = computed(() => {
   switch (connectionMode.value) {
     case 'tunnel': return Connection
+    case 'proxy': return Connection
     case 'smart-fallback': return Link
     case 'direct-fallback': return Link
     case 'direct': return Link
@@ -178,11 +182,13 @@ const connectionModeIcon = computed(() => {
 const connectionModeText = computed(() => {
   switch (connectionMode.value) {
     case 'tunnel': return '隧道优化'
+    case 'proxy': return '代理模式'
     case 'smart-fallback': return '智能切换'
     case 'direct-fallback': return '故障切换'
     case 'direct': return '直连模式'
     case 'detecting': return '检测中'
     case 'unknown': return '未知模式'
+    case 'error': return '检测错误'
     default: return '检测中'
   }
 })
@@ -495,10 +501,55 @@ const reloadStream = () => {
   initHls()
 }
 
-// 获取连接模式信息
+// 🔥 URL推断连接模式函数
+const detectConnectionModeFromUrl = (url, previousMode = null) => {
+  if (!url) {
+    return { type: 'unknown', reason: 'URL为空' }
+  }
+  
+  debugLog('URL推断连接模式:', url)
+  
+  // 根据URL域名判断连接模式
+  if (url.includes('tunnel-hls.yoyo-vps.5202021.xyz')) {
+    return { 
+      type: 'tunnel', 
+      reason: '隧道优化端点',
+      description: '使用Cloudflare Tunnel加速'
+    }
+  } else if (url.includes('yoyoapi.5202021.xyz')) {
+    return { 
+      type: 'proxy', 
+      reason: 'Workers代理模式',
+      description: '通过代理服务器优化连接'
+    }
+  } else if (url.includes('yoyo-vps.5202021.xyz')) {
+    // 如果之前是代理模式，现在变成直连，说明是故障切换
+    if (previousMode === 'proxy' || previousMode === 'tunnel') {
+      return { 
+        type: 'direct-fallback', 
+        reason: '故障切换到直连模式',
+        description: '代理或隧道故障，自动切换到直连'
+      }
+    } else {
+      return { 
+        type: 'direct', 
+        reason: 'VPS直连模式',
+        description: '直接连接到VPS服务器'
+      }
+    }
+  }
+  
+  return { 
+    type: 'unknown', 
+    reason: '无法识别的端点',
+    description: '未知的视频源地址'
+  }
+}
+
+// 获取连接模式信息 (作为URL推断的兜底方案)
 const fetchConnectionMode = async () => {
   try {
-    debugLog('手动获取连接模式信息')
+    debugLog('手动获取连接模式信息 (响应头检测)')
     const response = await fetch(props.hlsUrl, { 
       method: 'HEAD',  // 只获取头信息，不下载内容
       cache: 'no-cache'
@@ -509,14 +560,20 @@ const fetchConnectionMode = async () => {
     const country = response.headers.get('x-country')
     const routeReason = response.headers.get('x-route-reason')
     
+    // 优先使用响应头信息
     if (routeVia) {
       connectionMode.value = routeVia
-      debugLog('手动获取到连接模式:', routeVia)
+      debugLog('✅ 响应头检测到连接模式:', routeVia)
+    } else {
+      // 响应头检测失败，使用URL推断作为兜底
+      const modeInfo = detectConnectionModeFromUrl(props.hlsUrl)
+      connectionMode.value = modeInfo.type
+      debugLog('⚠️ 响应头检测失败，使用URL推断:', modeInfo.type)
     }
     
     if (responseTimeHeader) {
       responseTime.value = responseTimeHeader
-      debugLog('手动获取到响应时间:', responseTimeHeader)
+      debugLog('检测到响应时间:', responseTimeHeader)
     }
     
     if (country) {
@@ -527,13 +584,12 @@ const fetchConnectionMode = async () => {
       debugLog('路由原因:', routeReason)
     }
     
-    // 如果仍然没有获取到，设置为未知
-    if (!connectionMode.value) {
-      connectionMode.value = 'unknown'
-    }
   } catch (error) {
-    debugLog('获取连接模式失败:', error)
-    connectionMode.value = 'error'
+    debugLog('响应头检测失败，使用URL推断兜底:', error)
+    // 网络请求失败，使用URL推断作为兜底方案
+    const modeInfo = detectConnectionModeFromUrl(props.hlsUrl)
+    connectionMode.value = modeInfo.type
+    debugLog('🔄 兜底方案 - URL推断结果:', modeInfo.type)
   }
 }
 
@@ -576,6 +632,25 @@ const handleEnded = () => {
 watch(() => props.hlsUrl, (newUrl, oldUrl) => {
   if (newUrl !== oldUrl) {
     debugLog('HLS URL变化:', { old: oldUrl, new: newUrl })
+    
+    // 🔥 URL推断：立即更新连接模式
+    if (newUrl) {
+      const previousMode = connectionMode.value
+      const modeInfo = detectConnectionModeFromUrl(newUrl, previousMode)
+      
+      connectionMode.value = modeInfo.type
+      debugLog('🎯 URL推断连接模式:', {
+        url: newUrl,
+        previousMode,
+        newMode: modeInfo.type,
+        reason: modeInfo.reason
+      })
+      
+      // 如果是故障切换，显示提示信息
+      if (modeInfo.type === 'direct-fallback') {
+        debugLog('🚨 检测到故障切换:', modeInfo.description)
+      }
+    }
     
     // 🔥 关键修复：URL变化时立即销毁旧实例
     if (oldUrl && newUrl !== oldUrl) {
