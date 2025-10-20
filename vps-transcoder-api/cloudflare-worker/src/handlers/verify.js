@@ -282,16 +282,27 @@ export const handleVerify = {
         overall: {}
       };
 
-      // 检查KV存储
+      // 检查KV存储 - 🚨 紧急优化：停用KV写入测试，避免触发写入限制
       try {
-        const testKey = `health_check_${Date.now()}`;
-        await env.YOYO_USER_DB.put(testKey, 'test', { expirationTtl: 60 });
-        const testValue = await env.YOYO_USER_DB.get(testKey);
-        await env.YOYO_USER_DB.delete(testKey);
+        // 🔥 临时方案：只检查KV绑定是否存在，不进行实际读写测试
+        const kvAvailable = !!env.YOYO_USER_DB;
+        
+        // 可选：只读取现有数据验证功能，不创建新数据
+        let readTestPassed = false;
+        try {
+          const adminUser = await env.YOYO_USER_DB.get('user:admin');
+          readTestPassed = !!adminUser;
+        } catch (readError) {
+          console.warn('KV读取测试失败:', readError.message);
+        }
         
         healthCheck.components.kv = {
-          status: testValue === 'test' ? 'HEALTHY' : 'DEGRADED',
-          message: testValue === 'test' ? 'KV存储读写正常' : 'KV存储读写异常',
+          status: kvAvailable && readTestPassed ? 'HEALTHY' : 'DEGRADED',
+          message: kvAvailable 
+            ? (readTestPassed ? 'KV绑定正常，读取功能正常' : 'KV绑定正常，读取功能异常') 
+            : 'KV绑定不可用',
+          method: 'binding_check_only',
+          note: '已停用KV写入测试以避免配额限制',
           responseTime: Date.now()
         };
       } catch (error) {
