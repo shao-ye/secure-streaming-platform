@@ -282,33 +282,24 @@ export const handleVerify = {
         overall: {}
       };
 
-      // 检查KV存储 - 🚨 紧急优化：停用KV写入测试，避免触发写入限制
+      // 🎯 分层健康检查策略 - 第1层：基础检查
       try {
-        // 🔥 临时方案：只检查KV绑定是否存在，不进行实际读写测试
         const kvAvailable = !!env.YOYO_USER_DB;
         
-        // 可选：只读取现有数据验证功能，不创建新数据
-        let readTestPassed = false;
-        try {
-          const adminUser = await env.YOYO_USER_DB.get('user:admin');
-          readTestPassed = !!adminUser;
-        } catch (readError) {
-          console.warn('KV读取测试失败:', readError.message);
-        }
-        
         healthCheck.components.kv = {
-          status: kvAvailable && readTestPassed ? 'HEALTHY' : 'DEGRADED',
-          message: kvAvailable 
-            ? (readTestPassed ? 'KV绑定正常，读取功能正常' : 'KV绑定正常，读取功能异常') 
-            : 'KV绑定不可用',
-          method: 'binding_check_only',
-          note: '已停用KV写入测试以避免配额限制',
+          status: kvAvailable ? 'HEALTHY' : 'UNHEALTHY',
+          message: kvAvailable ? 'KV绑定正常' : 'KV绑定不可用',
+          method: 'binding_check',
+          layer: 1,
+          note: '基础检查：仅验证KV绑定存在',
           responseTime: Date.now()
         };
       } catch (error) {
         healthCheck.components.kv = {
           status: 'UNHEALTHY',
-          message: `KV存储错误: ${error.message}`,
+          message: `KV绑定检查失败: ${error.message}`,
+          method: 'binding_check',
+          layer: 1,
           error: error.message
         };
       }
@@ -375,6 +366,120 @@ export const handleVerify = {
       console.error('❌ 系统健康检查失败:', error);
       logError(env, 'System health check failed', error);
       return errorResponse('系统健康检查失败', 'HEALTH_CHECK_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 🎯 分层健康检查策略 - 第2层：功能检查（每小时）
+   */
+  async functionalHealthCheck(request, env, ctx) {
+    try {
+      // 使用缓存机制，避免频繁检查
+      const cacheKey = 'health_check_layer2';
+      const cached = globalThis.healthCheckCache?.[cacheKey];
+      const now = Date.now();
+      
+      // 如果缓存未过期（1小时），直接返回缓存结果
+      if (cached && (now - cached.timestamp < 3600000)) {
+        return successResponse(cached.result, 'Cached functional health check', request);
+      }
+
+      const healthCheck = {
+        timestamp: new Date().toISOString(),
+        layer: 2,
+        type: 'functional_check',
+        components: {},
+        overall: {}
+      };
+
+      // KV功能检查 - 只读取现有数据
+      try {
+        const adminUser = await env.YOYO_USER_DB.get('user:admin');
+        const readTestPassed = !!adminUser;
+        
+        healthCheck.components.kv = {
+          status: readTestPassed ? 'HEALTHY' : 'DEGRADED',
+          message: readTestPassed ? 'KV读取功能正常' : 'KV读取功能异常',
+          method: 'read_test',
+          layer: 2,
+          note: '功能检查：读取现有数据验证'
+        };
+      } catch (error) {
+        healthCheck.components.kv = {
+          status: 'UNHEALTHY',
+          message: `KV读取测试失败: ${error.message}`,
+          method: 'read_test',
+          layer: 2,
+          error: error.message
+        };
+      }
+
+      // 缓存结果
+      if (!globalThis.healthCheckCache) globalThis.healthCheckCache = {};
+      globalThis.healthCheckCache[cacheKey] = {
+        timestamp: now,
+        result: healthCheck
+      };
+
+      return successResponse(healthCheck, 'Functional health check completed', request);
+
+    } catch (error) {
+      console.error('功能健康检查失败:', error);
+      return errorResponse('Functional health check failed', 'FUNCTIONAL_HEALTH_CHECK_ERROR', 500, request);
+    }
+  },
+
+  /**
+   * 🎯 分层健康检查策略 - 第3层：完整测试（每日或手动）
+   */
+  async comprehensiveHealthCheck(request, env, ctx) {
+    try {
+      const healthCheck = {
+        timestamp: new Date().toISOString(),
+        layer: 3,
+        type: 'comprehensive_check',
+        components: {},
+        overall: {}
+      };
+
+      // KV完整测试 - 包含读写删除
+      try {
+        const testKey = `health_check_${Date.now()}`;
+        const testValue = 'test_data';
+        
+        // 写入测试
+        await env.YOYO_USER_DB.put(testKey, testValue);
+        
+        // 读取测试
+        const retrievedValue = await env.YOYO_USER_DB.get(testKey);
+        
+        // 删除测试
+        await env.YOYO_USER_DB.delete(testKey);
+        
+        const writeReadDeleteSuccess = retrievedValue === testValue;
+        
+        healthCheck.components.kv = {
+          status: writeReadDeleteSuccess ? 'HEALTHY' : 'UNHEALTHY',
+          message: writeReadDeleteSuccess ? 'KV完整读写删除测试通过' : 'KV完整测试失败',
+          method: 'write_read_delete_test',
+          layer: 3,
+          note: '完整测试：包含写入、读取、删除操作'
+        };
+      } catch (error) {
+        healthCheck.components.kv = {
+          status: 'UNHEALTHY',
+          message: `KV完整测试失败: ${error.message}`,
+          method: 'write_read_delete_test',
+          layer: 3,
+          error: error.message
+        };
+      }
+
+      return successResponse(healthCheck, 'Comprehensive health check completed', request);
+
+    } catch (error) {
+      console.error('完整健康检查失败:', error);
+      return errorResponse('Comprehensive health check failed', 'COMPREHENSIVE_HEALTH_CHECK_ERROR', 500, request);
     }
   }
 };

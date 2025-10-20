@@ -306,6 +306,11 @@ export default {
       router.get('/api/verify/kv-optimization', (req, env, ctx) => handleVerify.verifyKVOptimization(req, env, ctx));
       router.get('/api/verify/login-function', (req, env, ctx) => handleVerify.verifyLoginFunction(req, env, ctx));
       router.get('/api/verify/system-health', (req, env, ctx) => handleVerify.systemHealthCheck(req, env, ctx));
+      
+      // 🎯 分层健康检查策略API
+      router.get('/api/verify/health/functional', (req, env, ctx) => handleVerify.functionalHealthCheck(req, env, ctx));
+      router.get('/api/verify/health/comprehensive', (req, env, ctx) => handleVerify.comprehensiveHealthCheck(req, env, ctx));
+      
       router.get('/api/verify/reset-admin', (req, env, ctx) => handleVerify.resetAdminUser(req, env, ctx));
       
       // 其他管理功能
