@@ -301,6 +301,10 @@ const updateProxyListFromVPS = () => {
       proxy.latency = vpsStatus.value.statistics?.avgLatency || 125
       console.log(`✅ 设置代理 ${proxy.name} 为已连接`)
     } else {
+      // 🔧 修复：确保非活跃代理状态正确重置，避免error状态残留
+      if (proxy.status === 'error' && !proxy.enabling) {
+        console.log(`🔧 重置代理 ${proxy.name} 的error状态为disconnected`)
+      }
       proxy.status = 'disconnected'
       proxy.isActive = false
       proxy.latency = null
@@ -827,6 +831,7 @@ const loadProxyConfig = async () => {
       
       // 加载代理列表并设置初始状态 - 使用明确的对象创建避免Vue响应式问题
       proxyList.value = (config.data.proxies || []).map(proxy => {
+        // 🔧 修复：确保所有代理都以disconnected状态开始，避免error状态污染
         const proxyObj = {
           id: proxy.id,
           name: proxy.name,
@@ -835,15 +840,15 @@ const loadProxyConfig = async () => {
           createdAt: proxy.createdAt,
           updatedAt: proxy.updatedAt,
           priority: proxy.priority || 1,
-          status: 'disconnected', // 🔧 修复：初始设为未连接，由syncVPSStatusToTable()更新真实状态
-          latency: proxy.latency || null,
+          status: 'disconnected', // 🔧 强制设为未连接，确保状态一致性
+          latency: null, // 🔧 强制重置延迟，避免历史数据干扰
           testing: false,
           enabling: false,
           disabling: false,
-          isActive: false, // 🔧 修复：初始设为false，由syncVPSStatusToTable()更新真实状态
-          currentTestFailed: false, // 初始化测试失败标志
-          lastTestLatency: null, // 初始化历史延迟
-          lastTestTime: null // 初始化历史测试时间
+          isActive: false, // 🔧 强制设为false，由VPS状态同步更新
+          currentTestFailed: false,
+          lastTestLatency: null,
+          lastTestTime: null
         }
         console.log(`✅ 创建代理对象: ${proxy.name}`, proxyObj)
         return proxyObj
@@ -949,17 +954,20 @@ const enableProxy = async (proxy) => {
       // 如果重试后仍未连接成功
       if (!connected) {
         console.warn(`⚠️ 代理 ${proxy.name} 连接超时，但API调用成功`)
-        proxy.status = 'error'
+        // 🔧 修复：超时后设置为disconnected而不是error，避免永久error状态
+        proxy.status = 'disconnected'
         ElMessage.warning(`代理连接可能需要更长时间，请刷新页面查看状态`)
       }
     } else {
       ElMessage.error(`连接代理失败: ${result.message || '未知错误'}`)
-      proxy.status = 'error'
+      // 🔧 修复：API失败时设置为disconnected，允许用户重试
+      proxy.status = 'disconnected'
     }
   } catch (error) {
     console.error('连接代理失败:', error)
     ElMessage.error(`连接代理失败: ${error.message || '网络错误'}`)
-    proxy.status = 'error'
+    // 🔧 修复：网络错误时设置为disconnected，允许用户重试
+    proxy.status = 'disconnected'
   } finally {
     proxy.enabling = false
   }
