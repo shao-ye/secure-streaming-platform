@@ -244,7 +244,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import { proxyApi } from '../../services/proxyApi'
@@ -253,8 +253,53 @@ import { proxyApi } from '../../services/proxyApi'
 const proxyEnabled = ref(false)
 const switchLoading = ref(false)
 const isInitializing = ref(true) // 🔧 添加初始化标志，防止页面加载时触发开关事件
-const connectionStatus = ref('disconnected')
-const currentProxy = ref(null)
+// 🔧 移除本地状态，改为直接查询VPS
+const vpsStatus = ref(null) // 只缓存最近一次查询结果，用于显示
+
+// 🔧 直接查询VPS状态的计算属性
+const connectionStatus = computed(() => {
+  return vpsStatus.value?.connectionStatus || 'disconnected'
+})
+
+const currentProxy = computed(() => {
+  return vpsStatus.value?.currentProxy || null
+})
+
+// 🔧 直接查询VPS状态（无需同步）
+const refreshVPSStatus = async () => {
+  try {
+    const status = await proxyApi.getStatus()
+    if (status?.status === 'success') {
+      vpsStatus.value = status.data
+      console.log('🔄 VPS状态查询:', status.data.connectionStatus, status.data.currentProxy)
+    }
+  } catch (error) {
+    console.warn('VPS状态查询失败:', error)
+  }
+}
+
+// 🔧 根据VPS状态更新代理列表显示（不是同步，只是显示）
+const updateProxyListFromVPS = () => {
+  if (!vpsStatus.value) return
+  
+  const { connectionStatus: vpsConnectionStatus, currentProxy: vpsCurrentProxy } = vpsStatus.value
+  
+  proxyList.value.forEach(proxy => {
+    // 提取当前代理ID（支持对象和字符串格式）
+    const currentProxyId = vpsCurrentProxy?.id || vpsCurrentProxy
+    const isActiveProxy = proxy.id === currentProxyId
+    
+    if (isActiveProxy && vpsConnectionStatus === 'connected') {
+      proxy.status = 'connected'
+      proxy.isActive = true
+      proxy.latency = vpsStatus.value.statistics?.avgLatency || 50
+    } else {
+      proxy.status = 'disconnected'
+      proxy.isActive = false
+      proxy.latency = null
+    }
+  })
+}
 const loading = ref(false)
 const saving = ref(false)
 const showAddDialog = ref(false)
@@ -810,10 +855,11 @@ const loadProxyConfig = async () => {
         console.log('Vue nextTick - 代理列表长度:', proxyList.value.length)
       })
       
-      // 🔧 简化逻辑：直接获取VPS连接状态并匹配表格
-      console.log('🔄 页面加载完成，开始同步VPS状态...')
-      await syncVPSStatusToTable()
-      console.log('✅ VPS状态同步完成，当前代理状态:', proxyList.value.map(p => ({ name: p.name, status: p.status, isActive: p.isActive })))
+      // 🔧 简化逻辑：直接查询VPS状态，无需同步
+      console.log('🔄 页面加载完成，查询VPS状态...')
+      await refreshVPSStatus()
+      updateProxyListFromVPS()
+      console.log('✅ VPS状态查询完成')
       
       // 🔧 标记初始化完成，允许开关事件正常触发
       isInitializing.value = false
@@ -835,7 +881,7 @@ const loadProxyConfig = async () => {
   }
 }
 
-// 🔧 简化连接逻辑：先清空再创建
+// 🔧 极简连接逻辑：直接连接，然后查询状态
 const enableProxy = async (proxy) => {
   if (!proxySettings.value.enabled) {
     ElMessage.warning('请先开启代理功能总开关')
@@ -844,70 +890,20 @@ const enableProxy = async (proxy) => {
   
   proxy.enabling = true
   try {
-    console.log(`🔄 开始连接代理: ${proxy.name}`)
+    console.log(`🔄 连接代理: ${proxy.name}`)
     
-    // 🔧 第一步：先断开VPS上现有的代理连接
-    console.log('🧹 断开VPS上现有的V2Ray连接...')
-    const activeProxy = proxyList.value.find(p => p.isActive)
-    if (activeProxy && activeProxy.id !== proxy.id) {
-      console.log(`🔌 断开现有代理: ${activeProxy.name}`)
-      try {
-        await proxyApi.disableProxy(activeProxy.id)
-        console.log(`✅ 现有代理已断开: ${activeProxy.name}`)
-      } catch (error) {
-        console.warn('断开现有代理失败:', error)
-        // 继续执行，不阻断新连接
-      }
-    }
-    
-    // 立即更新UI显示所有代理为未连接
-    setAllProxiesDisconnected()
-    
-    // 🔧 第二步：创建新的代理连接
-    console.log(`🚀 创建新代理连接: ${proxy.name}`)
+    // 调用API连接代理
     const result = await proxyApi.enableProxy(proxy)
     
     if (result.success) {
       console.log(`✅ 代理连接API调用成功: ${proxy.name}`)
       
-      // 🔧 第三步：等待连接建立并验证（增加重试机制）
-      let retryCount = 0
-      const maxRetries = 6 // 最多重试6次，每次2秒
-      let connectionVerified = false
+      // 🔧 等待3秒后查询VPS状态
+      await new Promise(resolve => setTimeout(resolve, 3000))
+      await refreshVPSStatus()
+      updateProxyListFromVPS()
       
-      while (retryCount < maxRetries && !connectionVerified) {
-        await new Promise(resolve => setTimeout(resolve, 2000)) // 等待2秒
-        retryCount++
-        
-        try {
-          // 检查VPS状态
-          const status = await proxyApi.getStatus()
-          if (status?.data?.connectionStatus === 'connected' && 
-              (status.data.currentProxy === proxy.id || status.data.currentProxy?.id === proxy.id)) {
-            connectionVerified = true
-            console.log(`✅ 连接验证成功 (${retryCount}/${maxRetries}): ${proxy.name}`)
-            break
-          } else {
-            console.log(`🔄 连接验证中 (${retryCount}/${maxRetries}): VPS状态=${status?.data?.connectionStatus}`)
-          }
-        } catch (error) {
-          console.log(`⚠️ 状态检查失败 (${retryCount}/${maxRetries}):`, error.message)
-        }
-      }
-      
-      if (connectionVerified) {
-        // 🔧 第四步：连接成功，更新本地状态
-        proxy.status = 'connected'
-        proxy.isActive = true
-        proxy.latency = 50 // 默认延迟，后续会通过状态同步更新
-        proxySettings.value.activeProxyId = proxy.id
-        connectionStatus.value = 'connected'
-        currentProxy.value = proxy.id
-        
-        // 同步VPS状态到表格
-        await syncVPSStatusToTable()
-        
-        ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+      ElMessage.success(`代理 "${proxy.name}" 连接成功`)
       } else {
         // 连接超时或失败
         proxy.status = 'error'
