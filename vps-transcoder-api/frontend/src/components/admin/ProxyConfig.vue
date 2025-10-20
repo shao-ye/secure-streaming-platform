@@ -895,7 +895,7 @@ const loadProxyConfig = async () => {
   }
 }
 
-// 🔧 极简连接逻辑：直接连接，然后查询状态
+// 🔧 优化连接逻辑：连接后立即更新状态，增加重试机制
 const enableProxy = async (proxy) => {
   if (!proxySettings.value.enabled) {
     ElMessage.warning('请先开启代理功能总开关')
@@ -912,12 +912,46 @@ const enableProxy = async (proxy) => {
     if (result.success) {
       console.log(`✅ 代理连接API调用成功: ${proxy.name}`)
       
-      // 🔧 等待3秒后查询VPS状态
-      await new Promise(resolve => setTimeout(resolve, 3000))
-      await refreshVPSStatus()
-      updateProxyListFromVPS()
+      // 🔧 立即设置为连接中状态，给用户反馈
+      proxy.status = 'connecting'
+      proxy.isActive = false
       
-      ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+      // 🔧 多次重试查询状态，直到连接成功或超时
+      let retryCount = 0
+      const maxRetries = 6 // 最多重试6次，总共约15秒
+      let connected = false
+      
+      while (retryCount < maxRetries && !connected) {
+        await new Promise(resolve => setTimeout(resolve, 2500)) // 等待2.5秒
+        
+        try {
+          await refreshVPSStatus()
+          
+          // 检查是否连接成功
+          if (vpsStatus.value?.connectionStatus === 'connected' && 
+              vpsStatus.value?.currentProxy === proxy.id) {
+            connected = true
+            console.log(`✅ 代理 ${proxy.name} 连接确认成功`)
+            
+            // 立即更新状态
+            updateProxyListFromVPS()
+            ElMessage.success(`代理 "${proxy.name}" 连接成功`)
+            break
+          }
+        } catch (error) {
+          console.warn(`第${retryCount + 1}次状态查询失败:`, error)
+        }
+        
+        retryCount++
+        console.log(`🔄 第${retryCount}次状态查询，等待代理连接...`)
+      }
+      
+      // 如果重试后仍未连接成功
+      if (!connected) {
+        console.warn(`⚠️ 代理 ${proxy.name} 连接超时，但API调用成功`)
+        proxy.status = 'error'
+        ElMessage.warning(`代理连接可能需要更长时间，请刷新页面查看状态`)
+      }
     } else {
       ElMessage.error(`连接代理失败: ${result.message || '未知错误'}`)
       proxy.status = 'error'
