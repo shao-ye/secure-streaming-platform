@@ -311,11 +311,13 @@ const setupHlsEventListeners = () => {
       }
     }
     
-    // 如果没有检测到，尝试手动获取
+    // 如果没有检测到，尝试手动获取 - 🔥 关键修复：异步执行，不阻塞播放
     if (!connectionMode.value) {
-      debugLog('未检测到连接模式，尝试手动获取')
-      // 手动发起请求获取连接模式信息
-      fetchConnectionMode()
+      debugLog('未检测到连接模式，异步获取以避免阻塞播放')
+      // 异步执行，不等待结果，避免阻塞HLS播放流程
+      setTimeout(() => {
+        fetchConnectionMode()
+      }, 100) // 延迟100ms执行，确保HLS播放器已初始化
     }
   })
 
@@ -495,14 +497,26 @@ const reloadStream = () => {
   initHls()
 }
 
-// 获取连接模式信息
+// 获取连接模式信息 - 优化版本，防止阻塞视频播放
 const fetchConnectionMode = async () => {
   try {
     debugLog('手动获取连接模式信息')
+    
+    // 🔥 关键修复：添加3秒超时机制，防止代理重连后请求卡死
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => {
+      controller.abort()
+      debugLog('连接模式检测超时，跳过检测以避免阻塞视频播放')
+    }, 3000) // 3秒超时
+    
     const response = await fetch(props.hlsUrl, { 
       method: 'HEAD',  // 只获取头信息，不下载内容
-      cache: 'no-cache'
+      cache: 'no-cache',
+      signal: controller.signal  // 添加超时控制
     })
+    
+    // 清除超时定时器
+    clearTimeout(timeoutId)
     
     const routeVia = response.headers.get('x-route-via')
     const responseTimeHeader = response.headers.get('x-response-time')
@@ -532,8 +546,14 @@ const fetchConnectionMode = async () => {
       connectionMode.value = 'unknown'
     }
   } catch (error) {
-    debugLog('获取连接模式失败:', error)
-    connectionMode.value = 'error'
+    // 🔥 关键修复：优雅处理错误，不影响视频播放
+    if (error.name === 'AbortError') {
+      debugLog('连接模式检测被超时取消，设置为未知模式')
+      connectionMode.value = 'unknown'
+    } else {
+      debugLog('获取连接模式失败，但不影响视频播放:', error.message)
+      connectionMode.value = 'direct' // 默认设置为直连模式
+    }
   }
 }
 
