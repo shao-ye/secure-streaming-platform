@@ -917,71 +917,26 @@ const enableProxy = async (proxy) => {
     if (result.success) {
       console.log(`✅ 代理连接API调用成功: ${proxy.name}`)
       
-      // 🔧 立即设置为连接中状态，给用户反馈
+      // 🔧 简化逻辑：设置连接中状态
       proxy.status = 'connecting'
-      proxy.isActive = false
       
-      // 🔧 简化重试逻辑：只重试3次，每次间隔2秒
-      let retryCount = 0
-      const maxRetries = 3
-      let connected = false
-      
-      while (retryCount < maxRetries && !connected) {
-        await new Promise(resolve => setTimeout(resolve, 2000)) // 等待2秒
-        
+      // 🔧 等待3秒后调用页面加载时的状态获取逻辑
+      setTimeout(async () => {
         try {
-          await refreshVPSStatus()
-          
-          // 检查是否连接成功
-          if (vpsStatus.value?.connectionStatus === 'connected' && 
-              vpsStatus.value?.currentProxy === proxy.id) {
-            connected = true
-            console.log(`✅ 代理 ${proxy.name} 连接确认成功`)
-            
-            // 🔧 立即更新状态和按钮
-            proxy.status = 'connected'
-            proxy.isActive = true
-            proxy.latency = vpsStatus.value.statistics?.avgLatency || 125
-            
-            // 🔧 更新全局状态
-            connectionStatus.value = 'connected'
-            currentProxy.value = proxy.id
-            
-            // 🔧 将其他代理设置为未连接状态
-            proxyList.value.forEach(otherProxy => {
-              if (otherProxy.id !== proxy.id) {
-                otherProxy.status = 'disconnected'
-                otherProxy.isActive = false
-                otherProxy.latency = null
-              }
-            })
-            
-            ElMessage.success(`代理 "${proxy.name}" 连接成功`)
-            return // 成功后直接返回
-          }
-        } catch (error) {
-          console.warn(`第${retryCount + 1}次状态查询失败:`, error)
-        }
-        
-        retryCount++
-        console.log(`🔄 第${retryCount}次状态查询，等待代理连接...`)
-      }
-      
-      // 🔧 修复：重试后仍未连接成功，但不显示错误信息
-      if (!connected) {
-        console.warn(`⚠️ 代理 ${proxy.name} 状态检查超时，但API调用成功`)
-        // 尝试最后一次状态同步
-        try {
+          console.log('🔄 连接后刷新代理状态...')
           await refreshVPSStatus()
           updateProxyListFromVPS()
-          ElMessage.success(`代理连接已发起，请稍后查看状态`)
+          console.log('✅ 代理状态刷新完成')
         } catch (error) {
+          console.error('代理状态刷新失败:', error)
+          // 如果状态刷新失败，重置为未连接
           proxy.status = 'disconnected'
-          ElMessage.warning(`代理连接可能需要更长时间，请刷新页面查看状态`)
         }
-      }
+      }, 3000)
+      
+      ElMessage.success(`代理 "${proxy.name}" 连接请求已发送`)
     } else {
-      // 🔧 修复：清晰的错误信息显示
+      // 🔧 API调用失败
       const errorMsg = result.message || result.error || '未知错误'
       console.error(`代理连接API失败: ${errorMsg}`)
       ElMessage.error(`连接代理失败: ${errorMsg}`)
