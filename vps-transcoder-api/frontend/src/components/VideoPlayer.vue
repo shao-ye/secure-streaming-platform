@@ -517,10 +517,20 @@ const detectConnectionModeFromUrl = (url, previousMode = null) => {
       description: '使用Cloudflare Tunnel加速'
     }
   } else if (url.includes('yoyoapi.5202021.xyz')) {
-    return { 
-      type: 'proxy', 
-      reason: 'Workers代理模式',
-      description: '通过代理服务器优化连接'
+    // 检查是否是代理路径
+    if (url.includes('/tunnel-proxy/')) {
+      return { 
+        type: 'proxy', 
+        reason: 'Workers代理模式',
+        description: '通过代理服务器优化连接'
+      }
+    } else {
+      // 普通Workers路径，实际是直连模式
+      return { 
+        type: 'direct', 
+        reason: 'Workers直连模式',
+        description: '通过Workers直接连接VPS'
+      }
     }
   } else if (url.includes('yoyo-vps.5202021.xyz')) {
     // 如果之前是代理模式，现在变成直连，说明是故障切换
