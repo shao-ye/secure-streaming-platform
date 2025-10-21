@@ -289,22 +289,45 @@ Body: {
 4. **更好的安全性**: RTMP URL不在前端暴露，提高安全性
 5. **配置热更新**: 管理员更新配置后立即生效，无需重启服务
 
-#### 数据流优化
+#### 数据流优化 - 智能路由架构
 ```mermaid
 graph TD
-    A[用户点击频道] --> B[前端发送channelId]
-    B --> C[Cloudflare Workers]
-    C --> D{检查KV缓存}
-    D -->|命中| E[直接使用缓存配置]
-    D -->|未命中| F[从KV读取配置]
-    E --> G[调用VPS API]
+    A[用户点击频道] --> B[前端统一请求: /api/simple-stream/start-watching]
+    B --> C[Cloudflare Workers接收]
+    C --> D[检查频道配置缓存]
+    D -->|命中| E[使用缓存配置]
+    D -->|未命中| F[从KV读取频道配置]
+    E --> G[检查当前系统模式]
     F --> G
-    G --> H[VPS检查本地缓存]
-    H -->|有配置| I[启动转码进程]
-    H -->|无配置| J[从Workers获取配置]
-    J --> I
-    I --> K[返回HLS URL]
+    
+    G --> H{当前路由模式?}
+    H -->|直连模式| I[Workers直接调用VPS]
+    H -->|代理模式| J[Workers通过代理调用VPS]
+    H -->|隧道模式| K[Workers通过隧道调用VPS]
+    
+    I --> L[VPS启动转码进程]
+    J --> L
+    K --> L
+    
+    L --> M[VPS返回基础HLS路径: /hls/streamId/playlist.m3u8]
+    M --> N[Workers根据当前模式包装完整URL]
+    
+    N --> O{URL包装}
+    O -->|直连模式| P[yoyoapi.5202021.xyz/hls/...]
+    O -->|代理模式| Q[yoyoapi.5202021.xyz/tunnel-proxy/hls/...]
+    O -->|隧道模式| R[tunnel-hls.yoyo-vps.5202021.xyz/hls/...]
+    
+    P --> S[前端获得适配当前模式的播放URL]
+    Q --> S
+    R --> S
 ```
+
+#### 智能路由核心特性
+1. **统一请求接口**: 前端始终使用相同的API端点，无需关心当前模式
+2. **后台智能路由**: Workers根据系统配置自动选择最佳路由方式
+3. **动态URL包装**: 根据当前模式返回对应的HLS播放地址
+4. **故障自动降级**: 主路由失败时自动切换到备用路由
+5. **模式热切换**: 管理员可随时切换模式，前端无需改动
 
 #### 兼容性说明
 - **向后兼容**: VPS端仍支持接收rtmpUrl参数，保证系统稳定性
