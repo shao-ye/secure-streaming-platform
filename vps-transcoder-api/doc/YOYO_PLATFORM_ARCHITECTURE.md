@@ -1066,10 +1066,10 @@ yoyo-vps.5202021.xyz                # 原有直连服务
 ```
 
 #### 智能路由策略
-基于环境变量的零KV消耗路由决策：
+基于KV存储的智能路由决策：
 ```javascript
-// Workers环境变量配置
-TUNNEL_ENABLED="true"                # 隧道开关 (默认启用)
+// Workers KV配置 (通过管理后台设置)
+RUNTIME_TUNNEL_ENABLED="false"      # 隧道开关 (管理后台控制)
 CLOUDFLARE_ACCOUNT_ID="xxx"          # API调用账户ID
 CLOUDFLARE_API_TOKEN="xxx"           # API调用令牌
 WORKER_NAME="yoyo-streaming-api"     # Worker名称
@@ -1198,10 +1198,10 @@ logfile: /var/log/cloudflared.log
 
 #### 环境变量路由逻辑
 ```javascript
-// 零KV消耗的路由决策
+// 基于KV存储的智能路由决策
 export class TunnelRouter {
-  static getOptimalEndpoints(env) {
-    const tunnelEnabled = (env.TUNNEL_ENABLED || 'true') === 'true';
+  static async getOptimalEndpoints(env) {
+    const tunnelEnabled = await TUNNEL_CONFIG.getTunnelEnabled(env);
     
     return tunnelEnabled ? {
       type: 'tunnel',
@@ -1220,9 +1220,9 @@ export class TunnelRouter {
 ```javascript
 // Cloudflare API自动部署
 async updateTunnelConfig(enabled) {
-  // 1. 更新环境变量
-  await this.updateWorkerEnvironment(env, {
-    TUNNEL_ENABLED: enabled.toString()
+  // 1. 更新KV存储配置
+  await env.YOYO_USER_DB.put('RUNTIME_TUNNEL_ENABLED', enabled.toString(), {
+    metadata: { updatedAt: new Date().toISOString() }
   });
   
   // 2. 触发重新部署

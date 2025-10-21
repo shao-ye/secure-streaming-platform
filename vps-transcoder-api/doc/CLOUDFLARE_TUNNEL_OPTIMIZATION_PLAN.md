@@ -98,8 +98,9 @@ export const TUNNEL_CONFIG = {
     HEALTH: 'https://yoyo-vps.5202021.xyz'
   },
   // 从环境变量读取配置 (带默认值)
-  getTunnelEnabled: (env) => {
-    return (env.TUNNEL_ENABLED || 'true') === 'true';
+  getTunnelEnabled: async (env) => {
+    const runtimeConfig = await env.YOYO_USER_DB.get('RUNTIME_TUNNEL_ENABLED');
+    return runtimeConfig === 'true';
   },
   // 默认配置描述
   DESCRIPTION: '隧道优化功能 - 改善中国大陆用户体验'
@@ -297,8 +298,8 @@ export const deploymentHandlers = {
       }
       
       // 调用Cloudflare API更新环境变量
-      const updateResult = await this.updateWorkerEnvironment(env, {
-        TUNNEL_ENABLED: enabled.toString()
+      const updateResult = await env.YOYO_USER_DB.put('RUNTIME_TUNNEL_ENABLED', enabled.toString(), {
+        metadata: { updatedAt: new Date().toISOString() }
       });
       
       if (updateResult.success) {
@@ -460,8 +461,8 @@ CLOUDFLARE_ACCOUNT_ID="your-account-id"
 CLOUDFLARE_API_TOKEN="your-api-token"  # 需要Workers:Edit权限
 WORKER_NAME="yoyo-streaming-api"
 
-# 隧道配置 (默认启用)
-TUNNEL_ENABLED="true"
+# 隧道配置已迁移到管理后台KV存储
+# 通过管理后台的隧道优化开关控制
 ```
 
 #### 4.3 添加路由配置

@@ -171,9 +171,9 @@ class IntelligentRoutingManager {
   async handleTunnelToggle(users, routingChange) {
     // 隧道切换：基于架构设计应该是无感知的
     try {
-      // 1. 更新Cloudflare Workers环境变量
-      await this.updateWorkersEnvironment({
-        TUNNEL_ENABLED: routingChange.tunnelEnabled.toString()
+      // 1. 更新Cloudflare Workers KV配置
+      await env.YOYO_USER_DB.put('RUNTIME_TUNNEL_ENABLED', routingChange.tunnelEnabled.toString(), {
+        metadata: { updatedAt: new Date().toISOString() }
       });
       
       // 2. 触发Workers重新部署 (30-60秒)

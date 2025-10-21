@@ -89,10 +89,9 @@ class IntelligentRoutingManager {
         estimatedTime: '30-60秒'
       });
 
-      // 2. 更新Cloudflare Workers环境变量
-      await this.updateWorkersEnvironment({
-        TUNNEL_ENABLED: routingChange.tunnelEnabled.toString()
-      });
+      // 2. 更新Cloudflare Workers KV配置 (已迁移到管理后台)
+      // 注意: 隧道配置现在通过管理后台KV存储管理，无需更新环境变量
+      console.log('隧道配置已迁移到KV存储，通过管理后台统一管理');
       
       // 3. 触发Workers重新部署 (30-60秒)
       const deployResult = await this.deployWorkers();
