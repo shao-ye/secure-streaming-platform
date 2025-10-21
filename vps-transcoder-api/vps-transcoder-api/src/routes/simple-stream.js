@@ -8,7 +8,7 @@ const router = express.Router();
 const streamManager = new SimpleStreamManager();
 
 /**
- * 开始观看频道 - 支持rtmpUrl参数传递
+ * 开始观看频道 - 要求完整参数：channelId和rtmpUrl
  * POST /api/simple-stream/start-watching
  */
 router.post('/start-watching', async (req, res) => {
@@ -21,6 +21,8 @@ router.post('/start-watching', async (req, res) => {
         message: 'channelId and rtmpUrl are required'
       });
     }
+    
+    logger.info('Starting stream with provided parameters', { channelId, rtmpUrl });
     
     const hlsUrl = await streamManager.startWatching(channelId, rtmpUrl);
     
