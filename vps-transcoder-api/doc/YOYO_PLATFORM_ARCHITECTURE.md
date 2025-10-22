@@ -8,6 +8,44 @@
 **部署时间**: 2025年10月1日  
 **当前状态**: 生产环境运行中 ✅
 
+## 🚀 快速部署指南
+
+### 📝 完整部署流程（重要！）
+
+**正确的部署顺序**：
+1. **本地修改代码** → 完成功能开发和测试
+2. **提交到Git** → 推送到远程仓库
+3. **部署各组件** → 按以下顺序执行
+
+```bash
+# 步骤1：提交代码到Git（必须先执行！）
+git add .
+git commit -m "描述本次更新内容"
+git push origin master
+
+# 步骤2：部署Cloudflare Workers
+cd cloudflare-worker
+npx wrangler deploy --env production
+
+# 步骤3：部署VPS（一键部署脚本会自动从Git拉取最新代码）
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
+
+# 步骤4：前端自动部署（Cloudflare Pages监听master分支）
+# 前面的 git push 已触发自动部署，无需额外操作
+```
+
+### ⭐ VPS一键部署命令（记住这条）
+```bash
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
+```
+
+**自动完成**：Git检查修复 → 代码同步 → 环境配置 → 服务重启 → 健康验证
+
+**⚠️ 重要提示**：
+- VPS部署脚本会从Git仓库拉取最新代码
+- 必须先执行 `git push` 提交代码，否则VPS会拉取旧版本
+- 建议部署顺序：Workers → VPS → 验证（前端自动部署）
+
 ---
 
 ## 🌐 生产环境域名配置
@@ -903,12 +941,8 @@ const ffmpegArgs = [
 ### 调试与部署规范
 
 #### 基础规范
-1. **禁用特定命令**: 不要使用 `pm2 logs vps-transcoder-api --lines XX` 命令，会导致对话卡死
-2. **避免SSH会话卡死**: 
-   - 不要使用任何包含 `&`、`&&`、`nohup` 或其他后台运行的命令
-   - 避免长时间运行的SSH命令（如git pull、pm2操作等）
-   - SSH连接超时设置：`-o ConnectTimeout=10 -o ServerAliveInterval=5`
-   - **推荐方案**: 优先使用HTTP API替代SSH命令进行部署和管理
+1. **注意特定命令带上退出点**: 使用 `pm2 logs vps-transcoder-api --lines XX` 这种命令，要带上自动退出点，否则会导致持续等待，卡死对话。例如可以使用 `ssh root@142.171.75.220 "pm2 logs vps-transcoder-api --lines 20 --nostream`
+2. **不要使用SSH双重嵌套命令，会导致需要验证密码，卡死会话**:
 
 #### Git认证配置
 3. **VPS Git认证设置**（一次性配置）:
@@ -921,44 +955,92 @@ const ffmpegArgs = [
    git pull origin master  # 应该无需输入密码
    ```
 
-#### HTTP API部署方案（推荐）
-4. **部署API端点**:
-   - **状态检查**: `GET /api/deployment/status` - 获取系统整体状态
-   - **Git拉取**: `POST /api/deployment/git/pull` - 拉取最新代码
-   - **代码同步**: `POST /api/deployment/sync/code` - 同步代码到运行目录
-   - **脚本执行**: `POST /api/deployment/execute/script` - 执行部署脚本
-   - **一键部署**: `POST /api/deployment/deploy/complete` - 完整部署流程
+## 🚀 VPS部署指南
 
-5. **Windows PowerShell部署脚本**:
-   ```powershell
-   # 1. 检查VPS状态
-   Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/deployment/status" -Method GET -TimeoutSec 10
-   
-   # 2. 执行一键部署
-   $deployBody = @{ scriptName = "integrate-proxy-streaming.sh" } | ConvertTo-Json
-   Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/deployment/deploy/complete" -Method POST -Body $deployBody -ContentType "application/json" -TimeoutSec 300
-   
-   # 3. 验证部署结果
-   Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/proxy/status" -Method GET -TimeoutSec 10
-   ```
+**快速导航**：
+- [标准部署命令](#标准部署命令) ⭐ 
+- [紧急修复](#紧急修复)
+- [服务状态检查](#服务状态检查)
+- [其他部署方式](#其他部署方式)
 
-#### 传统SSH部署方案（备用）
-6. **VPS手动部署流程**:
-   ```bash
-   # 在VPS上执行
-   cd /tmp/github/secure-streaming-platform/vps-transcoder-api
-   git pull origin master
-   yes | cp -r vps-transcoder-api/src/* /opt/yoyo-transcoder/src/
-   pm2 restart vps-transcoder-api
-   ```
+### 标准部署命令（记住这条命令 ⭐）
+```bash
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
+```
 
-7. **代码修改流程**: 调试VPS上的程序时，要先修改本地代码，上传git，再将代码从git上拉取到VPS上，再执行，不要直接在VPS上修改代码，保证项目代码是最新有效的
-   - **本地Git目录**: `D:\项目文件\yoyo-kindergarten\code\secure-streaming-platform\vps-transcoder-api`
-   - **VPS Git目录**: `/tmp/github/secure-streaming-platform/vps-transcoder-api`
-   - **VPS运行目录**: `/opt/yoyo-transcoder`
-6. **分支开发流程**: 新功能必须在feature分支开发，通过临时合并策略在生产环境测试
-7. **生产测试规范**: 每次合并到master前，确保功能在本地环境基本可用
-8. **回滚准备**: 重要功能测试前，记录当前稳定的commit ID以备回滚
+**这条命令自动完成**：
+- ✅ Git仓库健康检查和修复
+- ✅ 代码更新和同步  
+- ✅ 环境变量配置
+- ✅ 服务重启
+- ✅ 健康检查验证
+
+### 紧急修复（当Git仓库损坏时）
+```bash
+# 1. 删除损坏的仓库
+ssh root@142.171.75.220 "rm -rf /tmp/github/secure-streaming-platform"
+
+# 2. 重新克隆
+ssh root@142.171.75.220 "mkdir -p /tmp/github && cd /tmp/github && git clone git@github.com:shao-ye/secure-streaming-platform.git"
+
+# 3. 执行部署
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
+```
+
+### 服务状态检查
+```bash
+# 检查PM2状态
+ssh root@142.171.75.220 "pm2 status"
+
+# 检查服务健康
+curl https://yoyo-vps.5202021.xyz/health
+
+# 检查API认证
+curl -H 'X-API-Key: 85da076ae24b028b3d1ea1884e6b13c5afe34b5b' https://yoyo-vps.5202021.xyz/api/simple-stream/health
+```
+
+### 其他部署方式
+
+#### Cloudflare Workers部署
+```bash
+cd cloudflare-worker
+npx wrangler deploy --env production
+```
+
+#### 前端部署
+```bash
+git push origin master  # Cloudflare Pages自动部署
+```
+
+#### HTTP API部署（备用，复杂不推荐）
+```powershell
+# 1. 检查VPS状态
+Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/deployment/status" -Method GET -TimeoutSec 10
+
+# 2. 执行一键部署  
+$deployBody = @{ scriptName = "integrate-proxy-streaming.sh" } | ConvertTo-Json
+Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/deployment/deploy/complete" -Method POST -Body $deployBody -ContentType "application/json" -TimeoutSec 300
+
+# 3. 验证部署结果
+Invoke-RestMethod -Uri "https://yoyo-vps.5202021.xyz/api/proxy/status" -Method GET -TimeoutSec 10
+```
+
+---
+
+## 🛠️ 开发规范
+
+### 代码修改流程
+**重要**: 调试VPS上的程序时，要先修改本地代码，上传git，再将代码从git上拉取到VPS上，再执行，不要直接在VPS上修改代码，保证项目代码是最新有效的
+
+**目录结构**:
+- **本地Git目录**: `D:\项目文件\yoyo-kindergarten\code\secure-streaming-platform\vps-transcoder-api`
+- **VPS Git目录**: `/tmp/github/secure-streaming-platform/vps-transcoder-api`
+- **VPS运行目录**: `/opt/yoyo-transcoder`
+
+### 开发流程规范
+- **分支开发流程**: 新功能必须在feature分支开发，通过临时合并策略在生产环境测试
+- **生产测试规范**: 每次合并到master前，确保功能在本地环境基本可用
+- **回滚准备**: 重要功能测试前，记录当前稳定的commit ID以备回滚
 
 ### 文档维护规范
 5. **架构文档更新**: 每次会话完成后，如果产生重要的配置信息或项目重要信息，要同步更新到本文档中
@@ -3518,12 +3600,27 @@ $jsonData = @{
 - 自动处理Git同步和文件替换
 - 验证关键文件和路由配置
 - 重启服务并进行健康检查
+- Git仓库损坏自动修复
 
 **使用方法**：
 ```bash
-# 在VPS上执行
+# 方式1: 远程SSH执行（推荐）
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
+
+# 方式2: 在VPS上直接执行
+cd /tmp/github/secure-streaming-platform/vps-transcoder-api
 chmod +x vps-simple-deploy.sh
 ./vps-simple-deploy.sh
+```
+
+**Git仓库管理逻辑**：
+```bash
+# 脚本内部处理流程
+1. 检测Git仓库健康状态
+2. 如发现SHA1损坏等问题，自动删除并重新克隆
+3. 使用SSH方式克隆避免认证问题
+4. 强制重置到最新版本，避免合并冲突
+5. 验证Git仓库完整性
 ```
 
 **脚本特性**：
@@ -3559,6 +3656,18 @@ chmod +x vps-simple-deploy.sh
 - 🔧 **问题修复**: 修复代码后立即部署验证
 - 📦 **环境初始化**: 新VPS环境的快速配置
 - 🔄 **版本回退**: 配合Git版本管理进行回退
+
+**⭐ 推荐使用方式**：
+```bash
+# 这是标准的VPS部署命令，请记住并优先使用
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
+```
+
+**脚本持续优化承诺**：
+- 🔄 **持续改进**: 根据使用过程中遇到的问题，不断优化脚本功能
+- 🛠️ **功能扩展**: 根据实际需求，添加新的自动化功能
+- 📈 **性能提升**: 优化部署速度和可靠性
+- 🔍 **问题预防**: 增加更多的检查和修复逻辑
 
 ### API测试脚本
 
@@ -3687,8 +3796,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ---
 
 **文档创建时间**: 2025年10月2日  
-**文档更新时间**: 2025年10月15日 11:05  
-**文档版本**: v5.6 (常用脚本和工具说明)  
+**文档更新时间**: 2025年10月21日 17:15  
+**文档版本**: v5.7 (VPS部署方案优化)  
 **维护人员**: YOYO开发团队  
 **联系方式**: 项目仓库Issues
 
@@ -3706,3 +3815,36 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - **v5.4**: 频道配置存储架构更新，从VPS无状态设计改为KV集中存储，简化API调用流程
 - **v5.5**: API架构规范完善，建立三层路由映射机制，完善开发规范和文档维护流程
 - **v5.6**: 常用脚本和工具说明，包含VPS部署脚本和API测试脚本的完整使用指南
+- **v5.7**: VPS部署方案优化，新增SSH远程部署方式，完善Git仓库损坏修复流程，提升部署可靠性
+
+---
+
+## 📋 部署命令速查表
+
+### 🚀 VPS部署（最常用）
+```bash
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
+```
+
+### 🔧 紧急修复Git
+```bash
+ssh root@142.171.75.220 "rm -rf /tmp/github/secure-streaming-platform && mkdir -p /tmp/github && cd /tmp/github && git clone git@github.com:shao-ye/secure-streaming-platform.git"
+```
+
+### 📊 服务检查
+```bash
+ssh root@142.171.75.220 "pm2 status"
+curl https://yoyo-vps.5202021.xyz/health
+```
+
+### ☁️ Workers部署
+```bash
+cd cloudflare-worker && npx wrangler deploy --env production
+```
+
+### 🌐 前端部署
+```bash
+git push origin master
+```
+
+**记住**: 99%的情况下，你只需要第一条VPS部署命令！

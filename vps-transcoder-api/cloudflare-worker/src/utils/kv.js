@@ -5,6 +5,23 @@
 import { logError, logInfo } from './logger.js';
 
 /**
+ * 🔥 全局缓存：减少KV读取次数
+ * Workers的全局变量在请求之间共享（同一Isolate内）
+ */
+const CACHE = {
+  streamsConfig: null,
+  streamsConfigExpiry: 0,
+  proxyConfig: null,
+  proxyConfigExpiry: 0
+};
+
+// 缓存过期时间（毫秒）
+const CACHE_TTL = {
+  STREAMS_CONFIG: 60 * 1000,  // 频道配置缓存60秒
+  PROXY_CONFIG: 60 * 1000     // 代理配置缓存60秒
+};
+
+/**
  * 获取用户数据
  */
 export async function getUser(env, username) {
@@ -124,25 +141,44 @@ export async function deleteSession(env, sessionId) {
 }
 
 /**
- * 获取流配置
+ * 获取流配置（带缓存优化）
+ * 🔥 优化：添加60秒缓存，大幅减少KV读取次数
  */
 export async function getStreamsConfig(env) {
   try {
+    const now = Date.now();
+    
+    // 🎯 检查缓存是否有效
+    if (CACHE.streamsConfig && now < CACHE.streamsConfigExpiry) {
+      // console.log('✅ 使用缓存的频道配置，避免KV读取');
+      return CACHE.streamsConfig;
+    }
+    
+    // 🔄 缓存过期或不存在，从KV读取
+    console.log('🔄 缓存过期，从KV读取频道配置');
     const streamsData = await env.YOYO_USER_DB.get('streams_config', 'json');
-    return streamsData || [];
+    const config = streamsData || [];
+    
+    // 更新缓存
+    CACHE.streamsConfig = config;
+    CACHE.streamsConfigExpiry = now + CACHE_TTL.STREAMS_CONFIG;
+    
+    return config;
   } catch (error) {
     logError(env, 'Failed to get streams config from KV', error);
-    return [];
+    // 即使出错，也返回缓存的数据（如果有）
+    return CACHE.streamsConfig || [];
   }
 }
 
 /**
- * 获取代理配置
+ * 获取代理配置（带缓存优化）
+ * 🔥 优化：添加60秒缓存，减少KV读取次数
  */
 export async function getProxyConfig(env) {
   try {
-    const proxyData = await env.YOYO_USER_DB.get('proxy_config', 'json');
-    return proxyData || {
+    const now = Date.now();
+    const defaultConfig = {
       enabled: false,
       activeProxyId: null,
       proxies: [],
@@ -153,9 +189,24 @@ export async function getProxyConfig(env) {
         testInterval: 300
       }
     };
+    
+    // 🎯 检查缓存是否有效
+    if (CACHE.proxyConfig && now < CACHE.proxyConfigExpiry) {
+      return CACHE.proxyConfig;
+    }
+    
+    // 🔄 从KV读取
+    const proxyData = await env.YOYO_USER_DB.get('proxy_config', 'json');
+    const config = proxyData || defaultConfig;
+    
+    // 更新缓存
+    CACHE.proxyConfig = config;
+    CACHE.proxyConfigExpiry = now + CACHE_TTL.PROXY_CONFIG;
+    
+    return config;
   } catch (error) {
     logError(env, 'Failed to get proxy config from KV', error);
-    return {
+    return CACHE.proxyConfig || {
       enabled: false,
       activeProxyId: null,
       proxies: [],
@@ -171,11 +222,17 @@ export async function getProxyConfig(env) {
 
 /**
  * 保存流配置
+ * 🔥 优化：保存后清除缓存，确保下次读取最新数据
  */
 export async function setStreamsConfig(env, streamsConfig) {
   try {
     await env.YOYO_USER_DB.put('streams_config', JSON.stringify(streamsConfig));
-    logInfo(env, 'Streams config saved to KV', { count: streamsConfig.length });
+    
+    // 清除缓存，确保下次读取最新数据
+    CACHE.streamsConfig = null;
+    CACHE.streamsConfigExpiry = 0;
+    
+    logInfo(env, 'Streams config saved to KV and cache cleared', { count: streamsConfig.length });
     return streamsConfig;
   } catch (error) {
     logError(env, 'Failed to save streams config to KV', error);
@@ -185,11 +242,17 @@ export async function setStreamsConfig(env, streamsConfig) {
 
 /**
  * 保存代理配置
+ * 🔥 优化：保存后清除缓存
  */
 export async function setProxyConfig(env, proxyConfig) {
   try {
     await env.YOYO_USER_DB.put('proxy_config', JSON.stringify(proxyConfig));
-    logInfo(env, 'Proxy config saved to KV', { 
+    
+    // 清除缓存
+    CACHE.proxyConfig = null;
+    CACHE.proxyConfigExpiry = 0;
+    
+    logInfo(env, 'Proxy config saved to KV and cache cleared', { 
       enabled: proxyConfig.enabled,
       proxyCount: proxyConfig.proxies?.length || 0,
       activeProxyId: proxyConfig.activeProxyId

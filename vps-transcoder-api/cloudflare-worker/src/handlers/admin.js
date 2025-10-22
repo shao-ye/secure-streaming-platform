@@ -319,6 +319,17 @@ export const handleAdmin = {
       }
 
       try {
+        // 🔥 获取旧配置，检测RTMP URL是否变化
+        const oldStream = await getStreamConfig(env, streamId);
+        if (!oldStream) {
+          return errorResponse(
+            `Stream with ID '${streamId}' not found`,
+            'STREAM_NOT_FOUND',
+            404,
+            request
+          );
+        }
+
         // 准备更新数据（移除ID字段，不允许更改）
         const { id, ...updates } = updateData;
 
@@ -326,15 +337,63 @@ export const handleAdmin = {
         if (updates.name) updates.name = updates.name.trim();
         if (updates.rtmpUrl) updates.rtmpUrl = updates.rtmpUrl.trim();
 
+        // 🎯 检测RTMP URL是否发生变化
+        const rtmpUrlChanged = updates.rtmpUrl && updates.rtmpUrl !== oldStream.rtmpUrl;
+
         const updatedStream = await updateStreamConfig(env, streamId, updates);
+
+        // 🔥 如果RTMP URL发生变化，通知VPS重启该频道的FFmpeg进程
+        if (rtmpUrlChanged) {
+          logInfo(env, 'RTMP URL changed, notifying VPS to restart channel', {
+            streamId,
+            oldUrl: oldStream.rtmpUrl,
+            newUrl: updates.rtmpUrl
+          });
+
+          try {
+            // 调用VPS API重启频道
+            const vpsApiUrl = env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz';
+            const apiKey = env.VPS_API_KEY;
+
+            const restartResponse = await fetch(`${vpsApiUrl}/api/simple-stream/restart-channel`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': apiKey
+              },
+              body: JSON.stringify({
+                channelId: streamId,
+                rtmpUrl: updates.rtmpUrl,
+                reason: 'RTMP URL updated by admin'
+              }),
+              signal: AbortSignal.timeout(10000) // 10秒超时
+            });
+
+            if (restartResponse.ok) {
+              logInfo(env, 'VPS channel restarted successfully', { streamId });
+            } else {
+              logError(env, 'Failed to restart VPS channel', new Error(`HTTP ${restartResponse.status}`), { streamId });
+            }
+          } catch (vpsError) {
+            // VPS通知失败不影响配置更新
+            logError(env, 'Failed to notify VPS of RTMP change', vpsError, { streamId });
+          }
+        }
 
         logInfo(env, 'Admin updated stream', {
           username: auth.user.username,
           streamId,
-          updates: Object.keys(updates)
+          updates: Object.keys(updates),
+          rtmpUrlChanged
         });
 
-        return successResponse(updatedStream, 'Stream updated successfully', request);
+        return successResponse({
+          ...updatedStream,
+          rtmpUrlChanged,
+          message: rtmpUrlChanged 
+            ? 'Stream updated and restarted successfully' 
+            : 'Stream updated successfully'
+        }, rtmpUrlChanged ? 'Stream updated and restarted' : 'Stream updated successfully', request);
 
       } catch (kvError) {
         if (kvError.message.includes('not found')) {
