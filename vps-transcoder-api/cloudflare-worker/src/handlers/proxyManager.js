@@ -935,6 +935,17 @@ export const handleProxyManager = {
           }
           
           const disableResult = await disableResponse.json();
+          
+          // 🔧 修复：禁用代理后，更新KV中的activeProxyId为null
+          const disableConfigData = await env.YOYO_USER_DB.get('proxy-config');
+          if (disableConfigData) {
+            const disableConfig = JSON.parse(disableConfigData);
+            disableConfig.activeProxyId = null;
+            disableConfig.updatedAt = new Date().toISOString();
+            await env.YOYO_USER_DB.put('proxy-config', JSON.stringify(disableConfig));
+            logInfo('已更新KV配置，清除activeProxyId', { admin: auth.user.username });
+          }
+          
           return successResponse(disableResult.data, '代理禁用成功', request);
 
         default:
