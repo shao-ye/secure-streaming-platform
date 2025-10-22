@@ -27,20 +27,29 @@ export class TunnelRouter {
     // 2. 隧道禁用时，检查代理状态
     try {
       const proxyConfig = await env.YOYO_USER_DB.get('proxy-config', 'json');
-      console.log('[TunnelRouter] 代理配置原始值:', proxyConfig);
-      console.log('[TunnelRouter] 代理配置类型:', typeof proxyConfig);
-      console.log('[TunnelRouter] 代理配置JSON:', JSON.stringify(proxyConfig));
+      console.log('[TunnelRouter] 代理配置:', proxyConfig);
       
-      if (proxyConfig && proxyConfig.enabled && proxyConfig.activeProxyId) {
-        // 代理已启用，使用Workers代理模式（通过直连端点但走代理路径）
-        console.log('[TunnelRouter] ✅ 使用代理模式 (enabled:', proxyConfig.enabled, ', activeProxyId:', proxyConfig.activeProxyId, ')');
+      // 🔧 修复：必须同时满足enabled=true且activeProxyId有值
+      // activeProxyId为null、undefined、空字符串都视为未启用代理
+      const isProxyEnabled = proxyConfig && 
+                            proxyConfig.enabled === true && 
+                            proxyConfig.activeProxyId && 
+                            proxyConfig.activeProxyId.trim() !== '';
+      
+      console.log('[TunnelRouter] 代理启用状态:', isProxyEnabled, {
+        hasConfig: !!proxyConfig,
+        enabled: proxyConfig?.enabled,
+        activeProxyId: proxyConfig?.activeProxyId
+      });
+      
+      if (isProxyEnabled) {
+        // 代理已启用且选择了代理，使用Workers代理模式
+        console.log('[TunnelRouter] ✅ 使用代理模式');
         return {
           type: 'proxy',
-          endpoints: TUNNEL_CONFIG.DIRECT_ENDPOINTS, // 使用直连端点
+          endpoints: TUNNEL_CONFIG.DIRECT_ENDPOINTS,
           reason: `代理已启用 - 透明代理模式 (${country || 'unknown'})`
         };
-      } else {
-        console.log('[TunnelRouter] 代理未启用或配置不完整');
       }
     } catch (error) {
       console.warn('[TunnelRouter] Failed to check proxy config:', error);
