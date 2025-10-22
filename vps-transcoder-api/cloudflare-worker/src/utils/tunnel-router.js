@@ -25,34 +25,43 @@ export class TunnelRouter {
     }
     
     // 2. 隧道禁用时，检查代理状态
+    // 🔧 修复：实时查询VPS的v2ray运行状态，而不是只看KV中的配置
     try {
-      const proxyConfig = await env.YOYO_USER_DB.get('proxy-config', 'json');
-      console.log('[TunnelRouter] 代理配置:', proxyConfig);
-      
-      // 🔧 修复：必须同时满足enabled=true且activeProxyId有值
-      // activeProxyId为null、undefined、空字符串都视为未启用代理
-      const isProxyEnabled = proxyConfig && 
-                            proxyConfig.enabled === true && 
-                            proxyConfig.activeProxyId && 
-                            proxyConfig.activeProxyId.trim() !== '';
-      
-      console.log('[TunnelRouter] 代理启用状态:', isProxyEnabled, {
-        hasConfig: !!proxyConfig,
-        enabled: proxyConfig?.enabled,
-        activeProxyId: proxyConfig?.activeProxyId
+      console.log('[TunnelRouter] 查询VPS实时代理状态...');
+      const proxyStatusResponse = await fetch(`${env.VPS_API_URL}/api/proxy/status`, {
+        method: 'GET',
+        headers: {
+          'X-API-Key': env.VPS_API_KEY
+        },
+        signal: AbortSignal.timeout(3000) // 3秒超时
       });
       
-      if (isProxyEnabled) {
-        // 代理已启用且选择了代理，使用Workers代理模式
-        console.log('[TunnelRouter] ✅ 使用代理模式');
-        return {
-          type: 'proxy',
-          endpoints: TUNNEL_CONFIG.DIRECT_ENDPOINTS,
-          reason: `代理已启用 - 透明代理模式 (${country || 'unknown'})`
-        };
+      if (proxyStatusResponse.ok) {
+        const proxyStatus = await proxyStatusResponse.json();
+        const isVpsProxyConnected = proxyStatus.data?.connectionStatus === 'connected';
+        
+        console.log('[TunnelRouter] VPS代理状态:', {
+          connectionStatus: proxyStatus.data?.connectionStatus,
+          currentProxy: proxyStatus.data?.currentProxy?.name || 'none'
+        });
+        
+        if (isVpsProxyConnected) {
+          // VPS上的v2ray确实在运行，使用代理模式
+          console.log('[TunnelRouter] ✅ 使用代理模式 (VPS v2ray已连接)');
+          return {
+            type: 'proxy',
+            endpoints: TUNNEL_CONFIG.DIRECT_ENDPOINTS,
+            reason: `代理已连接 - VPS通过${proxyStatus.data?.currentProxy?.name || 'proxy'}访问RTMP源 (${country || 'unknown'})`
+          };
+        } else {
+          console.log('[TunnelRouter] VPS代理未连接，使用直连模式');
+        }
+      } else {
+        console.warn('[TunnelRouter] 查询VPS代理状态失败:', proxyStatusResponse.status);
       }
     } catch (error) {
-      console.warn('[TunnelRouter] Failed to check proxy config:', error);
+      console.warn('[TunnelRouter] 查询VPS代理状态异常:', error.message);
+      // 查询失败时，不使用代理模式（安全回退）
     }
     
     // 3. 隧道和代理都禁用，使用直连
