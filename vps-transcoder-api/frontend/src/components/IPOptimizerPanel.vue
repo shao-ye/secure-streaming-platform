@@ -1,26 +1,34 @@
 <template>
   <div class="ip-optimizer-panel">
     <div class="panel-header">
-      <h3>🚀 Cloudflare IP优选</h3>
+      <h3>📊 连接延迟检测</h3>
       <span class="status-badge" :class="statusClass">
         {{ statusText }}
       </span>
     </div>
 
+    <!-- SSL限制提示 -->
+    <div class="warning-box">
+      <strong>⚠️ 浏览器限制说明</strong>
+      <p>由于浏览器HTTPS/SSL证书限制，无法直接使用IP地址访问。</p>
+      <p>当前功能仅检测连接延迟，建议使用本地代理优化访问速度。</p>
+    </div>
+
     <div class="panel-content">
-      <!-- 优选状态 -->
+      <!-- 连接状态 -->
       <div class="status-section">
         <div class="status-item">
-          <span class="label">优选功能:</span>
+          <span class="label">延迟检测:</span>
           <span class="value">{{ status.enabled ? '✅ 已启用' : '❌ 已禁用' }}</span>
         </div>
         <div class="status-item" v-if="status.optimizedIP">
-          <span class="label">优选IP:</span>
+          <span class="label">检测到优质IP:</span>
           <span class="value ip-address">{{ status.optimizedIP }}</span>
+          <span class="note">（仅供参考）</span>
         </div>
         <div class="status-item">
-          <span class="label">访问域名:</span>
-          <span class="value">{{ status.hostname }}</span>
+          <span class="label">实际访问:</span>
+          <span class="value">{{ status.hostname }} (域名)</span>
         </div>
         <div class="status-item">
           <span class="label">当前URL:</span>
@@ -47,21 +55,21 @@
           class="btn"
           :class="status.enabled ? 'btn-warning' : 'btn-primary'"
         >
-          {{ status.enabled ? '禁用优选' : '启用优选' }}
+          {{ status.enabled ? '禁用检测' : '启用检测' }}
         </button>
         <button 
           @click="refreshIP" 
           class="btn btn-secondary"
           :disabled="!status.enabled || refreshing"
         >
-          {{ refreshing ? '刷新中...' : '刷新IP' }}
+          {{ refreshing ? '检测中...' : '重新检测' }}
         </button>
         <button 
           @click="testConnection" 
           class="btn btn-info"
           :disabled="testing"
         >
-          {{ testing ? '测试中...' : '测试连接' }}
+          {{ testing ? '测试中...' : '测试延迟' }}
         </button>
       </div>
 
@@ -76,8 +84,9 @@
 
       <!-- 说明文字 -->
       <div class="info-box">
-        <p>💡 IP优选可以自动选择最快的Cloudflare节点，优化国内访问速度</p>
-        <p>📌 优选结果会缓存15分钟，自动在后台刷新</p>
+        <p>💡 <strong>延迟检测</strong>：自动测试当前网络到Cloudflare的延迟</p>
+        <p>📌 <strong>优化建议</strong>：如延迟>200ms，建议使用本地代理加速</p>
+        <p>🔒 <strong>SSL限制</strong>：浏览器无法直接用IP访问HTTPS，需使用域名</p>
       </div>
     </div>
   </div>
@@ -378,6 +387,33 @@ onMounted(() => {
   color: #a94442;
   font-family: monospace;
   font-size: 12px;
+}
+
+.warning-box {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.warning-box strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #856404;
+}
+
+.warning-box p {
+  margin: 5px 0;
+  color: #856404;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.note {
+  font-size: 11px;
+  color: #999;
+  margin-left: 8px;
 }
 
 .info-box {

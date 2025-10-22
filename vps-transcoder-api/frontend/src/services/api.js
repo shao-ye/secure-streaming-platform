@@ -12,31 +12,33 @@ export class APIService {
   }
   
   /**
-   * 初始化IP优选
+   * 初始化延迟检测（不实际使用IP，仅作诊断）
    */
   async initializeIPOptimization() {
     if (!this.ipOptimizationEnabled) return
     
     try {
-      console.log('[APIService] 🚀 初始化Cloudflare IP优选...')
-      const bestIP = await selectBestCloudflareIP(this.hostname, 5)
-      if (bestIP) {
-        this.optimizedIP = bestIP
-        console.log(`[APIService] ✅ 已启用IP优选: ${bestIP}`)
+      console.log('[APIService] 🚀 初始化连接延迟检测...')
+      const selectedIP = await selectBestCloudflareIP(this.hostname)
+      if (selectedIP) {
+        this.optimizedIP = selectedIP
+        console.log(`[APIService] 💡 检测到优质IP: ${selectedIP}（仅供参考）`)
+        console.log(`[APIService] ⚠️ 注意：由于浏览器SSL限制，仍使用域名访问`)
+      } else {
+        console.log(`[APIService] ✅ 当前延迟正常，无需优化`)
       }
     } catch (error) {
-      console.warn('[APIService] ⚠️ IP优选失败，使用默认域名:', error)
+      console.warn('[APIService] ⚠️ 延迟检测失败:', error)
     }
   }
   
   /**
    * 获取当前使用的baseURL
+   * 注意：由于浏览器HTTPS/SSL限制，始终使用域名
    */
   getBaseURL() {
-    // 如果有优选IP，使用IP访问
-    if (this.ipOptimizationEnabled && this.optimizedIP) {
-      return `https://${this.optimizedIP}`
-    }
+    // 由于SSL证书限制，浏览器无法直接用IP访问HTTPS
+    // 即使有优选IP，也只能使用域名
     return this.baseURL
   }
   
@@ -50,10 +52,9 @@ export class APIService {
         method: options.method || 'GET',
         data: options.body ? JSON.parse(options.body) : options.data,
         headers: {
-          'Host': this.hostname, // 使用Host头指定域名
           'X-Client-Type': 'web-frontend-optimized',
           'X-Tunnel-Optimized': 'true',
-          'X-CF-IP-Optimized': this.optimizedIP ? 'true' : 'false',
+          'X-CF-Latency-Checked': this.optimizedIP ? 'true' : 'false',
           ...options.headers
         },
         baseURL: currentBaseURL,

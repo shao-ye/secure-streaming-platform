@@ -1,106 +1,124 @@
 /**
- * Cloudflare IP优选器 - 前端版本
- * 自动测试并选择最快的Cloudflare IP，优化国内访问速度
+ * Cloudflare IP优选器 - 前端版本（简化版）
+ * 
+ * 注意：由于浏览器HTTPS限制，无法直接用IP测试SSL连接
+ * 策略：使用预设的优质IP列表，随机选择或按地区优先
  */
 
-// Cloudflare优质IP池（国内优化）
-const CF_IPS = [
-  // 香港节点 - 优先级最高
-  '104.16.123.96',
-  '172.67.134.52',
-  '104.21.48.200',
-  
-  // 新加坡节点
-  '104.18.32.167',
-  '172.67.182.83',
-  
-  // 日本节点
-  '104.19.176.21',
-  '172.67.199.47',
-  
-  // 美国节点（备用）
-  '104.17.224.244',
-  '172.67.161.92'
-];
+// Cloudflare优质IP池（国内优化，按优先级排序）
+const CF_IPS = {
+  // 香港节点 - 优先级最高（国内访问最快）
+  hk: [
+    '104.16.123.96',
+    '172.67.134.52',
+    '104.21.48.200'
+  ],
+  // 新加坡节点 - 优先级高
+  sg: [
+    '104.18.32.167',
+    '172.67.182.83'
+  ],
+  // 日本节点 - 优先级中
+  jp: [
+    '104.19.176.21',
+    '172.67.199.47'
+  ],
+  // 美国节点 - 优先级低（备用）
+  us: [
+    '104.17.224.244',
+    '172.67.161.92'
+  ]
+};
 
 const CACHE_KEY = 'cf_best_ip_cache';
 const CACHE_DURATION = 15 * 60 * 1000; // 15分钟缓存
 
 /**
- * 测试单个IP的延迟
+ * 测试域名连通性和延迟
+ * 注意：这里测试的是域名，不是单个IP
  */
-async function testIPLatency(ip, hostname) {
+async function testDomainLatency(hostname) {
   const startTime = performance.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
   
   try {
-    const response = await fetch(`https://${ip}/health`, {
+    const response = await fetch(`https://${hostname}/health?t=${Date.now()}`, {
       method: 'GET',
       headers: {
-        'Host': hostname,
-        'User-Agent': 'YOYO-CF-Optimizer/1.0'
+        'Cache-Control': 'no-cache'
       },
-      signal: controller.signal,
-      mode: 'cors'
+      signal: controller.signal
     });
     
     clearTimeout(timeoutId);
     
     if (response.ok) {
       const latency = Math.round(performance.now() - startTime);
-      console.log(`[CF-IP] ✅ ${ip}: ${latency}ms`);
-      return { ip, latency, success: true };
+      console.log(`[CF-IP] ✅ 域名延迟: ${latency}ms`);
+      return { latency, success: true };
     }
     
-    console.log(`[CF-IP] ❌ ${ip}: HTTP ${response.status}`);
-    return { ip, latency: 9999, success: false };
+    return { latency: 9999, success: false };
   } catch (error) {
     clearTimeout(timeoutId);
-    console.log(`[CF-IP] ❌ ${ip}: ${error.message}`);
-    return { ip, latency: 9999, success: false };
+    console.log(`[CF-IP] ❌ 域名测试失败: ${error.message}`);
+    return { latency: 9999, success: false };
   }
 }
 
 /**
- * 优选最快的Cloudflare IP
+ * 智能选择Cloudflare IP
+ * 策略：
+ * 1. 先测试域名延迟
+ * 2. 如果延迟<200ms，不启用IP优选（Cloudflare自动路由已足够好）
+ * 3. 如果延迟>200ms，从优质IP列表中选择（按地区优先级）
  */
-export async function selectBestCloudflareIP(hostname = 'yoyoapi.5202021.xyz', maxTest = 5) {
-  console.log('[CF-IP-Optimizer] 🔍 开始优选Cloudflare IP...');
+export async function selectBestCloudflareIP(hostname = 'yoyoapi.5202021.xyz') {
+  console.log('[CF-IP-Optimizer] 🔍 开始智能优选...');
   
-  // 检查缓存
+  // 1. 检查缓存
   const cached = getCachedBestIP();
   if (cached) {
     console.log(`[CF-IP-Optimizer] 📦 使用缓存IP: ${cached}`);
     return cached;
   }
   
-  // 随机选择maxTest个IP进行测试
-  const testIPs = [...CF_IPS].sort(() => Math.random() - 0.5).slice(0, maxTest);
-  console.log(`[CF-IP-Optimizer] 🧪 测试 ${testIPs.length} 个IP...`);
+  // 2. 测试域名延迟
+  const domainTest = await testDomainLatency(hostname);
   
-  // 并行测试所有IP
-  const results = await Promise.all(
-    testIPs.map(ip => testIPLatency(ip, hostname))
-  );
-  
-  // 过滤成功的结果并按延迟排序
-  const successResults = results
-    .filter(r => r.success)
-    .sort((a, b) => a.latency - b.latency);
-  
-  if (successResults.length === 0) {
-    console.warn('[CF-IP-Optimizer] ⚠️ 所有IP测试失败，使用默认域名');
+  if (!domainTest.success) {
+    console.warn('[CF-IP-Optimizer] ❌ 域名无法访问，网络异常');
     return null;
   }
   
-  const bestIP = successResults[0];
-  console.log(`[CF-IP-Optimizer] 🏆 最优IP: ${bestIP.ip}, 延迟: ${bestIP.latency}ms`);
+  console.log(`[CF-IP-Optimizer] 📊 当前延迟: ${domainTest.latency}ms`);
   
-  // 缓存最优IP
-  cacheBestIP(bestIP.ip);
+  // 3. 判断是否需要IP优选
+  if (domainTest.latency < 200) {
+    console.log('[CF-IP-Optimizer] ✅ 延迟正常，无需IP优选');
+    return null; // 不使用IP，让Cloudflare自动路由
+  }
   
-  return bestIP.ip;
+  console.log('[CF-IP-Optimizer] 🚀 延迟较高，启用IP优选');
+  
+  // 4. 按优先级选择IP（香港 > 新加坡 > 日本 > 美国）
+  const allIPs = [
+    ...CF_IPS.hk,
+    ...CF_IPS.sg,
+    ...CF_IPS.jp,
+    ...CF_IPS.us
+  ];
+  
+  // 随机选择一个IP（避免所有用户使用同一个IP）
+  const selectedIP = allIPs[Math.floor(Math.random() * allIPs.length)];
+  
+  console.log(`[CF-IP-Optimizer] 🏆 选择IP: ${selectedIP}`);
+  
+  // 5. 缓存选择的IP
+  cacheBestIP(selectedIP);
+  
+  return selectedIP;
 }
 
 /**

@@ -72,7 +72,7 @@
             <ProxyConfig v-if="loadedTabs.has('proxy')" />
           </el-tab-pane>
 
-          <el-tab-pane label="IP优选" name="ipOptimizer">
+          <el-tab-pane label="延迟检测" name="ipOptimizer">
             <IPOptimizerPanel v-if="loadedTabs.has('ipOptimizer')" />
           </el-tab-pane>
         </el-tabs>
