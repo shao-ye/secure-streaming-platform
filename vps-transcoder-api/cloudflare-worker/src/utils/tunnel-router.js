@@ -27,16 +27,20 @@ export class TunnelRouter {
     // 2. 隧道禁用时，检查代理状态
     try {
       const proxyConfig = await env.YOYO_USER_DB.get('proxy-config', 'json');
-      console.log('[TunnelRouter] 代理配置:', proxyConfig);
+      console.log('[TunnelRouter] 代理配置原始值:', proxyConfig);
+      console.log('[TunnelRouter] 代理配置类型:', typeof proxyConfig);
+      console.log('[TunnelRouter] 代理配置JSON:', JSON.stringify(proxyConfig));
       
       if (proxyConfig && proxyConfig.enabled && proxyConfig.activeProxyId) {
         // 代理已启用，使用Workers代理模式（通过直连端点但走代理路径）
-        console.log('[TunnelRouter] ✅ 使用代理模式');
+        console.log('[TunnelRouter] ✅ 使用代理模式 (enabled:', proxyConfig.enabled, ', activeProxyId:', proxyConfig.activeProxyId, ')');
         return {
           type: 'proxy',
           endpoints: TUNNEL_CONFIG.DIRECT_ENDPOINTS, // 使用直连端点
           reason: `代理已启用 - 透明代理模式 (${country || 'unknown'})`
         };
+      } else {
+        console.log('[TunnelRouter] 代理未启用或配置不完整');
       }
     } catch (error) {
       console.warn('[TunnelRouter] Failed to check proxy config:', error);

@@ -643,6 +643,10 @@ export const handleStreams = {
       // 获取路由信息用于URL包装
       const routingInfo = await TunnelRouter.getOptimalEndpoints(env, request);
       
+      // 🔍 调试：检查代理配置
+      const debugProxyConfig = await env.YOYO_USER_DB.get('proxy-config', 'json');
+      const debugTunnelEnabled = await env.YOYO_USER_DB.get('RUNTIME_TUNNEL_ENABLED');
+      
       // 🎯 URL包装：根据当前模式生成适配的HLS播放地址
       const wrappedHlsUrl = wrapHlsUrlForCurrentMode(
         vpsResponse.data?.hlsUrl, 
@@ -666,7 +670,10 @@ export const handleStreams = {
         timestamp: vpsResponse.data?.timestamp,
         debug: {
           originalHlsUrl: vpsResponse.data?.hlsUrl,
-          routingType: routingInfo.type
+          routingType: routingInfo.type,
+          proxyConfig: debugProxyConfig,
+          tunnelEnabled: debugTunnelEnabled,
+          country: request?.cf?.country
         }
       }, `Started watching successfully via ${routingInfo.type} mode`, request);
 
