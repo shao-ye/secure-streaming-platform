@@ -77,21 +77,46 @@
       </div>
     </div>
 
-    <!-- 状态栏 - 在缩放时向下移动 -->
+    <!-- 状态栏 - 双维度路由显示 -->
     <div class="player-info" :class="{ 'zoomed-state': scale > 1 }">
       <div class="info-item">
         <span class="label">状态:</span>
         <el-tag :type="statusType" size="small">{{ status }}</el-tag>
       </div>
-      <div class="info-item" v-if="connectionMode">
-        <span class="label">连接:</span>
-        <el-tag :type="connectionModeType" size="small">
+      
+      <!-- 前端路径状态 (Workers → VPS) -->
+      <div class="info-item" v-if="frontendRoute">
+        <span class="label">前端:</span>
+        <el-tooltip :content="fallbackTooltip" placement="top" v-if="showFallbackWarning">
+          <el-tag :type="frontendRouteType" size="small">
+            <el-icon style="margin-right: 4px;">
+              <Connection />
+            </el-icon>
+            {{ frontendRouteText }}
+            <el-icon style="margin-left: 4px;" class="warning-icon">
+              <Warning />
+            </el-icon>
+          </el-tag>
+        </el-tooltip>
+        <el-tag :type="frontendRouteType" size="small" v-else>
           <el-icon style="margin-right: 4px;">
-            <component :is="connectionModeIcon" />
+            <Connection />
           </el-icon>
-          {{ connectionModeText }}
+          {{ frontendRouteText }}
         </el-tag>
       </div>
+      
+      <!-- 后端路径状态 (VPS → RTMP源) -->
+      <div class="info-item" v-if="backendRouteEnabled">
+        <span class="label">后端:</span>
+        <el-tag type="success" size="small">
+          <el-icon style="margin-right: 4px;">
+            <Connection />
+          </el-icon>
+          {{ backendRouteText }}
+        </el-tag>
+      </div>
+      
       <div class="info-item" v-if="responseTime">
         <span class="label">延迟:</span>
         <el-tag type="info" size="small">{{ responseTime }}</el-tag>
@@ -103,7 +128,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Connection, Link } from '@element-plus/icons-vue'
+import { Refresh, Connection, Link, Warning } from '@element-plus/icons-vue'
 import Hls from 'hls.js'
 import { config, debugLog, errorLog, warnLog } from '../utils/config'
 
@@ -129,9 +154,12 @@ const status = ref('准备中')
 const retryCount = ref(0)
 const retryTimer = ref(null)
 
-// 连接模式状态
-const connectionMode = ref('')
+// 双维度路由状态
+const frontendRoute = ref('') // 'tunnel' | 'direct' (前端路径: Workers → VPS)
+const backendRoute = ref('')  // 'proxy' | 'direct' (后端路径: VPS → RTMP源)
+const fallbackInfo = ref({ occurred: false, reason: '' }) // 故障转移信息
 const responseTime = ref('')
+const country = ref('')
 
 // 缩放相关状态
 const scale = ref(1)
@@ -154,44 +182,39 @@ const statusType = computed(() => {
   }
 })
 
-// 连接模式相关计算属性
-const connectionModeType = computed(() => {
-  switch (connectionMode.value) {
-    case 'tunnel': return 'success'
-    case 'proxy': return 'success'
-    case 'smart-fallback': return 'warning'
-    case 'direct-fallback': return 'warning'
-    case 'direct': return 'info'
-    case 'unknown': return 'danger'
-    case 'error': return 'danger'
-    default: return 'info'
-  }
+// 双维度路由计算属性
+const frontendRouteText = computed(() => {
+  return frontendRoute.value === 'tunnel' ? '隧道优化' : '直连'
 })
 
-const connectionModeIcon = computed(() => {
-  switch (connectionMode.value) {
-    case 'tunnel': return Connection
-    case 'proxy': return Connection
-    case 'smart-fallback': return Link
-    case 'direct-fallback': return Link
-    case 'direct': return Link
-    default: return Connection
-  }
+const frontendRouteType = computed(() => {
+  // 故障转移时使用警告色
+  if (fallbackInfo.value.occurred) return 'warning'
+  return frontendRoute.value === 'tunnel' ? 'success' : 'info'
 })
 
-const connectionModeText = computed(() => {
-  switch (connectionMode.value) {
-    case 'tunnel': return '隧道优化'
-    case 'proxy': return '代理模式'
-    case 'smart-fallback': return '智能切换'
-    case 'direct-fallback': return '故障切换'
-    case 'direct': return '直连模式'
-    case 'detecting': return '检测中'
-    case 'unknown': return '未知模式'
-    case 'error': return '检测错误'
-    default: return '检测中'
-  }
+const backendRouteText = computed(() => {
+  return backendRoute.value === 'proxy' ? '代理加速' : null
 })
+
+const backendRouteEnabled = computed(() => {
+  return backendRoute.value === 'proxy'
+})
+
+const showFallbackWarning = computed(() => {
+  return fallbackInfo.value.occurred
+})
+
+const fallbackTooltip = computed(() => {
+  if (!fallbackInfo.value.occurred) return ''
+  return `⚠️ ${fallbackInfo.value.reason || '隧道异常，已自动切换'}`
+})
+
+// 兼容旧代码：保留旧的computed属性（映射到前端路径）
+const connectionMode = computed(() => frontendRoute.value)
+const connectionModeType = computed(() => frontendRouteType.value)
+const connectionModeText = computed(() => frontendRouteText.value)
+const connectionModeIcon = computed(() => Connection)
 
 // 视频变换样式
 const videoTransformStyle = computed(() => {
@@ -307,8 +330,8 @@ const setupHlsEventListeners = () => {
       }
       
       if (routeVia) {
-        connectionMode.value = routeVia
-        debugLog('检测到连接模式:', routeVia)
+        frontendRoute.value = routeVia
+        debugLog('检测到前端路径:', routeVia)
       }
       
       if (responseTimeHeader) {
@@ -318,7 +341,7 @@ const setupHlsEventListeners = () => {
     }
     
     // 如果没有检测到，尝试手动获取
-    if (!connectionMode.value) {
+    if (!frontendRoute.value) {
       debugLog('未检测到连接模式，尝试手动获取')
       // 手动发起请求获取连接模式信息
       fetchConnectionMode()
@@ -501,58 +524,26 @@ const reloadStream = () => {
   initHls()
 }
 
-// 🔥 URL推断连接模式函数
+// 简化的URL推断函数（双维度设计）
 const detectConnectionModeFromUrl = (url, previousMode = null) => {
   if (!url) {
-    return { type: 'unknown', reason: 'URL为空' }
+    return { type: 'direct', reason: 'URL为空' }
   }
   
-  debugLog('URL推断连接模式:', url)
+  debugLog('URL推断前端路径:', url)
   
-  // 根据URL域名判断连接模式
+  // 只根据域名判断前端路径（只有2种）
   if (url.includes('tunnel-hls.yoyo-vps.5202021.xyz')) {
     return { 
       type: 'tunnel', 
-      reason: '隧道优化端点',
-      description: '使用Cloudflare Tunnel加速'
+      reason: '隧道优化端点'
     }
-  } else if (url.includes('yoyoapi.5202021.xyz')) {
-    // 检查是否是代理路径
-    if (url.includes('/tunnel-proxy/')) {
-      return { 
-        type: 'proxy', 
-        reason: 'Workers代理模式',
-        description: '通过代理服务器优化连接'
-      }
-    } else {
-      // 普通Workers路径，实际是直连模式
-      return { 
-        type: 'direct', 
-        reason: 'Workers直连模式',
-        description: '通过Workers直接连接VPS'
-      }
+  } else {
+    // 其他都是直连（yoyoapi.5202021.xyz 或 yoyo-vps.5202021.xyz）
+    return { 
+      type: 'direct', 
+      reason: '直连模式'
     }
-  } else if (url.includes('yoyo-vps.5202021.xyz')) {
-    // 如果之前是代理模式，现在变成直连，说明是故障切换
-    if (previousMode === 'proxy' || previousMode === 'tunnel') {
-      return { 
-        type: 'direct-fallback', 
-        reason: '故障切换到直连模式',
-        description: '代理或隧道故障，自动切换到直连'
-      }
-    } else {
-      return { 
-        type: 'direct', 
-        reason: 'VPS直连模式',
-        description: '直接连接到VPS服务器'
-      }
-    }
-  }
-  
-  return { 
-    type: 'unknown', 
-    reason: '无法识别的端点',
-    description: '未知的视频源地址'
   }
 }
 
@@ -565,40 +556,64 @@ const fetchConnectionMode = async () => {
       cache: 'no-cache'
     })
     
+    // 解析双维度路由信息
     const routeVia = response.headers.get('x-route-via')
+    const vpsProxyStatus = response.headers.get('x-vps-proxy-status')
+    const proxyName = response.headers.get('x-proxy-name')
+    const fullRoute = response.headers.get('x-full-route')
+    const fallbackOccurred = response.headers.get('x-fallback-occurred')
+    const fallbackReason = response.headers.get('x-fallback-reason')
     const responseTimeHeader = response.headers.get('x-response-time')
-    const country = response.headers.get('x-country')
-    const routeReason = response.headers.get('x-route-reason')
+    const countryHeader = response.headers.get('x-country')
     
-    // 优先使用响应头信息
+    // 前端路径（Workers → VPS）
     if (routeVia) {
-      connectionMode.value = routeVia
-      debugLog('✅ 响应头检测到连接模式:', routeVia)
+      frontendRoute.value = routeVia
+      debugLog('✅ 前端路径:', routeVia)
     } else {
-      // 响应头检测失败，使用URL推断作为兜底
+      // 响应头检测失败，使用URL推断
       const modeInfo = detectConnectionModeFromUrl(props.hlsUrl)
-      connectionMode.value = modeInfo.type
-      debugLog('⚠️ 响应头检测失败，使用URL推断:', modeInfo.type)
+      frontendRoute.value = modeInfo.type
+      debugLog('⚠️ URL推断前端路径:', modeInfo.type)
     }
     
+    // 后端路径（VPS → RTMP源）
+    if (vpsProxyStatus) {
+      backendRoute.value = vpsProxyStatus === 'connected' ? 'proxy' : 'direct'
+      debugLog('✅ 后端路径:', backendRoute.value, proxyName ? `(${proxyName})` : '')
+    }
+    
+    // 故障转移信息
+    if (fallbackOccurred === 'true') {
+      fallbackInfo.value = {
+        occurred: true,
+        reason: fallbackReason || '隧道异常，已自动切换'
+      }
+      debugLog('⚠️ 检测到故障转移:', fallbackReason)
+    } else {
+      fallbackInfo.value = { occurred: false, reason: '' }
+    }
+    
+    // 性能和环境信息
     if (responseTimeHeader) {
       responseTime.value = responseTimeHeader
-      debugLog('检测到响应时间:', responseTimeHeader)
+      debugLog('响应时间:', responseTimeHeader)
     }
     
-    if (country) {
-      debugLog('检测到用户地区:', country)
+    if (countryHeader) {
+      country.value = countryHeader
+      debugLog('用户地区:', countryHeader)
     }
     
-    if (routeReason) {
-      debugLog('路由原因:', routeReason)
+    if (fullRoute) {
+      debugLog('完整路径:', fullRoute)
     }
     
   } catch (error) {
     debugLog('响应头检测失败，使用URL推断兜底:', error)
     // 网络请求失败，使用URL推断作为兜底方案
     const modeInfo = detectConnectionModeFromUrl(props.hlsUrl)
-    connectionMode.value = modeInfo.type
+    frontendRoute.value = modeInfo.type
     debugLog('🔄 兜底方案 - URL推断结果:', modeInfo.type)
   }
 }
@@ -643,23 +658,15 @@ watch(() => props.hlsUrl, (newUrl, oldUrl) => {
   if (newUrl !== oldUrl) {
     debugLog('HLS URL变化:', { old: oldUrl, new: newUrl })
     
-    // 🔥 URL推断：立即更新连接模式
+    // 🔥 URL推断：立即更新前端路径
     if (newUrl) {
-      const previousMode = connectionMode.value
-      const modeInfo = detectConnectionModeFromUrl(newUrl, previousMode)
-      
-      connectionMode.value = modeInfo.type
-      debugLog('🎯 URL推断连接模式:', {
+      const modeInfo = detectConnectionModeFromUrl(newUrl)
+      frontendRoute.value = modeInfo.type
+      debugLog('🎯 URL推断前端路径:', {
         url: newUrl,
-        previousMode,
         newMode: modeInfo.type,
         reason: modeInfo.reason
       })
-      
-      // 如果是故障切换，显示提示信息
-      if (modeInfo.type === 'direct-fallback') {
-        debugLog('🚨 检测到故障切换:', modeInfo.description)
-      }
     }
     
     // 🔥 关键修复：URL变化时立即销毁旧实例
