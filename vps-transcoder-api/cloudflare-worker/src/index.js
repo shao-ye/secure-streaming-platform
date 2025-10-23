@@ -339,11 +339,8 @@ export default {
       // 其他管理功能
       router.post('/api/admin/streams/reload', (req, env, ctx) => handleAdmin.reloadStreamsConfig(req, env, ctx));
 
-      // HLS代理路由
+      // HLS代理路由 (统一路由，双维度设计)
       router.get('/hls/:streamId/:file', (req, env, ctx) => handleProxy.hlsFile(req, env, ctx));
-
-      // 🔥 代理模式下的HLS流量路由 - 通过代理转发视频流量
-      router.get('/tunnel-proxy/hls/:streamId/:file', (req, env, ctx) => handleProxy.hlsFile(req, env, ctx));
 
       // 代理管理路由 - 使用简化的admin处理器（参照频道管理模式）
       router.get('/api/admin/proxy/config', (req, env, ctx) => handleAdmin.getProxyConfig(req, env, ctx));
