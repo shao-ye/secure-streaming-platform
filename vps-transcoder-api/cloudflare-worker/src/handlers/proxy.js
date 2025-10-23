@@ -94,10 +94,13 @@ export const handleProxy = {
         return errorResponse('Invalid file type', 'INVALID_FILE_TYPE', 400, request);
       }
 
-      // 🚀 使用隧道路由构建VPS URL，支持地理路由
-      const { url: hlsFileUrl, routing } = await TunnelRouter.buildVPSUrl(env, `/hls/${streamId}/${file}`, 'HLS', request);
+      // 🚀 使用双维度路由：获取前端路径和后端路径状态
+      const { url: hlsFileUrl, workersRoute } = await TunnelRouter.buildVPSUrl(env, `/hls/${streamId}/${file}`, 'HLS', request);
+      console.log(`🌐 前端路径: ${workersRoute.type} - ${workersRoute.reason}`);
       
-      console.log(`🌐 HLS代理路由: ${routing.type} - ${routing.reason}`);
+      // 查询VPS代理状态（后端路径）
+      const vpsProxy = await TunnelRouter.getVPSProxyStatus(env);
+      console.log(`🌐 后端路径: ${vpsProxy.enabled ? 'proxy' : 'direct'} - ${vpsProxy.reason}`);
 
       try {
         // 代理请求到VPS (带故障转移)
@@ -110,8 +113,8 @@ export const handleProxy = {
               'Accept': request.headers.get('Accept') || '*/*',
               'Accept-Encoding': request.headers.get('Accept-Encoding') || 'gzip, deflate',
               'Range': request.headers.get('Range'),
-              'X-Route-Type': routing.type,
-              'X-Tunnel-Optimized': routing.type === 'tunnel' ? 'true' : 'false'
+              'X-Route-Type': workersRoute.type,
+              'X-Tunnel-Optimized': workersRoute.type === 'tunnel' ? 'true' : 'false'
             },
             // 设置超时
             signal: AbortSignal.timeout(10000) // 10秒超时
@@ -208,7 +211,7 @@ export const handleProxy = {
         }
 
         // 🚀 智能故障转移 - 如果内容无效，切换到直连
-        if (needsFallback && routing.type === 'tunnel') {
+        if (needsFallback && workersRoute.type === 'tunnel') {
           console.log(`🔄 执行智能故障转移: 隧道内容无效，切换直连`);
           
           try {
@@ -247,8 +250,8 @@ export const handleProxy = {
               }
               
               // 更新路由信息
-              routing.type = 'smart-fallback';
-              routing.reason = '智能故障转移: 隧道内容无效';
+              workersRoute.type = 'smart-fallback';
+              workersRoute.reason = '智能故障转移: 隧道内容无效';
               vpsResponse = fallbackResponse;
               console.log(`✅ 智能故障转移成功`);
             }
@@ -268,13 +271,19 @@ export const handleProxy = {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, OPTIONS',
           'Access-Control-Allow-Headers': 'Range, Accept-Encoding',
-          'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Encoding, Content-Length, Content-Range, X-Route-Via, X-Tunnel-Optimized, X-Response-Time, X-Country, X-Route-Reason, X-File-Type',
-          // 隧道优化信息 - 增强版
-          'X-Route-Via': routing.type,
-          'X-Tunnel-Optimized': routing.type === 'tunnel' ? 'true' : 'false',
+          'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Encoding, Content-Length, Content-Range, X-Route-Via, X-Tunnel-Optimized, X-VPS-Proxy-Status, X-Proxy-Name, X-Full-Route, X-Response-Time, X-Country, X-Route-Reason, X-File-Type',
+          // 前端路径信息 (路径2: VPS → Workers)
+          'X-Route-Via': workersRoute.type,
+          'X-Tunnel-Optimized': workersRoute.type === 'tunnel' ? 'true' : 'false',
+          'X-Route-Reason': workersRoute.reason || 'no reason provided',
+          // 后端路径信息 (路径1: RTMP源 → VPS)
+          'X-VPS-Proxy-Status': vpsProxy.enabled ? 'connected' : 'direct',
+          'X-Proxy-Name': vpsProxy.proxyName || '',
+          // 完整路径组合
+          'X-Full-Route': `${workersRoute.type}-${vpsProxy.enabled ? 'proxy' : 'direct'}`,
+          // 性能和环境信息
           'X-Response-Time': `${Date.now() - startTime}ms`,
           'X-Country': request.cf?.country || 'unknown',
-          'X-Route-Reason': routing.reason || 'no reason provided',
           'X-File-Type': fileExtension,
           // 根据文件类型设置缓存策略
           ...CACHE_HEADERS[fileExtension]
