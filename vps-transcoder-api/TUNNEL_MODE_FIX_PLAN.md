@@ -154,18 +154,18 @@ nslookup tunnel-health.yoyo-vps.5202021.xyz
 # ❌ 当前配置（错误）
 ingress:
   - hostname: tunnel-api.yoyo-vps.5202021.xyz
-    service: http://localhost:52535    # ❌ Nginx会拦截API
+    service: http://localhost:52535    # ❌ 52535是Nginx端口，会拦截/api/*请求
   - hostname: tunnel-health.yoyo-vps.5202021.xyz
-    service: http://localhost:52535    # ❌ health在Node.js上
+    service: http://localhost:52535    # ❌ /health端点在Node.js(3000)上，不在Nginx上
 
-# ✅ 正确配置
+# ✅ 正确配置（根据架构文档）
 ingress:
   - hostname: tunnel-api.yoyo-vps.5202021.xyz
-    service: http://localhost:3000     # ✅ 直连Node.js API
+    service: http://localhost:3000     # ✅ Node.js API服务（/api/*路由）
   - hostname: tunnel-hls.yoyo-vps.5202021.xyz
-    service: http://localhost:52535    # ✅ Nginx提供HLS文件
+    service: http://localhost:52535    # ✅ Nginx HLS静态文件服务（/hls/*路由）
   - hostname: tunnel-health.yoyo-vps.5202021.xyz
-    service: http://localhost:3000     # ✅ Node.js健康检查
+    service: http://localhost:3000     # ✅ Node.js健康检查端点（/health路由）
   - service: http_status:404
 ```
 
@@ -420,34 +420,36 @@ return successResponse({
 
 **修改清单**:
 
-1. **在HLS文件代理中添加VPS代理状态**
+1. **在HLS文件代理中添加完整路径信息**
 ```javascript
-// 在hlsFile处理器中
+// ✅ 在proxy.js的hlsFile处理器中（路径2的出口点）
 const { url: hlsFileUrl, workersRoute } = await TunnelRouter.buildVPSUrl(...);
 
-// ✅ 查询VPS代理状态
+// ✅ 查询VPS代理状态（路径1的状态）
 const vpsProxy = await TunnelRouter.getVPSProxyStatus(env);
 
 // 代理请求...
 
-// ✅ 添加完整的响应头
+// ✅ 添加完整的响应头（包含路径1和路径2的信息）
 return new Response(responseBody, {
   headers: {
     ...vpsResponse.headers,
     
-    // 前端路径信息（已有）
-    'X-Route-Via': workersRoute.type,
+    // 前端路径信息（路径2：VPS → Workers）
+    'X-Route-Via': workersRoute.type,  // 'tunnel' 或 'direct'
     'X-Tunnel-Optimized': workersRoute.type === 'tunnel' ? 'true' : 'false',
     
-    // 🆕 后端路径信息（新增）
+    // 🆕 后端路径信息（路径1：RTMP源 → VPS）
     'X-VPS-Proxy-Status': vpsProxy.enabled ? 'connected' : 'direct',
     'X-Proxy-Name': vpsProxy.proxyName || '',
-    'X-Full-Route': `${workersRoute.type}-${vpsProxy.enabled ? 'proxy' : 'direct'}`,
     
-    // 其他信息
+    // 完整路径组合（路径1 + 路径2）
+    'X-Full-Route': `${workersRoute.type}-${vpsProxy.enabled ? 'proxy' : 'direct'}`,
+    'X-Route-Reason': workersRoute.reason,
+    
+    // 性能和环境信息
     'X-Response-Time': `${Date.now() - startTime}ms`,
-    'X-Country': request.cf?.country || 'unknown',
-    'X-Route-Reason': workersRoute.reason
+    'X-Country': request.cf?.country || 'unknown'
   }
 });
 ```
@@ -676,18 +678,29 @@ curl -I "https://yoyoapi.5202021.xyz/hls/test/playlist.m3u8?token=xxx"
 
 ### **架构清晰**
 ```
-用户 → Workers → VPS → RTMP源
-       ^前端路径^  ^后端路径^
-       (2种)      (2种)
-       
-前端路径: tunnel / direct  (隧道开关控制)
-后端路径: proxy / direct   (VPS代理状态)
+完整数据流（从源到用户）：
+RTMP源 → [路径1] → VPS → [路径2] → Workers → [路径3] → 用户
+         └后端路径┘      └─前端路径─┘        └CDN优化┘
+         (2种)          (2种)              (默认)
 
-组合: 4种 (2x2)
-✅ tunnel + proxy  ⭐ 最优
-✅ tunnel + direct ✅ 良好
-✅ direct + proxy  🟡 一般
-✅ direct + direct ⚠️ 较慢
+路径1（RTMP源 → VPS）- 后端路径优化：
+  - proxy:  VPS通过V2Ray代理访问RTMP源
+  - direct: VPS直连RTMP源
+  控制: VPS代理服务状态
+
+路径2（VPS → Workers）- 前端路径优化：
+  - tunnel: Workers通过Cloudflare Tunnel访问VPS
+  - direct: Workers直连VPS
+  控制: 隧道开关 + 地理位置
+
+路径3（Workers → 用户）- 默认优化：
+  - 始终通过Cloudflare CDN优化（无需配置）
+
+四种路径组合 (2x2):
+✅ tunnel + proxy  ⭐ 最优（路径1+2双优化）
+✅ tunnel + direct ✅ 良好（仅路径2优化）
+✅ direct + proxy  🟡 一般（仅路径1优化）
+✅ direct + direct ⚠️ 较慢（无优化）
 ```
 
 ### **URL简化**
