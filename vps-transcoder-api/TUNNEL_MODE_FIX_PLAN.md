@@ -456,7 +456,46 @@ return new Response(responseBody, {
 
 ---
 
-#### **2.4 删除混淆的路由**
+#### **2.4 保留智能故障转移逻辑** 🆕
+
+**文件**: `cloudflare-worker/src/handlers/proxy.js`
+
+**重要说明**: 
+- ✅ **保留现有的故障转移逻辑**，这是已实现的核心功能
+- ✅ 故障转移是**请求级的重试机制**，不是路由决策的一部分
+- ✅ 与双维度设计**完全兼容**，互不冲突
+
+**功能定位**:
+1. **TunnelRouter**: 负责静态路由决策（基于隧道开关和地理位置）
+2. **proxy.js故障转移**: 负责请求级异常处理（内容验证和自动重试）
+
+**保留的逻辑**:
+1. **内容有效性验证**: 检查隧道返回的M3U8和TS文件是否有效
+2. **自动降级重试**: 隧道失败时自动切换到直连端点重试
+3. **状态标注**: 通过响应头告知前端发生了故障转移
+
+**关键点**:
+- 故障转移**不改变路由策略**，下次请求仍按TunnelRouter的决策执行
+- 故障转移**不需要TunnelRouter参与**，直接使用TUNNEL_CONFIG.DIRECT_ENDPOINTS
+- 故障转移是**透明的异常处理**，对用户影响最小
+
+**响应头扩展**:
+```javascript
+// 在发生故障转移时，添加以下响应头：
+'X-Route-Via': 'tunnel',           // 原计划的路由
+'X-Actual-Route': 'direct',        // 实际使用的路由（因故障转移）
+'X-Fallback-Occurred': 'true',     // 是否发生了故障转移
+'X-Fallback-Reason': 'invalid-m3u8-content'  // 故障转移原因
+```
+
+**前端影响**:
+- 前端路径仍显示为"tunnel"（原计划）
+- 增加故障警告标识（⚠️图标）
+- 鼠标悬停显示详细信息："隧道内容无效，已自动切换"
+
+---
+
+#### **2.5 删除混淆的路由**
 
 **文件**: `cloudflare-worker/src/index.js`
 
@@ -483,8 +522,12 @@ router.get('/tunnel-proxy/hls/:streamId/:file', (req, env, ctx) =>
 const connectionMode = ref('')
 
 // ✅ 新增：双维度变量
-const frontendRoute = ref('')  // 'tunnel' / 'direct'
-const backendRoute = ref('')   // 'proxy' / 'direct'
+const frontendRoute = ref('')  // 'tunnel' / 'direct'（基本状态）
+const backendRoute = ref('')   // 'proxy' / 'direct'（基本状态）
+const fallbackInfo = ref({     // 🆕 故障转移附加信息
+  occurred: false,             // 是否发生了故障转移
+  reason: ''                   // 故障转移原因
+})
 const routeDetails = ref({
   frontend: { type: '', reason: '' },
   backend: { type: '', reason: '', proxyName: '' },
@@ -495,13 +538,26 @@ const routeDetails = ref({
 
 2. **更新计算属性**
 ```javascript
-// ✅ 前端路径显示
+// ✅ 前端路径显示（保持2种基本状态）
 const frontendRouteText = computed(() => {
   return frontendRoute.value === 'tunnel' ? '隧道优化' : '直连'
 })
 
 const frontendRouteType = computed(() => {
+  // 🆕 故障转移时使用警告色
+  if (fallbackInfo.value.occurred) return 'warning'
   return frontendRoute.value === 'tunnel' ? 'success' : 'info'
+})
+
+// 🆕 是否显示故障警告图标
+const showFallbackWarning = computed(() => {
+  return fallbackInfo.value.occurred
+})
+
+// 🆕 故障转移提示文本
+const fallbackTooltip = computed(() => {
+  if (!fallbackInfo.value.occurred) return ''
+  return `⚠️ ${fallbackInfo.value.reason || '隧道异常，已自动切换'}`
 })
 
 // ✅ 后端路径显示
@@ -516,10 +572,17 @@ const backendRouteEnabled = computed(() => {
 
 3. **更新UI模板**
 ```vue
-<!-- ✅ 显示两个独立的标签 -->
+<!-- ✅ 显示两个独立的标签 + 故障转移警告 -->
 <div class="info-item">
   <span class="label">前端:</span>
-  <el-tag :type="frontendRouteType" size="small">
+  <el-tooltip :content="fallbackTooltip" placement="top" v-if="showFallbackWarning">
+    <el-tag :type="frontendRouteType" size="small">
+      <el-icon><Connection /></el-icon>
+      {{ frontendRouteText }}
+      <el-icon class="warning-icon"><Warning /></el-icon> <!-- 🆕 故障警告图标 -->
+    </el-tag>
+  </el-tooltip>
+  <el-tag :type="frontendRouteType" size="small" v-else>
     <el-icon><Connection /></el-icon>
     {{ frontendRouteText }}
   </el-tag>
@@ -534,23 +597,36 @@ const backendRouteEnabled = computed(() => {
 </div>
 ```
 
+**显示效果**:
+- 正常隧道模式: `[前端: 隧道优化]` (绿色)
+- 发生故障转移: `[前端: 隧道优化 ⚠️]` (橙色，鼠标悬停显示原因)
+- 直连模式: `[前端: 直连]` (蓝色)
+- 代理加速: `[后端: 代理加速]` (绿色，独立显示)
+
 4. **更新响应头解析**
 ```javascript
 const fetchConnectionMode = async () => {
   const response = await fetch(props.hlsUrl, { method: 'HEAD' })
   
-  // 前端路径
+  // 前端路径（基本状态）
   frontendRoute.value = response.headers.get('x-route-via') || 'direct'
   
-  // 🆕 后端路径
+  // 🆕 后端路径（基本状态）
   const vpsProxyStatus = response.headers.get('x-vps-proxy-status')
   backendRoute.value = vpsProxyStatus === 'connected' ? 'proxy' : 'direct'
+  
+  // 🆕 故障转移信息（附加信息）
+  fallbackInfo.value = {
+    occurred: response.headers.get('x-fallback-occurred') === 'true',
+    reason: response.headers.get('x-fallback-reason') || ''
+  }
   
   // 详细信息
   routeDetails.value = {
     frontend: {
       type: frontendRoute.value,
-      reason: response.headers.get('x-route-reason') || ''
+      reason: response.headers.get('x-route-reason') || '',
+      actualRoute: response.headers.get('x-actual-route') || frontendRoute.value
     },
     backend: {
       type: backendRoute.value,
@@ -615,6 +691,8 @@ curl https://tunnel-hls.yoyo-vps.5202021.xyz/health
 - [ ] API调用统一为一个函数
 - [ ] URL只有两种（tunnel/direct）
 - [ ] 响应头包含完整信息
+- [ ] 🆕 故障转移逻辑保留且正常工作
+- [ ] 🆕 故障转移响应头正确添加
 
 **测试方法**:
 ```javascript
@@ -640,13 +718,19 @@ curl -I "https://yoyoapi.5202021.xyz/hls/test/playlist.m3u8?token=xxx"
 - [ ] 后端路径正确显示（代理加速/不显示）
 - [ ] 四种组合都能正确显示
 - [ ] URL推断逻辑简化
+- [ ] 🆕 故障转移警告图标正确显示
+- [ ] 🆕 鼠标悬停显示故障原因
 
 **测试场景**:
 ```
-1. 隧道+代理 → 前端: [隧道优化]  后端: [代理加速]
-2. 隧道+直连 → 前端: [隧道优化]
-3. 直连+代理 → 前端: [直连]  后端: [代理加速]
-4. 直连+直连 → 前端: [直连]
+基本场景（4种路径组合）:
+1. 隧道+代理 → 前端: [隧道优化] (绿色)  后端: [代理加速]
+2. 隧道+直连 → 前端: [隧道优化] (绿色)
+3. 直连+代理 → 前端: [直连] (蓝色)  后端: [代理加速]
+4. 直连+直连 → 前端: [直连] (蓝色)
+
+故障转移场景（附加测试）:
+5. 隧道故障转移 → 前端: [隧道优化 ⚠️] (橙色，悬停显示原因)
 ```
 
 ---
@@ -715,9 +799,35 @@ RTMP源 → [路径1] → VPS → [路径2] → Workers → [路径3] → 用户
 
 ### **前端显示**
 ```
-前端: [隧道优化]  后端: [代理加速]  延迟: 15ms
-^_____________^   ^_____________^
- Workers→VPS       VPS→RTMP源
+基本显示（2种状态 + 2种后端状态）:
+前端: [隧道优化] (绿色)  后端: [代理加速]  延迟: 15ms
+前端: [直连] (蓝色)
+
+故障转移显示（附加警告）:
+前端: [隧道优化 ⚠️] (橙色，鼠标悬停: "隧道内容无效，已自动切换")
+      ^_____________^
+      保持显示原计划状态，增加警告标识
+```
+
+### **故障转移设计** 🆕
+```
+设计原则:
+✅ 故障转移是请求级的重试机制，不是路由决策
+✅ TunnelRouter只负责静态路由（基于隧道开关和地理位置）
+✅ proxy.js负责请求级异常处理（内容验证和自动重试）
+✅ 前端保持2种基本状态，故障信息作为附加警告显示
+
+实现方式:
+1. proxy.js检测隧道返回内容有效性
+2. 如果无效，自动切换到直连端点重试
+3. 通过响应头告知前端发生了故障转移
+4. 前端显示警告图标，但保持原状态文本
+
+优势:
+- 职责分离清晰（路由决策 vs 请求重试）
+- 不改变双维度设计的简洁性
+- 故障转移对用户影响最小
+- 下次请求仍按原策略执行（不会"学习"失败）
 ```
 
 ---
@@ -745,14 +855,19 @@ RTMP源 → [路径1] → VPS → [路径2] → Workers → [路径3] → 用户
 - [ ] 重构TunnelRouter
 - [ ] 简化streams.js
 - [ ] 更新proxy.js响应头
+- [ ] 🆕 确认保留故障转移逻辑
+- [ ] 🆕 添加故障转移响应头
 - [ ] 删除混淆路由
 - [ ] 本地测试
 - [ ] 部署到生产
 
 ### **步骤4: 阶段3执行** (前端显示)
 - [ ] 重构VideoPlayer数据结构
+- [ ] 🆕 添加故障转移信息变量
 - [ ] 更新UI模板
+- [ ] 🆕 添加故障警告图标和悬停提示
 - [ ] 简化URL推断
+- [ ] 🆕 解析故障转移响应头
 - [ ] 本地测试
 - [ ] 部署到生产
 
@@ -760,6 +875,8 @@ RTMP源 → [路径1] → VPS → [路径2] → Workers → [路径3] → 用户
 - [ ] 测试四种路由组合
 - [ ] 验证URL正确性
 - [ ] 检查前端显示
+- [ ] 🆕 测试故障转移场景
+- [ ] 🆕 验证故障警告显示
 - [ ] 性能测试
 - [ ] 压力测试
 
@@ -784,12 +901,23 @@ RTMP源 → [路径1] → VPS → [路径2] → Workers → [路径3] → 用户
 
 **预计时间**:
 - 阶段1 (VPS配置): 30分钟
-- 阶段2 (核心逻辑): 2小时
-- 阶段3 (前端显示): 1小时
-- 测试验证: 1小时
-- **总计**: 约4.5小时
+- 阶段2 (核心逻辑 + 故障转移适配): 2.5小时
+- 阶段3 (前端显示 + 故障警告): 1.5小时
+- 测试验证 (包含故障转移场景): 1小时
+- **总计**: 约5.5小时
 
 ---
 
-**文档创建时间**: 2025-10-23 12:36  
+## 📝 **文档版本记录**
+
+**v1.0** (2025-10-23 12:36):
+- 初始版本，分析问题并制定基本修复计划
+
+**v1.1** (2025-10-23 13:30): 🆕
+- 补充智能故障转移逻辑的完整说明
+- 明确故障转移是请求级重试机制，不是路由决策
+- 增加故障转移的前端显示方案（附加警告，而非替代状态）
+- 更新验证清单和实施步骤
+- 补充故障转移设计原则章节
+
 **准备就绪，等待开始修复** ✅
