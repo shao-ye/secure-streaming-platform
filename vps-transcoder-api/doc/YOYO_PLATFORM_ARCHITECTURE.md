@@ -1619,20 +1619,22 @@ function wrapHlsUrlForFrontendRoute(baseHlsUrl, frontendRoute, userToken) {
 
 #### 响应头设计（完整信息）
 ```javascript
-// ✅ 响应头包含前端和后端路径信息
+// ✅ 在proxy.js的HLS文件代理处理中添加（路径2的出口点）
+// 响应头包含路径1和路径2的完整状态信息
 headers: {
-  // 前端路径信息
-  'X-Route-Via': frontendRoute,  // 'tunnel' 或 'direct'
-  'X-Tunnel-Optimized': frontendRoute === 'tunnel' ? 'true' : 'false',
+  // 前端路径信息（路径2：VPS → Workers）
+  'X-Route-Via': workersRoute.type,  // 'tunnel' 或 'direct'
+  'X-Tunnel-Optimized': workersRoute.type === 'tunnel' ? 'true' : 'false',
   
-  // 后端路径信息（新增）
+  // 后端路径信息（路径1：RTMP源 → VPS）
   'X-VPS-Proxy-Status': vpsProxy.enabled ? 'connected' : 'direct',
   'X-Proxy-Name': vpsProxy.proxyName || '',
   
-  // 完整路径
-  'X-Full-Route': `${frontendRoute}-${vpsProxy.enabled ? 'proxy' : 'direct'}`,
+  // 完整路径组合（路径1 + 路径2）
+  'X-Full-Route': `${workersRoute.type}-${vpsProxy.enabled ? 'proxy' : 'direct'}`,
+  'X-Route-Reason': workersRoute.reason,
   
-  // 其他信息
+  // 性能和环境信息
   'X-Response-Time': `${Date.now() - startTime}ms`,
   'X-Country': request.cf?.country || 'unknown'
 }
@@ -2849,14 +2851,18 @@ const destroyHls = () => {
 ### 🔍 问题根本原因分析
 
 #### 当前架构瓶颈
+
+**视频流路径**（优化前）：
 ```
-中国用户 → Cloudflare CDN → Workers → 美国VPS (yoyo-vps.5202021.xyz)
+美国VPS → Workers → Cloudflare CDN → 中国用户
+  ↑                                        ↑
+RTMP源                               延迟300-800ms
 ```
 
 **主要瓶颈点**：
-1. **地理距离** - 美国VPS对中国大陆访问延迟300-800ms
-2. **网络稳定性** - 跨境网络丢包率高，连接不稳定
-3. **单点依赖** - 所有HLS请求都需要经过美国VPS
+1. **地理距离** - 美国VPS距离中国大陆较远，Workers访问VPS延迟300-800ms（路径2瓶颈）
+2. **网络稳定性** - 跨太平洋网络丢包率高，连接不稳定
+3. **单点依赖** - 所有HLS文件请求都需要Workers从美国VPS拉取
 4. **缓存策略** - 原有缓存策略未针对中国大陆优化
 
 ### 🚀 优化方案实施
