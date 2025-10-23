@@ -97,170 +97,66 @@ async function callTranscoderAPI(env, endpoint, method = 'GET', data = null) {
 }
 
 /**
- * 🚀 智能路由：根据当前系统模式调用VPS
+ * 统一的VPS API调用 (双维度设计)
+ * 前端路径和后端路径分别处理，互不干扰
  */
-async function callVPSWithIntelligentRouting(env, requestData, request = null) {
-  console.log('🚀 [智能路由] 开始处理请求:', JSON.stringify(requestData));
-  
+async function callVPSAPI(env, endpoint, requestData, request = null) {
   try {
-    // 1. 获取当前系统路由模式
-    console.log('🔍 [智能路由] 获取路由模式...');
-    const routingInfo = await TunnelRouter.getOptimalEndpoints(env, request);
+    // 1. 获取前端路径路由 (Workers → VPS)
+    const workersRoute = await TunnelRouter.getWorkersToVPSRoute(env, request);
+    console.log(`[callVPSAPI] 前端路径: ${workersRoute.type} - ${workersRoute.reason}`);
     
-    console.log(`🎯 [智能路由] 路由选择: ${routingInfo.type} - ${routingInfo.reason}`);
-    console.log('🔍 [智能路由] 路由详情:', JSON.stringify(routingInfo));
+    // 2. 构建API URL
+    const apiUrl = `${workersRoute.endpoints.API}/api/${endpoint}`;
+    console.log(`[callVPSAPI] 调用URL: ${apiUrl}`);
     
-    // 2. 根据模式调用VPS API
-    let vpsResponse;
-    console.log(`🔄 [智能路由] 开始${routingInfo.type}模式调用...`);
+    // 3. 调用VPS API
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': env.VPS_API_KEY,
+        'X-Route-Type': workersRoute.type,
+        'User-Agent': `YOYO-${workersRoute.type}-API/2.0`
+      },
+      body: JSON.stringify(requestData),
+      signal: AbortSignal.timeout(30000)
+    });
     
-    switch(routingInfo.type) {
-      case 'direct':
-        vpsResponse = await callVPSDirectly(env, requestData, routingInfo);
-        break;
-      case 'proxy':
-        vpsResponse = await callVPSThroughProxy(env, requestData, routingInfo);
-        break;
-      case 'tunnel':
-        vpsResponse = await callVPSThroughTunnel(env, requestData, routingInfo);
-        break;
-      default:
-        throw new Error(`Unknown routing type: ${routingInfo.type}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`VPS API调用失败 (${response.status}): ${errorText}`);
     }
     
-    console.log('✅ [智能路由] VPS调用成功:', JSON.stringify(vpsResponse));
-    return { vpsResponse, routingInfo };
+    const vpsResponse = await response.json();
+    console.log(`[callVPSAPI] ✅ VPS响应成功`);
+    
+    // 4. 查询VPS代理状态 (后端路径信息，用于展示)
+    const vpsProxy = await TunnelRouter.getVPSProxyStatus(env);
+    console.log(`[callVPSAPI] 后端路径: ${vpsProxy.enabled ? 'proxy' : 'direct'} - ${vpsProxy.reason}`);
+    
+    return {
+      vpsResponse,
+      workersRoute,
+      vpsProxy
+    };
     
   } catch (error) {
-    console.error('智能路由调用失败:', error);
-    
-    // 故障转移到直连模式
-    console.warn('🔄 故障转移到直连模式');
-    const directRouting = TunnelRouter.getDirectEndpoints();
-    const vpsResponse = await callVPSDirectly(env, requestData, directRouting);
-    
-    return { 
-      vpsResponse, 
-      routingInfo: { 
-        ...directRouting, 
-        reason: `故障转移: ${error.message}` 
-      } 
-    };
+    console.error(`[callVPSAPI] 调用失败:`, error.message);
+    throw error;
   }
 }
 
 /**
- * 直连模式调用VPS
+ * URL包装：只根据前端路径包装HLS URL
+ * 后端路径状态通过响应头传递，不影响URL
  */
-async function callVPSDirectly(env, requestData, routingInfo) {
-  const url = `${routingInfo.endpoints.API}/api/simple-stream/start-watching`;
-  const apiKey = env.VPS_API_KEY;
-  
-  console.log('🔗 [直连模式] 调用URL:', url);
-  console.log('🔑 [直连模式] API Key存在:', !!apiKey);
-  
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': apiKey,
-      'User-Agent': 'YOYO-Direct-API/1.0',
-      'X-Route-Type': 'direct'
-    },
-    body: JSON.stringify(requestData)
-  });
-  
-  console.log('📡 [直连模式] 响应状态:', response.status, response.statusText);
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('❌ [直连模式] 错误响应:', errorText);
-    throw new Error(`VPS API调用失败: ${response.status} ${response.statusText} - ${errorText}`);
-  }
-  
-  const result = await response.json();
-  console.log('✅ [直连模式] 成功响应:', JSON.stringify(result));
-  return result;
-}
-
-/**
- * 代理模式调用VPS
- * 🔧 修复：复用直连模式的调用方式，移除超时限制，确保稳定性
- */
-async function callVPSThroughProxy(env, requestData, routingInfo) {
-  console.log('🔄 [代理模式] 开始调用VPS，复用直连模式逻辑');
-  console.log('🔄 [代理模式] 请求数据:', JSON.stringify(requestData));
-  
-  // 🔧 修复：直接复用直连模式的调用逻辑，只改变User-Agent和Route-Type标识
-  const url = `${routingInfo.endpoints.API}/api/simple-stream/start-watching`;
-  const apiKey = env.VPS_API_KEY;
-  
-  console.log('🔄 [代理模式] 调用URL:', url);
-  console.log('🔑 [代理模式] API Key存在:', !!apiKey);
-  
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': apiKey,
-      'User-Agent': 'YOYO-Proxy-API/1.0',
-      'X-Route-Type': 'proxy'
-    },
-    body: JSON.stringify(requestData)
-    // 🔧 移除超时控制，和直连模式保持一致
-  });
-  
-  console.log('📡 [代理模式] 响应状态:', response.status, response.statusText);
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('❌ [代理模式] 错误响应:', errorText);
-    throw new Error(`VPS代理API调用失败: ${response.status} ${response.statusText} - ${errorText}`);
-  }
-  
-  const result = await response.json();
-  console.log('✅ [代理模式] 成功响应:', JSON.stringify(result));
-  return result;
-}
-
-/**
- * 隧道模式调用VPS
- */
-async function callVPSThroughTunnel(env, requestData, routingInfo) {
-  const url = `${routingInfo.endpoints.API}/api/simple-stream/start-watching`;
-  const apiKey = env.VPS_API_KEY;
-  
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': apiKey,
-      'User-Agent': 'YOYO-Tunnel-API/1.0',
-      'X-Route-Type': 'tunnel',
-      'X-Tunnel-Optimized': 'true'
-    },
-    body: JSON.stringify(requestData)
-  });
-  
-  if (!response.ok) {
-    throw new Error(`VPS隧道API调用失败: ${response.status} ${response.statusText}`);
-  }
-  
-  return await response.json();
-}
-
-/**
- * 🎯 URL包装：根据当前模式生成适配的HLS播放地址
- */
-function wrapHlsUrlForCurrentMode(baseHlsUrl, routingInfo, env, userToken) {
+function wrapHlsUrlForFrontendRoute(baseHlsUrl, workersRoute, userToken) {
   if (!baseHlsUrl) {
     throw new Error('Base HLS URL is required');
   }
   
-  // 获取认证token - 优先使用用户token，否则使用环境变量或默认值
-  const token = userToken || env.VIDEO_TOKEN || 'default-token';
-  
-  // 如果baseHlsUrl已经是完整URL，提取路径部分
+  // 提取路径部分
   let hlsPath;
   if (baseHlsUrl.startsWith('http')) {
     const url = new URL(baseHlsUrl);
@@ -269,17 +165,14 @@ function wrapHlsUrlForCurrentMode(baseHlsUrl, routingInfo, env, userToken) {
     hlsPath = baseHlsUrl.startsWith('/') ? baseHlsUrl : `/${baseHlsUrl}`;
   }
   
-  // 根据路由模式包装URL
-  switch(routingInfo.type) {
-    case 'direct':
-      return `https://yoyoapi.5202021.xyz${hlsPath}?token=${token}`;
-    case 'proxy':
-      return `https://yoyoapi.5202021.xyz/tunnel-proxy${hlsPath}?token=${token}`;
+  const token = userToken || 'anonymous';
+  
+  // 只有两种URL，根据前端路径决定
+  switch(workersRoute.type) {
     case 'tunnel':
       return `https://tunnel-hls.yoyo-vps.5202021.xyz${hlsPath}?token=${token}`;
+    case 'direct':
     default:
-      // 默认使用直连模式
-      console.warn(`未知路由类型 ${routingInfo.type}，使用直连模式`);
       return `https://yoyoapi.5202021.xyz${hlsPath}?token=${token}`;
   }
 }
@@ -633,43 +526,45 @@ export const handleStreams = {
         return errorResponse('Channel RTMP URL not configured', 'RTMP_URL_MISSING', 400, request);
       }
 
-      // 🔧 修复：使用callTranscoderAPI，与其他SimpleStream API保持一致
-      logInfo(env, '🔄 [startWatching] 调用VPS SimpleStreamManager API', { channelId });
-      const vpsResponse = await callTranscoderAPI(env, 'simple-stream/start-watching', 'POST', {
-        channelId: channelId,
-        rtmpUrl: streamConfig.rtmpUrl
-      });
+      // 调用VPS API (双维度路由)
+      logInfo(env, '🔄 [startWatching] 调用VPS API', { channelId });
+      const { vpsResponse, workersRoute, vpsProxy } = await callVPSAPI(
+        env, 
+        'simple-stream/start-watching',
+        { channelId },  // 只传channelId，VPS从KV获取配置
+        request
+      );
 
-      // 获取路由信息用于URL包装
-      const routingInfo = await TunnelRouter.getOptimalEndpoints(env, request);
-      
-      // 🎯 URL包装：根据当前模式生成适配的HLS播放地址
-      const wrappedHlsUrl = wrapHlsUrlForCurrentMode(
-        vpsResponse.data?.hlsUrl, 
-        routingInfo, 
-        env,
-        auth.session.sessionId  // 传递用户会话ID作为token
+      // URL包装：只根据前端路径包装
+      const wrappedHlsUrl = wrapHlsUrlForFrontendRoute(
+        vpsResponse.data?.hlsUrl,
+        workersRoute,
+        auth.session.sessionId
       );
 
       logStreamEvent(env, 'start_watching_success', channelId, auth.user.username, request, {
         hlsUrl: wrappedHlsUrl,
-        routingMode: routingInfo.type,
-        routingReason: routingInfo.reason
+        frontendRoute: workersRoute.type,
+        backendRoute: vpsProxy.enabled ? 'proxy' : 'direct'
       });
 
       return successResponse({
         channelId,
         channelName: streamConfig.name,
         hlsUrl: wrappedHlsUrl,
-        routingMode: routingInfo.type,
-        routingReason: routingInfo.reason,
-        timestamp: vpsResponse.data?.timestamp,
-        debug: {
-          originalHlsUrl: vpsResponse.data?.hlsUrl,
-          routingType: routingInfo.type,
-          country: request?.cf?.country
-        }
-      }, `Started watching successfully via ${routingInfo.type} mode`, request);
+        routeInfo: {
+          frontend: {
+            type: workersRoute.type,
+            reason: workersRoute.reason
+          },
+          backend: {
+            type: vpsProxy.enabled ? 'proxy' : 'direct',
+            proxyName: vpsProxy.proxyName,
+            reason: vpsProxy.reason
+          }
+        },
+        timestamp: vpsResponse.data?.timestamp
+      }, `Started watching via ${workersRoute.type} mode`, request);
 
     } catch (error) {
       console.error('❌ [startWatching] 捕获异常:', error);

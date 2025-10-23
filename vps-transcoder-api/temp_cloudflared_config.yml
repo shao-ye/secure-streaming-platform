@@ -1,0 +1,16 @@
+tunnel: 071aeb49-a619-4543-aee4-c9a13b4e84e4
+credentials-file: /root/.cloudflared/071aeb49-a619-4543-aee4-c9a13b4e84e4.json
+
+ingress:
+  - hostname: tunnel-api.yoyo-vps.5202021.xyz
+    service: http://localhost:3000
+    
+  - hostname: tunnel-hls.yoyo-vps.5202021.xyz
+    service: http://localhost:52535
+    
+  - hostname: tunnel-health.yoyo-vps.5202021.xyz
+    service: http://localhost:3000
+    
+  - service: http_status:404
+
+loglevel: info
