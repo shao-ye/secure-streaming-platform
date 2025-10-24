@@ -249,6 +249,11 @@ const handleStreamSelect = async (stream) => {
       }
     }
     
+    // 🔥 移动端立即关闭侧边栏，显示loading的同时收起菜单
+    if (isMobile.value) {
+      closeSidebar()
+    }
+    
     // 调用播放流API获取HLS URL
     const hlsUrl = await streamsStore.playStream(stream.id)
     selectedStream.value = {
@@ -257,11 +262,6 @@ const handleStreamSelect = async (stream) => {
       isLoading: false
     }
     ElMessage.success(`正在播放: ${stream.name}`)
-    
-    // 移动端选择流后自动关闭侧边栏
-    if (isMobile.value) {
-      closeSidebar()
-    }
   } catch (error) {
     ElMessage.error(error.message || '播放失败')
     console.error('播放流失败:', error)
