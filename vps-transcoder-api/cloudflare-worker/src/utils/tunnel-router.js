@@ -2,75 +2,63 @@ import { TUNNEL_CONFIG } from '../config/tunnel-config.js';
 
 export class TunnelRouter {
   /**
-   * 智能路由策略 - 考虑隧道、代理和地理位置
+   * 双维度路由策略 - 前端路径和后端路径独立判断
    */
   static async getOptimalEndpoints(env, request = null) {
-    // 检查用户地理位置
     const country = request?.cf?.country;
-    const isChina = country === 'CN';
+    console.log('[TunnelRouter] 🔍 双维度路由决策...', { country });
     
-    console.log('[TunnelRouter] 开始路由决策...', { country, isChina });
-    
-    // 1. 首先检查隧道配置
+    // ✅ 维度1: Workers → VPS (前端路径)
     const tunnelEnabled = await TUNNEL_CONFIG.getTunnelEnabled(env);
-    console.log('[TunnelRouter] 隧道状态:', tunnelEnabled);
+    const frontendPath = tunnelEnabled ? 'tunnel' : 'direct';
+    const frontendEndpoints = tunnelEnabled ? TUNNEL_CONFIG.TUNNEL_ENDPOINTS : TUNNEL_CONFIG.DIRECT_ENDPOINTS;
     
-    if (tunnelEnabled) {
-      console.log('[TunnelRouter] ✅ 使用隧道模式');
-      return {
-        type: 'tunnel',
-        endpoints: TUNNEL_CONFIG.TUNNEL_ENDPOINTS,
-        reason: `隧道已启用 (${country || 'unknown'})`
-      };
-    }
+    console.log(`[TunnelRouter] 📡 前端路径: ${frontendPath}`);
     
-    // 2. 隧道禁用时，检查代理状态
-    // 🔧 修复：实时查询VPS的v2ray运行状态，而不是只看KV中的配置
+    // ✅ 维度2: VPS → RTMP源 (后端路径) - 独立判断
+    let backendPath = 'direct';
+    let vpsProxyName = null;
+    
     try {
-      console.log('[TunnelRouter] 查询VPS实时代理状态...');
-      const proxyStatusResponse = await fetch(`${env.VPS_API_URL}/api/proxy/status`, {
-        method: 'GET',
-        headers: {
-          'X-API-Key': env.VPS_API_KEY
-        },
-        signal: AbortSignal.timeout(3000) // 3秒超时
+      const res = await fetch(`${env.VPS_API_URL}/api/proxy/status`, {
+        headers: { 'X-API-Key': env.VPS_API_KEY },
+        signal: AbortSignal.timeout(3000)
       });
       
-      if (proxyStatusResponse.ok) {
-        const proxyStatus = await proxyStatusResponse.json();
-        const isVpsProxyConnected = proxyStatus.data?.connectionStatus === 'connected';
-        
-        console.log('[TunnelRouter] VPS代理状态:', {
-          connectionStatus: proxyStatus.data?.connectionStatus,
-          currentProxy: proxyStatus.data?.currentProxy?.name || 'none'
-        });
-        
-        if (isVpsProxyConnected) {
-          // VPS上的v2ray确实在运行，使用代理模式
-          console.log('[TunnelRouter] ✅ 使用代理模式 (VPS v2ray已连接)');
-          return {
-            type: 'proxy',
-            endpoints: TUNNEL_CONFIG.DIRECT_ENDPOINTS,
-            reason: `代理已连接 - VPS通过${proxyStatus.data?.currentProxy?.name || 'proxy'}访问RTMP源 (${country || 'unknown'})`
-          };
-        } else {
-          console.log('[TunnelRouter] VPS代理未连接，使用直连模式');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.data?.connectionStatus === 'connected') {
+          backendPath = 'proxy';
+          vpsProxyName = data.data.currentProxy?.name || 'unknown';
+          console.log(`[TunnelRouter] 🔗 后端路径: proxy (${vpsProxyName})`);
         }
-      } else {
-        console.warn('[TunnelRouter] 查询VPS代理状态失败:', proxyStatusResponse.status);
       }
-    } catch (error) {
-      console.warn('[TunnelRouter] 查询VPS代理状态异常:', error.message);
-      // 查询失败时，不使用代理模式（安全回退）
+    } catch (e) {
+      console.warn('[TunnelRouter] VPS代理查询失败:', e.message);
     }
     
-    // 3. 隧道和代理都禁用，使用直连
-    console.log('[TunnelRouter] ✅ 使用直连模式');
+    if (backendPath === 'direct') {
+      console.log('[TunnelRouter] 📡 后端路径: direct');
+    }
+    
+    const routeType = `${frontendPath}+${backendPath}`;
+    console.log(`[TunnelRouter] ✅ 最终路由: ${routeType}`);
+    
     return {
-      type: 'direct',
-      endpoints: TUNNEL_CONFIG.DIRECT_ENDPOINTS,
-      reason: `直连模式 - 隧道和代理均禁用 (${country || 'unknown'})`
+      type: routeType,
+      frontendPath: { mode: frontendPath, endpoints: frontendEndpoints },
+      backendPath: { mode: backendPath, proxyName: vpsProxyName },
+      endpoints: frontendEndpoints,  // 向后兼容
+      reason: this._buildRouteReason(frontendPath, backendPath, vpsProxyName, country)
     };
+  }
+  
+  static _buildRouteReason(frontendPath, backendPath, vpsProxyName, country) {
+    const r = [];
+    r.push(frontendPath === 'tunnel' ? 'Workers通过Tunnel访问VPS' : 'Workers直连VPS');
+    r.push(backendPath === 'proxy' ? `VPS通过${vpsProxyName}代理获取RTMP流` : 'VPS直连RTMP源');
+    if (country) r.push(`位置: ${country}`);
+    return r.join(' | ');
   }
   
   /**
@@ -78,7 +66,7 @@ export class TunnelRouter {
    */
   static async buildVPSUrl(env, path = '', service = 'API', request = null) {
     const routing = await this.getOptimalEndpoints(env, request);
-    const baseUrl = routing.endpoints[service];
+    const baseUrl = routing.frontendPath.endpoints[service];
     const cleanPath = path.startsWith('/') ? path : `/${path}`;
     
     return {
