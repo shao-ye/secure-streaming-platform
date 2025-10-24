@@ -72,6 +72,10 @@ export const deploymentHandlers = {
         }
       });
       
+      // ✅ 添加：清除缓存，使配置立即生效
+      TUNNEL_CONFIG.clearCache();
+      console.log(`🔄 隧道配置缓存已清除: ${enabled}`);
+      
       return successResponse({
         message: `隧道配置已${enabled ? '启用' : '禁用'}，配置立即生效！`,
         deploymentId: `runtime-update-${Date.now()}`,

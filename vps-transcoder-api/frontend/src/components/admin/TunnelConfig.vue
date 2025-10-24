@@ -185,16 +185,13 @@ const handleToggle = async (enabled) => {
         // 更新配置状态
         tunnelConfig.value.enabled = data.data.enabled
       } else {
-        deploymentStatus.value = {
-          status: 'deploying',
-          message: data.data.message,
-          deploymentId: data.data.deploymentId
-        }
-        
-        ElMessage.success('隧道配置更新中，正在自动部署...')
-        
-        // 开始轮询部署状态
-        startDeploymentPolling(data.data.deploymentId)
+        // ✅ 新逻辑：立即生效
+        tunnelConfig.value.enabled = enabled
+        ElMessage.success({
+          message: `隧道优化已${enabled ? '启用' : '禁用'}，配置已生效`,
+          duration: 2000
+        })
+        setTimeout(() => loadTunnelConfig(), 500)
       }
     } else {
       throw new Error(data.message)
@@ -208,37 +205,7 @@ const handleToggle = async (enabled) => {
   }
 }
 
-const startDeploymentPolling = (deploymentId) => {
-  let progress = 0
-  let timeRemaining = 60
-  
-  const progressInterval = setInterval(() => {
-    progress += 2
-    timeRemaining -= 1
-    
-    deploymentProgress.value = Math.min(progress, 95)
-    estimatedTime.value = `${timeRemaining}秒`
-    
-    if (progress >= 95) {
-      clearInterval(progressInterval)
-    }
-  }, 1000)
-  
-  // 2分钟后停止轮询并显示完成
-  setTimeout(() => {
-    clearInterval(progressInterval)
-    deploymentProgress.value = 100
-    deploymentStatus.value = {
-      status: 'success',
-      message: '隧道配置部署完成！'
-    }
-    
-    setTimeout(() => {
-      deploymentStatus.value = null
-      loadTunnelConfig() // 重新加载配置
-    }, 3000)
-  }, 60000) // 60秒后完成
-}
+// ✅ 已删除假的部署进度轮询函数 startDeploymentPolling()
 
 const getDeploymentType = (status) => {
   switch (status) {
