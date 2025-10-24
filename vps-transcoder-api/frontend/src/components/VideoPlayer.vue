@@ -1529,8 +1529,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, 0.05);
-  backdrop-filter: blur(1px);
+  background-color: transparent;
+  backdrop-filter: none;
 }
 
 .loading-content {
