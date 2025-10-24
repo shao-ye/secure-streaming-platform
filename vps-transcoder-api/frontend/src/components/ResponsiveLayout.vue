@@ -222,6 +222,13 @@ const handleTouchEnd = () => {
 // 流选择处理
 const handleStreamSelect = async (stream) => {
   try {
+    // 🔥 立即显示加载提示，避免用户等待焦虑
+    ElMessage.info({
+      message: `正在切换到: ${stream.name}`,
+      duration: 1500,
+      showClose: false
+    })
+    
     // 调用播放流API获取HLS URL
     const hlsUrl = await streamsStore.playStream(stream.id)
     selectedStream.value = {
