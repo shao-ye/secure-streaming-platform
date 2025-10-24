@@ -95,11 +95,18 @@ export const useStreamsStore = defineStore('streams', () => {
 
   // 心跳定时器
   let heartbeatTimer = null
+  let visibilityHandler = null
+  let lastHeartbeatTime = 0
   
   const startHeartbeat = (channelId) => {
     // 清除之前的定时器
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer)
+    }
+    
+    // 移除之前的可见性监听器
+    if (visibilityHandler) {
+      document.removeEventListener('visibilitychange', visibilityHandler)
     }
     
     // 立即发送一次心跳
@@ -110,17 +117,43 @@ export const useStreamsStore = defineStore('streams', () => {
       sendHeartbeat(channelId)
     }, 30000)
     
-    console.log(`💓 开始心跳: ${channelId}`)
+    // 🔥 新增：Page Visibility API监听，防止标签页切换后心跳中断
+    visibilityHandler = () => {
+      if (document.visibilityState === 'visible') {
+        const now = Date.now()
+        const timeSinceLastHeartbeat = now - lastHeartbeatTime
+        const secondsSinceLastHeartbeat = Math.round(timeSinceLastHeartbeat / 1000)
+        
+        console.log(`📱 页面重新可见，距离上次心跳: ${secondsSinceLastHeartbeat}秒`)
+        
+        // 🎯 关键：只补发心跳，不主动重新加载
+        // 如果视频真的404了，HLS播放器会触发error事件，由VideoPlayer处理
+        if (timeSinceLastHeartbeat > 25000) {
+          console.log('⚡ 立即补发心跳，恢复会话')
+          sendHeartbeat(channelId)
+        } else {
+          console.log('✅ 心跳状态正常，无需处理')
+        }
+      } else {
+        console.log('📱 页面切换到后台')
+      }
+    }
+    
+    document.addEventListener('visibilitychange', visibilityHandler)
+    
+    console.log(`💓 开始心跳（支持后台恢复）: ${channelId}`)
   }
 
   const sendHeartbeat = async (channelId) => {
     try {
+      lastHeartbeatTime = Date.now()
+      
       await axios.post('/api/simple-stream/heartbeat', {
         channelId: channelId
       })
-      console.log(`💓 心跳发送: ${channelId}`)
+      console.log(`💓 心跳发送成功: ${channelId}`)
     } catch (error) {
-      console.error('心跳发送失败:', error)
+      console.error('❌ 心跳发送失败:', error)
     }
   }
 
@@ -128,6 +161,12 @@ export const useStreamsStore = defineStore('streams', () => {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer)
       heartbeatTimer = null
+    }
+    
+    // 🔥 新增：清理可见性监听器
+    if (visibilityHandler) {
+      document.removeEventListener('visibilitychange', visibilityHandler)
+      visibilityHandler = null
     }
   }
 

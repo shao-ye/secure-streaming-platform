@@ -368,16 +368,29 @@ const handleHlsError = (data) => {
 }
 
 const handleNetworkError = (data) => {
-  const errorMsg = '网络错误，无法加载视频流'
-  error.value = errorMsg
-  status.value = '错误'
-
-  // 尝试重试
-  if (retryCount.value < config.player.maxRetries) {
-    retryPlayback()
+  errorLog('网络错误详情:', data)
+  
+  // 🔥 关键改进：检测是否是404错误（HLS文件不存在）
+  const is404Error = data.response?.code === 404 || 
+                     data.details === 'manifestLoadError' ||
+                     data.details === 'fragLoadError'
+  
+  if (is404Error) {
+    // 404错误：HLS文件不存在，可能是VPS清理了转码进程
+    errorLog('🚨 检测到HLS文件404错误，尝试智能恢复...')
+    handleVideoRecovery()
   } else {
-    errorLog('网络错误重试次数已达上限')
-    emit('error', new Error(errorMsg))
+    // 其他网络错误，尝试重试
+    const errorMsg = '网络错误，无法加载视频流'
+    error.value = errorMsg
+    status.value = '错误'
+
+    if (retryCount.value < config.player.maxRetries) {
+      retryPlayback()
+    } else {
+      errorLog('网络错误重试次数已达上限')
+      emit('error', new Error(errorMsg))
+    }
   }
 }
 
@@ -409,6 +422,50 @@ const handleFatalError = (data) => {
   status.value = '错误'
   errorLog('HLS致命错误:', data)
   emit('error', new Error(errorMsg))
+}
+
+// 🔥 新增：智能视频恢复函数
+const handleVideoRecovery = async () => {
+  console.log('🔄 开始智能视频恢复流程...')
+  
+  const currentStream = streamsStore.currentStream
+  
+  if (!currentStream) {
+    console.error('❌ 无当前流信息，无法恢复')
+    error.value = '无法恢复视频，请手动刷新'
+    return
+  }
+  
+  try {
+    const streamId = currentStream.channelId
+    
+    console.log('🔄 重新请求视频流...', streamId)
+    
+    // 显示恢复中状态
+    status.value = '恢复中'
+    error.value = ''
+    
+    // 停止当前播放
+    destroyHls()
+    
+    // 等待500ms确保清理完成
+    await new Promise(resolve => setTimeout(resolve, 500))
+    
+    // 重新播放
+    await streamsStore.playStream(streamId)
+    
+    console.log('✅ 视频自动恢复成功')
+    
+    ElMessage.success('视频已自动恢复')
+    
+  } catch (error) {
+    console.error('❌ 视频自动恢复失败:', error)
+    
+    error.value = '视频加载失败，请点击重新加载'
+    status.value = '错误'
+    
+    ElMessage.error('视频恢复失败，请手动刷新')
+  }
 }
 
 const retryPlayback = () => {
