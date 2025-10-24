@@ -1364,36 +1364,202 @@ git branch -d feature/功能名称
 
 ---
 
-## 🌐 Cloudflare Tunnel网络优化架构
+## 🌐 双维度路由优化架构 (2025-10-24更新)
 
-### 网络优化目标
-专门针对中国大陆地区用户的视频播放体验优化，通过免费Cloudflare Tunnel技术实现：
-- **延迟减少**: 60-75% (800-2000ms → 200-500ms)
-- **加载时间**: 70-80% (10-30秒 → 3-8秒)  
-- **稳定性提升**: 25-35% (60-70% → 85-95%)
+> **📖 完整架构文档**: 详细的技术实现、代码示例、部署验证和最佳实践，请参阅:  
+> **`doc/DUAL_DIMENSION_ROUTING_ARCHITECTURE.md`** (专门的双维度路由架构文档)
 
-### 技术架构设计
+### 架构设计理念
 
-#### 隧道端点配置
-```
-# 隧道优化端点 (中国大陆用户专用)
-tunnel-api.yoyo-vps.5202021.xyz     # API服务隧道
-tunnel-hls.yoyo-vps.5202021.xyz     # HLS文件隧道  
-tunnel-health.yoyo-vps.5202021.xyz  # 健康检查隧道
+**双维度路由**是指将视频流传输路径拆分为两个独立的维度进行优化：
 
-# 直连端点 (全球其他地区)
-yoyo-vps.5202021.xyz                # 原有直连服务
-```
+1. **前端路径维度** (Frontend Path): Workers到VPS的传输路径
+   - `tunnel`: 通过Cloudflare Tunnel隧道访问VPS
+   - `direct`: Workers直接访问VPS
 
-#### 智能路由策略
-基于KV存储的智能路由决策：
+2. **后端路径维度** (Backend Path): VPS到RTMP源的传输路径  
+   - `proxy`: VPS通过V2Ray/Xray代理访问RTMP源
+   - `direct`: VPS直连RTMP源
+
+**核心优势**:
+- **独立优化**: 前后端路径可独立配置，互不影响
+- **四种组合**: 支持 tunnel+direct, tunnel+proxy, direct+direct, direct+proxy
+- **灵活调度**: 根据用户地理位置和网络状况智能选择最佳路径
+- **可视化**: 前端清晰显示两个维度的路由状态
+
+### 双维度路由决策逻辑
+
+#### 路由组合矩阵
+
+| 前端路径 | 后端路径 | 路由模式 | 使用场景 | 性能特点 |
+|---------|---------|---------|---------|----------|
+| tunnel | direct | `tunnel+direct` | 中国用户访问国内RTMP | 前端优化 |
+| tunnel | proxy | `tunnel+proxy` | 中国用户访问国外RTMP | 双重优化 |
+| direct | direct | `direct+direct` | 国外用户访问国内RTMP | 无优化 |
+| direct | proxy | `direct+proxy` | 国外用户访问国外RTMP | 后端优化 |
+
+#### 智能路由决策代码
+
 ```javascript
-// Workers KV配置 (通过管理后台设置)
-RUNTIME_TUNNEL_ENABLED="false"      # 隧道开关 (管理后台控制)
-CLOUDFLARE_ACCOUNT_ID="xxx"          # API调用账户ID
-CLOUDFLARE_API_TOKEN="xxx"           # API调用令牌
-WORKER_NAME="yoyo-streaming-api"     # Worker名称
+// cloudflare-worker/src/utils/tunnel-router.js
+class TunnelRouter {
+  static async determineRoutingPath(env, request) {
+    // 1. 判断前端路径 (Workers → VPS)
+    const frontendPath = await this.determineFrontendPath(env, request);
+    
+    // 2. 判断后端路径 (VPS → RTMP源)
+    const backendPath = await this.determineBackendPath(env);
+    
+    return {
+      routingMode: `${frontendPath.mode}+${backendPath.mode}`,
+      frontendPath: frontendPath,
+      backendPath: backendPath,
+      reason: `${frontendPath.reason} | ${backendPath.reason}`
+    };
+  }
+  
+  // 前端路径判断逻辑
+  static async determineFrontendPath(env, request) {
+    const tunnelEnabled = await this.getTunnelEnabled(env);
+    
+    if (tunnelEnabled) {
+      return {
+        mode: 'tunnel',
+        reason: 'Workers通过Tunnel访问VPS'
+      };
+    }
+    
+    return {
+      mode: 'direct',
+      reason: 'Workers直连VPS'
+    };
+  }
+  
+  // 后端路径判断逻辑
+  static async determineBackendPath(env) {
+    const proxyStatus = await this.checkVPSProxyStatus(env);
+    
+    if (proxyStatus?.connected) {
+      return {
+        mode: 'proxy',
+        reason: `VPS通过代理访问RTMP源`,
+        proxyName: proxyStatus.proxyName
+      };
+    }
+    
+    return {
+      mode: 'direct',
+      reason: 'VPS直连RTMP源'
+    };
+  }
+}
 ```
+
+### Workers代理方案 - 解决隧道SSL问题
+
+#### 问题背景 (2025-10-24)
+
+**发现的问题**:
+- 隧道模式开启后，浏览器直接访问 `tunnel-hls.yoyo-vps.5202021.xyz` 触发SSL握手失败
+- 错误：`ERR_SSL_VERSION_OR_CIPHER_MISMATCH`
+- 导致隧道模式下视频无法播放
+
+**技术架构变更**:
+```
+旧架构（SSL问题）:
+浏览器 → tunnel-hls.yoyo-vps.5202021.xyz ❌ SSL握手失败
+
+新架构（Workers代理）:
+浏览器 → yoyoapi.5202021.xyz/tunnel-proxy/hls/*
+         (正常SSL) ✅
+           ↓
+    Workers内部代理（Cloudflare内部网络）
+           ↓
+    tunnel-hls.yoyo-vps.5202021.xyz/hls/*
+    (绕过浏览器SSL验证) ✅
+```
+
+#### 实现方案
+
+```javascript
+// cloudflare-worker/src/index.js - Workers代理处理器
+router.get('/tunnel-proxy/hls/:streamId/:file', async (req, env, ctx) => {  const { streamId, file } = req.params;
+  const url = new URL(req.url);
+  const queryString = url.search;
+  
+  // Workers内部代理到tunnel-hls端点
+  const tunnelUrl = `https://tunnel-hls.yoyo-vps.5202021.xyz/hls/${streamId}/${file}${queryString}`;
+  
+  console.log(`🔄 Workers代理: ${req.url} → ${tunnelUrl}`);
+  
+  try {
+    // Workers到Tunnel的请求（Cloudflare内部，无浏览器SSL问题）
+    const response = await fetch(tunnelUrl, {
+      method: req.method,
+      headers: {
+        'User-Agent': 'YOYO-Workers-Proxy/1.0',
+        'Accept': req.headers.get('Accept') || '*/*',
+        'Range': req.headers.get('Range')
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+    
+    // 添加代理标识
+    const headers = new Headers(response.headers);
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('X-Proxied-By', 'Workers-Tunnel-Proxy');
+    
+    return new Response(response.body, {
+      status: response.status,
+      headers: headers
+    });
+    
+  } catch (error) {
+    // 故障转移到直连端点
+    const directUrl = `https://yoyo-vps.5202021.xyz/hls/${streamId}/${file}${queryString}`;
+    const fallbackResponse = await fetch(directUrl);
+    
+    const headers = new Headers(fallbackResponse.headers);
+    headers.set('X-Fallback', 'true');
+    
+    return new Response(fallbackResponse.body, {
+      status: fallbackResponse.status,
+      headers: headers
+    });
+  }
+});
+```
+
+#### URL包装逻辑
+
+```javascript
+// cloudflare-worker/src/handlers/streams.js
+function wrapHlsUrlForCurrentMode(baseHlsUrl, routingInfo, env, userToken) {
+  const hlsPath = baseHlsUrl.startsWith('/') ? baseHlsUrl : `/${baseHlsUrl}`;
+  const token = userToken || 'anonymous';
+  
+  // ✅ 只根据前端路径决定URL
+  const frontendPath = routingInfo.frontendPath?.mode || 'direct';
+  
+  switch(frontendPath) {
+    case 'tunnel':
+      // ✅ 使用Workers代理路径，绕过浏览器SSL验证问题
+      return `https://yoyoapi.5202021.xyz/tunnel-proxy${hlsPath}?token=${token}`;
+    case 'direct':
+      return `https://yoyoapi.5202021.xyz${hlsPath}?token=${token}`;
+    default:
+      console.warn(`未知前端路径 ${frontendPath}`);
+      return `https://yoyoapi.5202021.xyz${hlsPath}?token=${token}`;
+  }
+}
+```
+
+**技术优势**:
+1. **不影响其他服务**: 无需修改Cloudflare SSL全局配置
+2. **快速实施**: 只需修改Workers代码，10分钟完成
+3. **内置故障转移**: Workers代理失败时自动降级到直连
+4. **透明代理**: 对前端完全透明，保持API一致性
+5. **性能影响小**: Workers代理层延迟~10-50ms
 
 #### 智能故障转移系统 🚀
 **核心功能** (2025-10-07 实现):
