@@ -748,13 +748,12 @@ watch(() => props.hlsUrl, (newUrl, oldUrl) => {
     debugLog('HLS URL变化:', { old: oldUrl, new: newUrl })
     
     // 🔥 立即显示加载状态，避免用户等待焦虑
-    if (newUrl) {
-      loading.value = true
-      loadingMessage.value = '正在切换频道...'
-      loadingSubMessage.value = '准备播放器...'
-      loadingTime.value = 0
-      startLoadingTimer()
-    }
+    // 只要URL发生变化（包括清空），都显示loading
+    loading.value = true
+    loadingMessage.value = '正在切换频道...'
+    loadingSubMessage.value = '准备播放器...'
+    loadingTime.value = 0
+    startLoadingTimer()
     
     // 🔥 从store更新路由信息
     if (streamsStore.currentStream) {

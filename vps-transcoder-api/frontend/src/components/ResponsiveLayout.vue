@@ -229,11 +229,19 @@ const handleStreamSelect = async (stream) => {
       showClose: false
     })
     
+    // 🔥 关键修复：立即设置为加载状态，触发VideoPlayer显示loading
+    selectedStream.value = {
+      ...stream,
+      hlsUrl: '', // 先清空URL，触发loading状态
+      isLoading: true
+    }
+    
     // 调用播放流API获取HLS URL
     const hlsUrl = await streamsStore.playStream(stream.id)
     selectedStream.value = {
       ...stream,
-      hlsUrl: hlsUrl
+      hlsUrl: hlsUrl,
+      isLoading: false
     }
     ElMessage.success(`正在播放: ${stream.name}`)
     
