@@ -452,17 +452,553 @@ ssh root@142.171.75.220 "ls -la /var/recordings/stream_xxx/"
 
 ---
 
-## 📝 后续阶段概览
+## 🎯 阶段3：分段录制管理器
 
-由于文档篇幅限制，剩余阶段的详细步骤请参考：
+**目标**：实现录制分段监听和处理，自动重命名临时文件  
+**影响范围**：VPS端新增1个服务类  
+**风险等级**：🟡 中  
+**预计时间**：60分钟
 
-- **阶段3**: 分段录制管理器（SegmentedRecordingManager）
-- **阶段4**: 自动修复机制（RecordingRecoveryManager）
-- **阶段5**: 前端管理界面（频道录制开关）
-- **阶段6**: 定时任务和自动清理
-- **阶段7**: 完整集成测试
+### 3.1 创建SegmentedRecordingManager
 
-完整实施细节见：`VIDEO_RECORDING_SOLUTION.md`
+**创建文件**: `vps-transcoder-api/src/services/SegmentedRecordingManager.js`
+
+核心功能：
+- 监听录制目录的文件变化
+- 检测新分段文件生成
+- 自动重命名临时文件为标准格式
+- 通过Workers API更新D1数据库
+
+**关键方法**：
+```javascript
+class SegmentedRecordingManager {
+  constructor() {
+    this.recordingsDir = process.env.RECORDINGS_BASE_DIR || '/var/recordings';
+    this.activeWatchers = new Map();
+  }
+  
+  // 开始监听频道录制目录
+  startWatching(channelId) { /* ... */ }
+  
+  // 停止监听
+  stopWatching(channelId) { /* ... */ }
+  
+  // 处理新文件创建事件
+  async handleNewFile(channelId, filename) { /* ... */ }
+  
+  // 重命名临时文件并更新数据库
+  async processCompletedSegment(channelId, filePath) { /* ... */ }
+}
+```
+
+### 3.2 集成到SimpleStreamManager
+
+**修改文件**: `vps-transcoder-api/src/services/SimpleStreamManager.js`
+
+```javascript
+const SegmentedRecordingManager = require('./SegmentedRecordingManager');
+
+class SimpleStreamManager {
+  constructor() {
+    // ... 现有代码
+    this.recordingManager = new SegmentedRecordingManager();
+  }
+  
+  async startNewStream(channelId, rtmpUrl, options = {}) {
+    // ... 现有代码
+    
+    if (options.recordingConfig?.enabled) {
+      // 启动录制目录监听
+      this.recordingManager.startWatching(channelId);
+    }
+  }
+  
+  async stopChannel(channelId) {
+    // ... 现有代码
+    
+    // 停止录制监听
+    this.recordingManager.stopWatching(channelId);
+  }
+}
+```
+
+### 3.3 部署和验证
+
+```bash
+# 提交代码
+git add vps-transcoder-api/src/services/SegmentedRecordingManager.js
+git add vps-transcoder-api/src/services/SimpleStreamManager.js
+git commit -m "feat: 添加分段录制管理器"
+git push
+
+# 部署到VPS
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && ./vps-simple-deploy.sh"
+
+# 验证文件监听
+# 启动录制后，等待1小时检查文件是否正确重命名
+ssh root@142.171.75.220 "ls -la /var/recordings/stream_xxx/"
+```
+
+**验证清单**:
+- [ ] 新分段文件自动生成
+- [ ] 文件名格式正确（YYYY-MM-DD_HH-MM-SS.mp4）
+- [ ] D1数据库记录已创建
+- [ ] 文件大小和时长正常
+
+✅ 完成后更新进度表
+
+---
+
+## 🎯 阶段4：自动修复机制
+
+**目标**：实现服务启动时自动检测和修复损坏文件  
+**影响范围**：VPS端新增1个服务类 + app.js启动逻辑  
+**风险等级**：🟡 中  
+**预计时间**：90分钟
+
+### 4.1 创建RecordingRecoveryManager
+
+**创建文件**: `vps-transcoder-api/src/services/RecordingRecoveryManager.js`
+
+核心功能：
+- 服务启动时自动执行恢复流程
+- 处理临时文件重命名
+- 检测损坏文件并尝试修复
+- 三级修复策略：标准修复 → 强制重建 → 提取数据
+
+**关键方法**：
+```javascript
+class RecordingRecoveryManager {
+  // 启动时执行恢复
+  async recoverOnStartup() { /* ... */ }
+  
+  // 处理临时文件
+  async processTempFiles() { /* ... */ }
+  
+  // 获取中断的录制
+  async getInterruptedRecordings() { /* ... */ }
+  
+  // 验证MP4文件
+  async validateMP4File(filePath) { /* ... */ }
+  
+  // 修复文件（三级策略）
+  async repairMP4WithRecovery(filePath) { /* ... */ }
+  
+  // 方法1: 标准修复
+  async tryStandardRepair(inputPath, outputPath) { /* ... */ }
+  
+  // 方法2: 强制重建
+  async tryForceRebuild(inputPath, outputPath) { /* ... */ }
+  
+  // 方法3: 提取数据
+  async tryDataExtraction(inputPath, outputPath) { /* ... */ }
+}
+```
+
+### 4.2 集成到app.js启动流程
+
+**修改文件**: `vps-transcoder-api/src/app.js`
+
+```javascript
+const RecordingRecoveryManager = require('./services/RecordingRecoveryManager');
+
+async function startServer() {
+  // 1. 初始化恢复管理器
+  const recoveryManager = new RecordingRecoveryManager();
+  
+  // 2. 执行启动恢复（在后台进行，不阻塞服务启动）
+  recoveryManager.recoverOnStartup().catch(err => {
+    logger.error('Recovery process failed:', err);
+  });
+  
+  // 3. 启动Express服务器
+  app.listen(PORT, () => {
+    logger.info(`Server started on port ${PORT}`);
+  });
+}
+
+startServer();
+```
+
+### 4.3 部署和验证
+
+```bash
+# 提交代码
+git add vps-transcoder-api/src/services/RecordingRecoveryManager.js
+git add vps-transcoder-api/src/app.js
+git commit -m "feat: 添加录制文件自动修复机制"
+git push
+
+# 部署到VPS
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && ./vps-simple-deploy.sh"
+
+# 重启服务观察修复日志
+ssh root@142.171.75.220 "pm2 restart vps-transcoder-api && pm2 logs --lines 50"
+```
+
+**验证清单**:
+- [ ] 服务启动时执行恢复流程
+- [ ] 损坏文件被检测到
+- [ ] 修复流程正常执行
+- [ ] 修复日志完整
+
+✅ 完成后更新进度表
+
+---
+
+## 🎯 阶段5：前端管理界面
+
+**目标**：在频道管理页面添加录制控制功能  
+**影响范围**：frontend/src/views/admin/ChannelManagement.vue  
+**风险等级**：🟢 低  
+**预计时间**：45分钟
+
+### 5.1 添加录制配置API
+
+**创建文件**: `frontend/src/services/recordingApi.js`
+
+```javascript
+import axios from 'axios';
+
+const API_BASE = process.env.VUE_APP_API_URL;
+
+export default {
+  // 获取录制配置
+  async getRecordingConfig(channelId) {
+    return axios.get(`${API_BASE}/api/recording/config/${channelId}`);
+  },
+  
+  // 更新录制配置
+  async updateRecordingConfig(channelId, config) {
+    return axios.put(`${API_BASE}/api/recording/config/${channelId}`, config);
+  },
+  
+  // 获取录制文件列表
+  async getRecordingFiles(channelId, params) {
+    return axios.get(`${API_BASE}/api/recording/files`, {
+      params: { channel_id: channelId, ...params }
+    });
+  }
+};
+```
+
+### 5.2 修改频道管理界面
+
+**修改文件**: `frontend/src/views/admin/ChannelManagement.vue`
+
+在频道列表中添加录制开关：
+
+```vue
+<template>
+  <el-table :data="channels">
+    <!-- 现有列 -->
+    
+    <!-- 新增：录制列 -->
+    <el-table-column label="录制" width="100">
+      <template #default="{ row }">
+        <el-switch
+          v-model="row.recordingEnabled"
+          @change="handleRecordingToggle(row)"
+          :loading="row.recordingLoading"
+        />
+      </template>
+    </el-table-column>
+    
+    <!-- 新增：录制配置按钮 -->
+    <el-table-column label="操作" width="200">
+      <template #default="{ row }">
+        <el-button @click="openRecordingConfig(row)">
+          录制配置
+        </el-button>
+      </template>
+    </el-table-column>
+  </el-table>
+  
+  <!-- 录制配置对话框 -->
+  <el-dialog v-model="recordingDialogVisible" title="录制配置">
+    <el-form :model="recordingForm">
+      <el-form-item label="开始时间">
+        <el-time-picker v-model="recordingForm.startTime" format="HH:mm" />
+      </el-form-item>
+      <el-form-item label="结束时间">
+        <el-time-picker v-model="recordingForm.endTime" format="HH:mm" />
+      </el-form-item>
+      <el-form-item label="保留天数">
+        <el-input-number v-model="recordingForm.retentionDays" :min="1" :max="7" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="recordingDialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="saveRecordingConfig">保存</el-button>
+    </template>
+  </el-dialog>
+</template>
+
+<script setup>
+import recordingApi from '@/services/recordingApi';
+
+// 切换录制开关
+async function handleRecordingToggle(channel) {
+  channel.recordingLoading = true;
+  try {
+    await recordingApi.updateRecordingConfig(channel.id, {
+      enabled: channel.recordingEnabled
+    });
+    ElMessage.success('录制设置已更新');
+  } catch (error) {
+    channel.recordingEnabled = !channel.recordingEnabled;
+    ElMessage.error('更新失败：' + error.message);
+  } finally {
+    channel.recordingLoading = false;
+  }
+}
+</script>
+```
+
+### 5.3 部署前端
+
+```bash
+cd frontend
+npm run build
+
+# 自动部署到Cloudflare Pages（通过GitHub推送）
+git add frontend/
+git commit -m "feat: 添加频道录制管理界面"
+git push
+```
+
+### 5.4 验证测试
+
+**测试步骤**：
+1. 打开频道管理页面
+2. 找到任意频道，开启录制开关
+3. 点击"录制配置"，修改时间设置
+4. 验证VPS上FFmpeg进程启动
+5. 检查录制文件是否生成
+
+**验证清单**:
+- [ ] 录制开关显示正常
+- [ ] 开关状态与数据库同步
+- [ ] 录制配置对话框正常打开
+- [ ] 配置保存成功
+- [ ] FFmpeg进程已启动录制
+
+✅ 完成后更新进度表
+
+---
+
+## 🎯 阶段6：定时任务和自动清理
+
+**目标**：实现定时录制和自动清理过期文件  
+**影响范围**：VPS端新增定时任务模块  
+**风险等级**：🟡 中  
+**预计时间**：60分钟
+
+### 6.1 创建定时任务管理器
+
+**创建文件**: `vps-transcoder-api/src/services/ScheduledTaskManager.js`
+
+```javascript
+const cron = require('node-cron');
+
+class ScheduledTaskManager {
+  constructor(simpleStreamManager) {
+    this.streamManager = simpleStreamManager;
+    this.tasks = new Map();
+    this.cleanupHour = process.env.RECORDINGS_CLEANUP_HOUR || 3;
+    this.retentionDays = process.env.RECORDINGS_RETENTION_DAYS || 2;
+  }
+  
+  // 启动所有定时任务
+  startAllTasks() {
+    this.startRecordingSchedule();
+    this.startCleanupSchedule();
+  }
+  
+  // 定时录制任务（每天7:50启动，17:20停止）
+  startRecordingSchedule() {
+    // 每天7:50启动录制
+    cron.schedule('50 7 * * *', async () => {
+      await this.startDailyRecording();
+    });
+    
+    // 每天17:20停止录制
+    cron.schedule('20 17 * * *', async () => {
+      await this.stopDailyRecording();
+    });
+  }
+  
+  // 定时清理任务（凌晨3点）
+  startCleanupSchedule() {
+    const hour = this.cleanupHour;
+    cron.schedule(`0 ${hour} * * *`, async () => {
+      await this.cleanupOldRecordings();
+    });
+  }
+  
+  // 清理过期文件
+  async cleanupOldRecordings() {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - this.retentionDays);
+    
+    // 遍历所有频道目录
+    const channels = await fs.readdir(this.recordingsDir);
+    for (const channelDir of channels) {
+      const files = await fs.readdir(path.join(this.recordingsDir, channelDir));
+      
+      for (const file of files) {
+        const filePath = path.join(this.recordingsDir, channelDir, file);
+        const stats = await fs.stat(filePath);
+        
+        if (stats.mtime < cutoffDate) {
+          await fs.unlink(filePath);
+          logger.info('Deleted old recording', { file, age: stats.mtime });
+        }
+      }
+    }
+  }
+}
+
+module.exports = ScheduledTaskManager;
+```
+
+### 6.2 集成到app.js
+
+**修改文件**: `vps-transcoder-api/src/app.js`
+
+```javascript
+const ScheduledTaskManager = require('./services/ScheduledTaskManager');
+
+async function startServer() {
+  // ... 现有代码
+  
+  // 启动定时任务
+  const taskManager = new ScheduledTaskManager(simpleStreamManager);
+  taskManager.startAllTasks();
+  
+  logger.info('Scheduled tasks started');
+}
+```
+
+### 6.3 安装依赖
+
+```bash
+cd vps-transcoder-api
+npm install node-cron --save
+```
+
+### 6.4 部署和验证
+
+```bash
+git add vps-transcoder-api/
+git commit -m "feat: 添加定时录制和自动清理功能"
+git push
+
+# 部署到VPS
+ssh root@142.171.75.220 "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && npm install && ./vps-simple-deploy.sh"
+```
+
+**验证清单**:
+- [ ] node-cron已安装
+- [ ] 定时任务已启动
+- [ ] 7:50自动开始录制
+- [ ] 17:20自动停止录制
+- [ ] 凌晨3点清理过期文件
+
+✅ 完成后更新进度表
+
+---
+
+## 🎯 阶段7：完整集成测试
+
+**目标**：验证所有功能正常工作，压力测试  
+**影响范围**：全系统  
+**风险等级**：🟢 低（仅测试）  
+**预计时间**：120分钟
+
+### 7.1 功能测试清单
+
+**基础功能**:
+- [ ] 手动启动/停止录制
+- [ ] 定时自动录制（7:50-17:20）
+- [ ] 分段录制（每1小时切换文件）
+- [ ] 文件命名格式正确
+- [ ] D1数据库记录同步
+
+**高级功能**:
+- [ ] 配置变更自动重启FFmpeg
+- [ ] 进程崩溃后自动修复文件
+- [ ] 服务重启后恢复录制状态
+- [ ] 过期文件自动清理
+- [ ] 录制不影响HLS播放
+
+### 7.2 压力测试
+
+**测试场景**：
+```bash
+# 同时录制8个频道
+for i in {1..8}; do
+  curl -X POST https://yoyo-vps.5202021.xyz/api/simple-stream/start-watching \
+    -H "X-API-Key: YOUR_KEY" \
+    -d "{
+      \"channelId\": \"stream_$i\",
+      \"rtmpUrl\": \"rtmp://source$i/live\",
+      \"options\": {\"recordingConfig\": {\"enabled\": true}}
+    }"
+done
+
+# 监控系统资源
+ssh root@142.171.75.220 "top -b -n 1 | head -20"
+```
+
+**性能指标**:
+- [ ] CPU使用率 < 80%
+- [ ] 内存使用 < 4GB
+- [ ] 磁盘I/O正常
+- [ ] 所有频道录制正常
+
+### 7.3 异常测试
+
+**测试1：进程崩溃恢复**
+```bash
+# 强制终止FFmpeg进程
+ssh root@142.171.75.220 "pkill -9 ffmpeg"
+
+# 重启服务
+ssh root@142.171.75.220 "pm2 restart vps-transcoder-api"
+
+# 验证文件修复
+ssh root@142.171.75.220 "ls -la /var/recordings/*/
+```
+
+**测试2：磁盘空间不足**
+```bash
+# 模拟磁盘满（谨慎使用）
+# 验证错误处理和告警
+```
+
+**测试3：网络中断**
+```bash
+# 断开RTMP源
+# 验证录制停止和错误记录
+```
+
+### 7.4 验证报告
+
+完成所有测试后，填写验证报告：
+
+**功能验证**: ✅/❌  
+**性能验证**: ✅/❌  
+**异常处理**: ✅/❌  
+**文档完整性**: ✅/❌
+
+**发现的问题**：
+1. 问题描述
+2. 影响范围
+3. 解决方案
+4. 是否阻塞上线
+
+✅ 完成后更新进度表，标记项目完成
 
 ---
 
