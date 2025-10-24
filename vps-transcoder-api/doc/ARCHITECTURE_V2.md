@@ -187,7 +187,7 @@ class SimpleStreamManager {
 │  │   VPS    │ ─────▶  │ RTMP源   │                  │
 │  └──────────┘         └──────────┘                  │
 │     │                                                │
-│     ├─ proxy   (V2Ray/Xray代理)                     │
+│     ├─ proxy   (V2Ray/Xray代理) ⚠️ 暂未实现完整      │
 │     └─ direct  (直接连接)                            │
 └──────────────────────────────────────────────────────┘
 ```
@@ -197,9 +197,11 @@ class SimpleStreamManager {
 | 路由模式 | 前端路径 | 后端路径 | 使用场景 | 优势 |
 |---------|---------|---------|---------|------|
 | `tunnel+direct` | tunnel | direct | 中国用户访问国内RTMP | 前端优化 |
-| `tunnel+proxy` | tunnel | proxy | 中国用户访问国外RTMP | 双重优化 |
-| `direct+direct` | direct | direct | 海外用户访问国内RTMP | 无优化 |
-| `direct+proxy` | direct | proxy | 海外用户访问国外RTMP | 后端优化 |
+| `tunnel+proxy` | tunnel | proxy | 中国用户访问国外RTMP | 双重优化 ⚠️ |  
+| `direct+direct` | direct | direct | 海外用户访问国内RTMP | 无优化 |  
+| `direct+proxy` | direct | proxy | 海外用户访问国外RTMP | 后端优化 ⚠️ |
+
+> ⚠️ **注意**: 代理模式（proxy）下VPS到RTMP源的连接暂未实现完整，代理状态检测已实现但FFmpeg通过代理访问RTMP的功能仍在开发中。
 
 ### 路由决策流程
 
@@ -307,6 +309,12 @@ ingress:
 
 **用途**: VPS访问海外RTMP源时的网络优化
 
+**实现状态**: ⚠️ **部分实现**
+- ✅ 代理服务管理（连接/断开）
+- ✅ 代理状态检测和同步
+- ✅ 管理后台控制界面
+- ⚠️ **FFmpeg通过代理访问RTMP（暂未完整实现）**
+
 **管理方式**:
 - 管理后台一键连接/断开
 - 支持多个代理配置（jp、us等）
@@ -318,12 +326,17 @@ VPS需要访问RTMP源
     ↓
 检查代理连接状态
     ↓
-已连接 → 通过代理访问 | 未连接 → 直连访问
+已连接 → 通过代理访问 (⚠️ 暂未实现) | 未连接 → 直连访问 ✅
     ↓
 路由信息返回给Workers
     ↓
 Workers组合双维度路由模式
 ```
+
+**待完成功能**:
+- [ ] FFmpeg通过SOCKS5代理连接RTMP源
+- [ ] 代理连接失败自动回退到直连
+- [ ] 代理性能监控和统计
 
 ---
 
