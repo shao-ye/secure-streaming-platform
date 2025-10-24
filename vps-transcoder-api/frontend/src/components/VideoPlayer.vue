@@ -1529,8 +1529,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(3px);
+  background-color: rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(1px);
 }
 
 .loading-content {
@@ -1539,11 +1539,12 @@ onUnmounted(() => {
   align-items: center;
   gap: 20px;
   padding: 30px;
-  background: rgba(0, 0, 0, 0.7);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  /* 完全透明背景，移除黑框 */
+  background: transparent;
+  border-radius: 0;
+  border: none;
+  backdrop-filter: none;
+  box-shadow: none;
 }
 
 .loading-spinner {
@@ -1574,11 +1575,14 @@ onUnmounted(() => {
   font-size: 18px;
   font-weight: 500;
   color: #fff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8), 
+               0 0 20px rgba(0, 0, 0, 0.6);
 }
 
 .loading-subtitle {
   font-size: 14px;
-  color: #909399;
+  color: #e0e0e0;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
 }
 
 .loading-timer {
@@ -1586,14 +1590,19 @@ onUnmounted(() => {
   color: #67C23A;
   font-family: monospace;
   margin-top: 5px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
 }
 
 .loading-tips {
   text-align: center;
   padding: 12px 20px;
-  background: rgba(64, 158, 255, 0.1);
-  border-radius: 8px;
-  border: 1px solid rgba(64, 158, 255, 0.2);
+  background: transparent;
+  border-radius: 0;
+  border: none;
+}
+
+.loading-tips .el-text {
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
 }
 
 .error-overlay {
