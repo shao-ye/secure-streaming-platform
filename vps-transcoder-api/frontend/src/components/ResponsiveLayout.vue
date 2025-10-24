@@ -112,6 +112,8 @@
           <VideoPlayer 
             :hls-url="selectedStream.hlsUrl" 
             :stream-name="selectedStream.name"
+            :is-switching="selectedStream.isLoading"
+            :next-stream-name="selectedStream.nextStreamName"
             :key="selectedStream.id"
             @error="handlePlayerError"
           />
@@ -229,11 +231,13 @@ const handleStreamSelect = async (stream) => {
       showClose: false
     })
     
-    // 🔥 关键修复：立即设置为加载状态，触发VideoPlayer显示loading
-    selectedStream.value = {
-      ...stream,
-      hlsUrl: '', // 先清空URL，触发loading状态
-      isLoading: true
+    // 🔥 关键修复：设置loading标志但保留旧URL，让用户能看到旧视频
+    if (selectedStream.value) {
+      selectedStream.value = {
+        ...selectedStream.value,
+        isLoading: true,
+        nextStreamName: stream.name
+      }
     }
     
     // 调用播放流API获取HLS URL

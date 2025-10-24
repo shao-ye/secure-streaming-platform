@@ -45,7 +45,7 @@
       </div>
 
       <!-- 增强的加载提示 -->
-      <div v-if="loading" class="loading-overlay">
+      <div v-if="loading || isSwitching" class="loading-overlay">
         <div class="loading-content">
           <div class="loading-spinner">
             <el-icon class="is-loading" :size="60">
@@ -53,9 +53,9 @@
             </el-icon>
           </div>
           <div class="loading-text">
-            <div class="loading-title">{{ loadingMessage }}</div>
-            <div class="loading-subtitle">{{ loadingSubMessage }}</div>
-            <div class="loading-timer">已等待 {{ loadingTime }} 秒</div>
+            <div class="loading-title">{{ isSwitching ? `正在切换到: ${nextStreamName}` : loadingMessage }}</div>
+            <div class="loading-subtitle">{{ isSwitching ? '准备新频道...' : loadingSubMessage }}</div>
+            <div class="loading-timer" v-if="!isSwitching">已等待 {{ loadingTime }} 秒</div>
           </div>
           <div class="loading-tips">
             <el-text type="info" size="small">
@@ -139,6 +139,14 @@ const props = defineProps({
     required: true
   },
   streamName: {
+    type: String,
+    default: ''
+  },
+  isSwitching: {
+    type: Boolean,
+    default: false
+  },
+  nextStreamName: {
     type: String,
     default: ''
   }
@@ -747,13 +755,14 @@ watch(() => props.hlsUrl, (newUrl, oldUrl) => {
   if (newUrl !== oldUrl) {
     debugLog('HLS URL变化:', { old: oldUrl, new: newUrl })
     
-    // 🔥 立即显示加载状态，避免用户等待焦虑
-    // 只要URL发生变化（包括清空），都显示loading
-    loading.value = true
-    loadingMessage.value = '正在切换频道...'
-    loadingSubMessage.value = '准备播放器...'
-    loadingTime.value = 0
-    startLoadingTimer()
+    // 🔥 只有在非切换状态下才设置loading，切换状态由isSwitching prop控制
+    if (!props.isSwitching && newUrl) {
+      loading.value = true
+      loadingMessage.value = '正在连接视频流...'
+      loadingSubMessage.value = '启动转码服务'
+      loadingTime.value = 0
+      startLoadingTimer()
+    }
     
     // 🔥 从store更新路由信息
     if (streamsStore.currentStream) {
