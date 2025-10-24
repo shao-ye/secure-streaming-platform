@@ -233,8 +233,17 @@ const handleStreamSelect = async (stream) => {
     
     // 🔥 关键修复：设置loading标志但保留旧URL，让用户能看到旧视频
     if (selectedStream.value) {
+      // 切换频道：保留旧URL，添加loading标志
       selectedStream.value = {
         ...selectedStream.value,
+        isLoading: true,
+        nextStreamName: stream.name
+      }
+    } else {
+      // 🔥 首次选择：立即设置loading状态，先用空URL
+      selectedStream.value = {
+        ...stream,
+        hlsUrl: '',
         isLoading: true,
         nextStreamName: stream.name
       }
