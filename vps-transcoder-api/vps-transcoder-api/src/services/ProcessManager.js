@@ -60,10 +60,12 @@ class ProcessManager {
     const outputFile = path.join(outputDir, 'playlist.m3u8');
 
     return [
-      // 输入配置 - 低延迟优化
-      '-fflags', '+nobuffer+flush_packets',
+      // 输入配置 - 极速启动优化
+      '-fflags', '+nobuffer+flush_packets+genpts',
       '-flags', 'low_delay',
       '-strict', 'experimental',
+      '-analyzeduration', '500000',
+      '-probesize', '500000',
       '-i', rtmpUrl,
       '-avoid_negative_ts', 'make_zero',
       '-copyts',
@@ -97,10 +99,10 @@ class ProcessManager {
       '-ar', '44100',
       '-aac_coder', 'fast',
       
-      // HLS输出配置 - 极低延迟设置
+      // HLS输出配置 - 极速启动设置
       '-f', 'hls',
-      '-hls_time', '1', // 减少分片时间到1秒
-      '-hls_list_size', '3', // 减少播放列表大小到3个分片
+      '-hls_time', '0.5', // 🔥 减少分片时间到0.5秒，更快生成第一个分片
+      '-hls_list_size', '6', // 增加播放列表大小确保流畅
       '-hls_segment_filename', path.join(outputDir, 'segment%03d.ts'),
       '-hls_flags', 'delete_segments+round_durations+independent_segments+program_date_time',
       '-hls_allow_cache', '0',
@@ -183,8 +185,8 @@ class ProcessManager {
       // 设置进程事件监听器
       this.setupProcessEventHandlers(streamInfo);
 
-      // 等待进程稳定启动（检查输出文件生成）
-      await this.waitForStreamReady(streamId, 30000); // 30秒超时（增加）
+      // 🔥 快速启动：只等待playlist生成，不等待segment
+      await this.waitForStreamReady(streamId, 15000); // 15秒超时
 
       streamInfo.status = 'running';
 
@@ -280,7 +282,7 @@ class ProcessManager {
    * @param {number} timeout - 超时时间（毫秒）
    * @returns {Promise<void>}
    */
-  async waitForStreamReady(streamId, timeout = 30000) {
+  async waitForStreamReady(streamId, timeout = 15000) {
     const startTime = Date.now();
     const outputDir = path.join(this.hlsOutputDir, streamId);
     const m3u8File = path.join(outputDir, 'playlist.m3u8');
@@ -297,12 +299,16 @@ class ProcessManager {
           return reject(new Error(`Stream ${streamId} process terminated during startup`));
         }
 
-        // 检查m3u8文件是否生成
+        // 🔥 快速启动优化：只要playlist文件存在且有内容就返回
+        // 不再等待segment完全生成，让播放器尽早开始尝试加载
         if (fs.existsSync(m3u8File)) {
           try {
             const content = fs.readFileSync(m3u8File, 'utf8');
-            // 检查是否包含至少一个segment
-            if (content.includes('.ts')) {
+            // 只要playlist有内容（包含#EXTM3U头）就认为ready
+            if (content.length > 0 && content.includes('#EXTM3U')) {
+              logger.info(`Stream ${streamId} playlist ready (fast start mode)`, {
+                waitTime: Date.now() - startTime
+              });
               return resolve();
             }
           } catch (error) {
@@ -310,8 +316,8 @@ class ProcessManager {
           }
         }
 
-        // 继续检查
-        setTimeout(checkReady, 500);
+        // 🔥 减少检查间隔到200ms，更快响应
+        setTimeout(checkReady, 200);
       };
 
       checkReady();
