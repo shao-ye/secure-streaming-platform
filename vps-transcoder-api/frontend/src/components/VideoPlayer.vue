@@ -44,12 +44,25 @@
         </video>
       </div>
 
+      <!-- 增强的加载提示 -->
       <div v-if="loading" class="loading-overlay">
-        <el-loading
-          text="正在加载视频流..."
-          background="rgba(0, 0, 0, 0.8)"
-          style="border-radius: 8px;"
-        />
+        <div class="loading-content">
+          <div class="loading-spinner">
+            <el-icon class="is-loading" :size="60">
+              <Loading />
+            </el-icon>
+          </div>
+          <div class="loading-text">
+            <div class="loading-title">{{ loadingMessage }}</div>
+            <div class="loading-subtitle">{{ loadingSubMessage }}</div>
+            <div class="loading-timer">已等待 {{ loadingTime }} 秒</div>
+          </div>
+          <div class="loading-tips">
+            <el-text type="info" size="small">
+              💡 首次加载需要启动转码服务，预计需要 20-30 秒
+            </el-text>
+          </div>
+        </div>
       </div>
 
       <div v-if="error" class="error-overlay">
@@ -115,7 +128,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Connection, Link } from '@element-plus/icons-vue'
+import { Refresh, Connection, Link, Loading } from '@element-plus/icons-vue'
 import Hls from 'hls.js'
 import { config, debugLog, errorLog, warnLog } from '../utils/config'
 import { useStreamsStore } from '../stores/streams'
@@ -142,6 +155,10 @@ const error = ref('')
 const status = ref('准备中')
 const retryCount = ref(0)
 const retryTimer = ref(null)
+const loadingMessage = ref('正在连接视频流...')
+const loadingSubMessage = ref('准备播放器...')
+const loadingTime = ref(0)
+const loadingTimerRef = ref(null)
 
 // 双维度路由状态
 const frontendPath = ref('')
@@ -206,6 +223,10 @@ const initHls = () => {
   error.value = ''
   status.value = '加载中'
   retryCount.value = 0
+  loadingMessage.value = '正在连接视频流...'
+  loadingSubMessage.value = '启动转码服务'
+  loadingTime.value = 0
+  startLoadingTimer()
 
   if (Hls.isSupported()) {
     hls.value = new Hls({
@@ -264,6 +285,9 @@ const setupHlsEventListeners = () => {
   hls.value.on(Hls.Events.MANIFEST_PARSED, () => {
     debugLog('HLS清单解析完成')
     status.value = '就绪'
+    loadingMessage.value = '加载完成'
+    loadingSubMessage.value = '准备播放...'
+    stopLoadingTimer()
     emit('ready')
 
     // 尝试自动播放
@@ -278,6 +302,8 @@ const setupHlsEventListeners = () => {
   // 清单加载完成 - 检测连接模式
   hls.value.on(Hls.Events.MANIFEST_LOADED, (event, data) => {
     debugLog('HLS清单加载完成，检测连接模式', data)
+    loadingMessage.value = '正在解析视频流...'
+    loadingSubMessage.value = '加载播放列表'
     
     // 检测响应头中的路由信息
     if (data && data.networkDetails) {
@@ -325,6 +351,10 @@ const setupHlsEventListeners = () => {
   // 片段加载开始
   hls.value.on(Hls.Events.FRAG_LOADING, () => {
     debugLog('片段加载中...')
+    if (loading.value) {
+      loadingMessage.value = '正在加载视频数据...'
+      loadingSubMessage.value = '下载视频分片'
+    }
   })
 
   // 片段加载完成
@@ -537,6 +567,9 @@ const destroyHls = () => {
     retryTimer.value = null
   }
   
+  // 清除加载计时器
+  stopLoadingTimer()
+  
   // 重置状态
   loading.value = false
   error.value = ''
@@ -548,6 +581,28 @@ const reloadStream = () => {
   debugLog('手动重新加载流')
   retryCount.value = 0
   initHls()
+}
+
+// 加载计时器
+const startLoadingTimer = () => {
+  stopLoadingTimer()
+  loadingTime.value = 0
+  loadingTimerRef.value = setInterval(() => {
+    loadingTime.value++
+    // 根据加载时间更新提示信息
+    if (loadingTime.value > 30) {
+      loadingSubMessage.value = '加载时间较长，请稍候...'
+    } else if (loadingTime.value > 15) {
+      loadingSubMessage.value = '正在建立连接...'
+    }
+  }, 1000)
+}
+
+const stopLoadingTimer = () => {
+  if (loadingTimerRef.value) {
+    clearInterval(loadingTimerRef.value)
+    loadingTimerRef.value = null
+  }
 }
 
 // 🔥 URL推断连接模式函数
@@ -1457,7 +1512,70 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, 0.8);
+  background-color: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(5px);
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 30px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.loading-spinner {
+  color: #409EFF;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+.loading-text {
+  text-align: center;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.loading-title {
+  font-size: 18px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.loading-subtitle {
+  font-size: 14px;
+  color: #909399;
+}
+
+.loading-timer {
+  font-size: 13px;
+  color: #67C23A;
+  font-family: monospace;
+  margin-top: 5px;
+}
+
+.loading-tips {
+  text-align: center;
+  padding: 12px 20px;
+  background: rgba(64, 158, 255, 0.1);
+  border-radius: 8px;
+  border: 1px solid rgba(64, 158, 255, 0.2);
 }
 
 .error-overlay {
