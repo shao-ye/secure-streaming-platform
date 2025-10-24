@@ -158,12 +158,21 @@ export const useStreamsStore = defineStore('streams', () => {
           channelId: streamId 
         });
         
+        // 解析双维度路由信息
+        const routingMode = data.routingMode || 'direct+direct'
+        const [frontendPath, backendPath] = routingMode.split('+')
+        
         currentStream.value = {
           id: streamId,
           channelId: streamId, // 使用channelId替代sessionId
           hlsUrl: hlsUrl,
           channelName: data.channelName || `频道 ${streamId}`,
-          totalViewers: data.totalViewers || 0
+          totalViewers: data.totalViewers || 0,
+          // 双维度路由信息
+          routingMode: routingMode,
+          frontendPath: frontendPath || 'direct',
+          backendPath: backendPath || 'direct',
+          routingReason: data.routingReason || ''
         }
         
         // 启动心跳保持频道活跃

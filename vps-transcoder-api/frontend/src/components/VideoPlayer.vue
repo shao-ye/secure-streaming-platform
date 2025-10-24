@@ -83,13 +83,25 @@
         <span class="label">状态:</span>
         <el-tag :type="statusType" size="small">{{ status }}</el-tag>
       </div>
-      <div class="info-item" v-if="connectionMode">
-        <span class="label">连接:</span>
-        <el-tag :type="connectionModeType" size="small">
+      <!-- 前端路径 -->
+      <div class="info-item" v-if="frontendPath">
+        <span class="label">前端:</span>
+        <el-tag :type="frontendPathType" size="small">
           <el-icon style="margin-right: 4px;">
-            <component :is="connectionModeIcon" />
+            <component :is="frontendPathIcon" />
           </el-icon>
-          {{ connectionModeText }}
+          {{ frontendPathText }}
+        </el-tag>
+      </div>
+      
+      <!-- 后端路径 -->
+      <div class="info-item" v-if="backendPath">
+        <span class="label">后端:</span>
+        <el-tag :type="backendPathType" size="small">
+          <el-icon style="margin-right: 4px;">
+            <component :is="backendPathIcon" />
+          </el-icon>
+          {{ backendPathText }}
         </el-tag>
       </div>
       <div class="info-item" v-if="responseTime">
@@ -106,6 +118,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Connection, Link } from '@element-plus/icons-vue'
 import Hls from 'hls.js'
 import { config, debugLog, errorLog, warnLog } from '../utils/config'
+import { useStreamsStore } from '../stores/streams'
 
 const props = defineProps({
   hlsUrl: {
@@ -120,6 +133,7 @@ const props = defineProps({
 
 const emit = defineEmits(['error', 'ready', 'playing', 'ended'])
 
+const streamsStore = useStreamsStore()
 const videoRef = ref(null)
 const containerRef = ref(null)
 const hls = ref(null)
@@ -129,8 +143,10 @@ const status = ref('准备中')
 const retryCount = ref(0)
 const retryTimer = ref(null)
 
-// 连接模式状态
-const connectionMode = ref('')
+// 双维度路由状态
+const frontendPath = ref('')
+const backendPath = ref('')
+const vpsProxyName = ref('')
 const responseTime = ref('')
 
 // 缩放相关状态
@@ -154,43 +170,19 @@ const statusType = computed(() => {
   }
 })
 
-// 连接模式相关计算属性
-const connectionModeType = computed(() => {
-  switch (connectionMode.value) {
-    case 'tunnel': return 'success'
-    case 'proxy': return 'success'
-    case 'smart-fallback': return 'warning'
-    case 'direct-fallback': return 'warning'
-    case 'direct': return 'info'
-    case 'unknown': return 'danger'
-    case 'error': return 'danger'
-    default: return 'info'
-  }
-})
+// 前端路径计算属性
+const frontendPathType = computed(() => frontendPath.value === 'tunnel' ? 'success' : 'info')
+const frontendPathIcon = computed(() => frontendPath.value === 'tunnel' ? Connection : Link)
+const frontendPathText = computed(() => frontendPath.value === 'tunnel' ? '隧道优化' : '直连')
 
-const connectionModeIcon = computed(() => {
-  switch (connectionMode.value) {
-    case 'tunnel': return Connection
-    case 'proxy': return Connection
-    case 'smart-fallback': return Link
-    case 'direct-fallback': return Link
-    case 'direct': return Link
-    default: return Connection
+// 后端路径计算属性
+const backendPathType = computed(() => backendPath.value === 'proxy' ? 'success' : 'info')
+const backendPathIcon = computed(() => backendPath.value === 'proxy' ? Connection : Link)
+const backendPathText = computed(() => {
+  if (backendPath.value === 'proxy') {
+    return vpsProxyName.value ? `代理(${vpsProxyName.value})` : '代理'
   }
-})
-
-const connectionModeText = computed(() => {
-  switch (connectionMode.value) {
-    case 'tunnel': return '隧道优化'
-    case 'proxy': return '代理模式'
-    case 'smart-fallback': return '智能切换'
-    case 'direct-fallback': return '故障切换'
-    case 'direct': return '直连模式'
-    case 'detecting': return '检测中'
-    case 'unknown': return '未知模式'
-    case 'error': return '检测错误'
-    default: return '检测中'
-  }
+  return '直连'
 })
 
 // 视频变换样式
@@ -643,23 +635,14 @@ watch(() => props.hlsUrl, (newUrl, oldUrl) => {
   if (newUrl !== oldUrl) {
     debugLog('HLS URL变化:', { old: oldUrl, new: newUrl })
     
-    // 🔥 URL推断：立即更新连接模式
-    if (newUrl) {
-      const previousMode = connectionMode.value
-      const modeInfo = detectConnectionModeFromUrl(newUrl, previousMode)
-      
-      connectionMode.value = modeInfo.type
-      debugLog('🎯 URL推断连接模式:', {
-        url: newUrl,
-        previousMode,
-        newMode: modeInfo.type,
-        reason: modeInfo.reason
+    // 🔥 从store更新路由信息
+    if (streamsStore.currentStream) {
+      frontendPath.value = streamsStore.currentStream.frontendPath || 'direct'
+      backendPath.value = streamsStore.currentStream.backendPath || 'direct'
+      debugLog('更新路由信息:', {
+        frontend: frontendPath.value,
+        backend: backendPath.value
       })
-      
-      // 如果是故障切换，显示提示信息
-      if (modeInfo.type === 'direct-fallback') {
-        debugLog('🚨 检测到故障切换:', modeInfo.description)
-      }
     }
     
     // 🔥 关键修复：URL变化时立即销毁旧实例
@@ -739,6 +722,18 @@ const checkFullscreenState = () => {
 
 onMounted(() => {
   debugLog('VideoPlayer组件挂载')
+  
+  // 从store读取路由信息
+  if (streamsStore.currentStream) {
+    frontendPath.value = streamsStore.currentStream.frontendPath || 'direct'
+    backendPath.value = streamsStore.currentStream.backendPath || 'direct'
+    debugLog('读取路由信息:', {
+      frontend: frontendPath.value,
+      backend: backendPath.value,
+      routing: streamsStore.currentStream.routingMode
+    })
+  }
+  
   if (props.hlsUrl) {
     initHls()
   }
