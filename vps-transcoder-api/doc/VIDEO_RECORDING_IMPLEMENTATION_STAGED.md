@@ -581,19 +581,72 @@ class RecordingRecoveryManager {
   // 验证MP4文件
   async validateMP4File(filePath) { /* ... */ }
   
-  // 修复文件（三级策略）
-  async repairMP4WithRecovery(filePath) { /* ... */ }
+  // 修复文件（三级策略 + 文件保护机制）
+  async repairMP4WithRecovery(filePath) {
+    const backupPath = `${filePath}.backup`;
+    const tempPath = `${filePath}.repairing`;
+    
+    try {
+      // 🔐 关键：先备份原文件
+      await fs.copyFile(filePath, backupPath);
+      
+      // 在临时文件上尝试修复（保护原文件）
+      let success = await this.tryStandardRepair(filePath, tempPath);
+      if (!success) success = await this.tryForceRebuild(filePath, tempPath);
+      if (!success) success = await this.tryDataExtraction(filePath, tempPath);
+      
+      if (success && await this.validateMP4File(tempPath)) {
+        // ✅ 修复成功：替换原文件，删除备份
+        await fs.rename(tempPath, filePath);
+        await fs.unlink(backupPath);
+        return true;
+      }
+      
+      // ❌ 修复失败：清理临时文件，保留原文件
+      if (fs.existsSync(tempPath)) await fs.unlink(tempPath);
+      return false;
+      
+    } catch (error) {
+      // 清理临时文件，保护原文件不被破坏
+      if (fs.existsSync(tempPath)) await fs.unlink(tempPath);
+      return false;
+    }
+  }
   
-  // 方法1: 标准修复
-  async tryStandardRepair(inputPath, outputPath) { /* ... */ }
+  // 方法1: 标准修复（快速，适合轻微损坏）
+  async tryStandardRepair(inputPath, outputPath) {
+    return execAsync(
+      `ffmpeg -err_detect ignore_err -i "${inputPath}" -c copy -movflags +faststart "${outputPath}"`
+    ).then(() => true).catch(() => false);
+  }
   
-  // 方法2: 强制重建
-  async tryForceRebuild(inputPath, outputPath) { /* ... */ }
+  // 方法2: 强制重建（中等，适合索引损坏）
+  async tryForceRebuild(inputPath, outputPath) {
+    return execAsync(
+      `ffmpeg -fflags +genpts -i "${inputPath}" -c:v libx264 -preset fast -movflags +faststart "${outputPath}"`
+    ).then(() => true).catch(() => false);
+  }
   
-  // 方法3: 提取数据
-  async tryDataExtraction(inputPath, outputPath) { /* ... */ }
+  // 方法3: 提取数据（保守，确保有输出）
+  async tryDataExtraction(inputPath, outputPath) {
+    return execAsync(
+      `ffmpeg -err_detect ignore_err -fflags +genpts -i "${inputPath}" -c:v libx264 -preset ultrafast "${outputPath}"`
+    ).then(() => true).catch(() => false);
+  }
 }
 ```
+
+**🔐 文件保护机制**：
+1. **修复前备份** - 创建 `.backup` 文件保护原始数据
+2. **临时文件修复** - 在 `.repairing` 文件上操作，不直接修改原文件
+3. **验证后替换** - 修复成功且验证通过才替换原文件
+4. **失败保护** - 修复失败时清理临时文件，保留原文件不受损
+5. **异常安全** - catch块确保即使程序崩溃也不破坏原文件
+
+**为什么这样设计**：
+- ⚠️ **防止二次损伤** - 如果修复过程中程序崩溃，原文件仍然完好
+- ⚠️ **可回退** - 备份文件允许在修复失败后恢复原始状态
+- ⚠️ **原子操作** - 文件替换是原子操作，不会出现半损坏状态
 
 ### 4.2 集成到app.js启动流程
 
