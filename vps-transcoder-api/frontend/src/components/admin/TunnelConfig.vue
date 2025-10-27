@@ -138,20 +138,21 @@ const loadTunnelConfig = async () => {
     const response = await api.request('/api/admin/tunnel/config')
     const data = response.data
     if (data.status === 'success') {
-      // 修复数据结构解析 - API返回的是data.tunnel结构
-      const tunnelData = data.data.tunnel
+      // ✅ 修复：API直接返回data.data结构，不需要data.data.tunnel
+      const tunnelData = data.data
       tunnelConfig.value = {
-        enabled: tunnelData.enabled,
-        description: tunnelData.description,
-        endpoints: tunnelData.endpoints,
-        performance: tunnelData.performance,
+        enabled: tunnelData.enabled || false,
+        description: tunnelData.description || '',
+        endpoints: tunnelData.endpoints || null,
+        performance: tunnelData.performance || null,
         updatedAt: tunnelData.updatedAt
       }
       tunnelStatus.value = { 
-        health: tunnelData.health?.status || 'unknown'
+        health: tunnelData.endpoints?.tunnel?.status || 'unknown'
       }
     }
   } catch (error) {
+    console.error('加载隧道配置失败:', error)
     ElMessage.error('加载隧道配置失败')
   }
 }
