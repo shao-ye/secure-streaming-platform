@@ -18,14 +18,19 @@ async function getPreloadConfig(env, channelId) {
           channelId,
           enabled: false,
           startTime: '07:00',
-          endTime: '17:30'
+          endTime: '17:30',
+          workdaysOnly: false  // 🆕 默认值：不限制工作日
         }
       };
     }
     
+    // 🆕 确保返回的配置包含workdaysOnly字段（向后兼容）
     return {
       status: 'success',
-      data: config
+      data: {
+        ...config,
+        workdaysOnly: config.workdaysOnly ?? false
+      }
     };
   } catch (error) {
     console.error('Failed to get preload config:', error);
@@ -70,7 +75,7 @@ async function getAllPreloadConfigs(env) {
  */
 async function updatePreloadConfig(env, channelId, data, username) {
   try {
-    const { enabled, startTime, endTime } = data;
+    const { enabled, startTime, endTime, workdaysOnly } = data;  // 🆕 接受workdaysOnly参数
     
     // 验证时间格式
     if (!isValidTimeFormat(startTime) || !isValidTimeFormat(endTime)) {
@@ -85,6 +90,7 @@ async function updatePreloadConfig(env, channelId, data, username) {
       enabled: enabled === true,
       startTime,
       endTime,
+      workdaysOnly: workdaysOnly === true,  // 🆕 保存工作日限制设置
       updatedAt: new Date().toISOString(),
       updatedBy: username || 'unknown'
     };
