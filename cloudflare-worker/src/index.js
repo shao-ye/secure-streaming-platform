@@ -771,7 +771,7 @@ async function handleRequest(request, env, ctx) {
         const streams = [];
         
         for (const [id, config] of Object.entries(CHANNELS)) {
-          // 尝试从KV存储读取更新的配置
+          // 只读取频道配置（已包含预加载配置）
           const channelKey = `channel:${id}`;
           let channelData = null;
           
@@ -786,20 +786,6 @@ async function handleRequest(request, env, ctx) {
             console.error('KV read error for', id, ':', kvError);
           }
           
-          // 🔥 读取预加载配置（存储在单独的键中）
-          let preloadConfig = null;
-          try {
-            if (env.YOYO_USER_DB) {
-              const preloadKey = `PRELOAD_CONFIG:${id}`;
-              const preloadData = await env.YOYO_USER_DB.get(preloadKey);
-              if (preloadData) {
-                preloadConfig = JSON.parse(preloadData);
-              }
-            }
-          } catch (preloadError) {
-            console.error('Preload config read error for', id, ':', preloadError);
-          }
-          
           // 使用KV数据或默认配置
           streams.push({
             id,
@@ -807,7 +793,7 @@ async function handleRequest(request, env, ctx) {
             rtmpUrl: channelData?.rtmpUrl || defaultRtmpUrls[id] || `rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b`,
             sortOrder: channelData?.sortOrder || config.order,
             createdAt: channelData?.updatedAt || '2025-10-03T12:00:00Z',
-            preloadConfig: preloadConfig  // ✨ 使用读取的预加载配置
+            preloadConfig: channelData?.preloadConfig || null  // ✨ 直接从频道配置读取（KV读取减半）
           });
         }
 
