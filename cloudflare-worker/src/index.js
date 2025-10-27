@@ -429,6 +429,18 @@ async function handleRequest(request, env, ctx) {
           });
         }
         
+        // 读取隧道配置
+        let tunnelEnabled = false;
+        try {
+          const tunnelConfigData = await env.YOYO_USER_DB.get('tunnel_config');
+          if (tunnelConfigData) {
+            const tunnelConfig = JSON.parse(tunnelConfigData);
+            tunnelEnabled = tunnelConfig.enabled || false;
+          }
+        } catch (e) {
+          console.log('Failed to read tunnel config:', e);
+        }
+        
         // 调用VPS API，传递channelId和rtmpUrl
         const vpsResponse = await fetch(`${env.VPS_API_URL}/api/simple-stream/start-watching`, {
           method: 'POST',
@@ -440,6 +452,32 @@ async function handleRequest(request, env, ctx) {
         });
         
         const responseData = await vpsResponse.json();
+        
+        // 🎯 根据隧道配置调整HLS URL
+        if (responseData.status === 'success' && responseData.data && responseData.data.hlsUrl) {
+          const vpsHlsUrl = responseData.data.hlsUrl;
+          
+          if (tunnelEnabled) {
+            // 隧道模式：使用Workers代理
+            // 转换: https://yoyo-vps.5202021.xyz/hls/channelId/playlist.m3u8
+            // 到:    https://yoyoapi.5202021.xyz/tunnel-proxy/hls/channelId/playlist.m3u8
+            const match = vpsHlsUrl.match(/\/hls\/(.+)/);
+            if (match) {
+              const hlsPath = match[1]; // channelId/playlist.m3u8
+              responseData.data.hlsUrl = `https://yoyoapi.5202021.xyz/tunnel-proxy/hls/${hlsPath}`;
+              responseData.data.routingMode = 'tunnel+direct';
+              responseData.data.frontendPath = 'tunnel';
+              responseData.data.backendPath = 'direct';
+              console.log('✅ Tunnel enabled, using Workers proxy:', responseData.data.hlsUrl);
+            }
+          } else {
+            // 直连模式
+            responseData.data.routingMode = 'direct+direct';
+            responseData.data.frontendPath = 'direct';
+            responseData.data.backendPath = 'direct';
+            console.log('✅ Direct mode, using VPS direct URL:', responseData.data.hlsUrl);
+          }
+        }
         
         return new Response(JSON.stringify(responseData), {
           status: vpsResponse.status,
