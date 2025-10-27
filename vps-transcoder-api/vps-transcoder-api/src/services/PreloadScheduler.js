@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const moment = require('moment-timezone');
 const logger = require('../utils/logger');
+const WorkdayChecker = require('./WorkdayChecker');  // 🆕 引入工作日检测器
 
 /**
  * 预加载调度器 - 精确定时任务版本
@@ -11,6 +12,7 @@ const logger = require('../utils/logger');
  * 3. 定时任务准点触发，自动启动/停止预加载
  * 4. 支持配置热重载（reload API）
  * 5. 完整支持跨天时间段（如23:00-01:00）
+ * 6. 🆕 支持工作日限制（仅工作日预加载）
  */
 class PreloadScheduler {
   constructor(streamManager) {
@@ -18,6 +20,9 @@ class PreloadScheduler {
     
     // 存储每个频道的定时任务 Map<channelId, { startTask, stopTask }>
     this.cronTasks = new Map();
+    
+    // 🆕 初始化工作日检测器
+    this.workdayChecker = new WorkdayChecker();
     
     // Workers API配置
     this.workersApiUrl = process.env.WORKERS_API_URL || 'https://yoyoapi.5202021.xyz';
@@ -31,7 +36,12 @@ class PreloadScheduler {
     try {
       logger.info('Starting PreloadScheduler...');
       
-      // 1. 获取所有预加载配置
+      // 🆕 1. 初始化工作日检测器（预取当前月+下月数据）
+      logger.info('Initializing WorkdayChecker...');
+      await this.workdayChecker.initialize();
+      logger.info('✅ WorkdayChecker initialized successfully');
+      
+      // 2. 获取所有预加载配置
       const configs = await this.fetchPreloadConfigs();
       
       if (!configs || configs.length === 0) {
@@ -41,10 +51,10 @@ class PreloadScheduler {
       
       logger.info(`Found ${configs.length} preload configurations`);
       
-      // 2. 检查当前时间，立即启动需要预加载的频道
+      // 3. 检查当前时间，立即启动需要预加载的频道
       await this.initializePreloads(configs);
       
-      // 3. 为每个频道创建定时任务
+      // 4. 为每个频道创建定时任务
       for (const config of configs) {
         this.scheduleChannel(config);
       }
@@ -132,12 +142,14 @@ class PreloadScheduler {
     logger.info('Initializing preloads at startup', { currentTime });
     
     for (const config of configs) {
-      if (this.shouldPreloadNow(config, currentTime)) {
+      // 🆕 改为await异步调用（支持工作日检查）
+      if (await this.shouldPreloadNow(config, currentTime)) {
         logger.info('Starting preload at startup', { 
           channelId: config.channelId,
           currentTime,
           startTime: config.startTime,
-          endTime: config.endTime
+          endTime: config.endTime,
+          workdaysOnly: config.workdaysOnly  // 🆕 记录工作日设置
         });
         
         await this.startPreload(config);
@@ -146,11 +158,52 @@ class PreloadScheduler {
   }
 
   /**
-   * 判断当前时间是否在预加载时段
+   * 🆕 判断当前时间是否应该预加载（异步）
+   * - 检查时间段
+   * - 检查工作日（如果启用）
    */
-  shouldPreloadNow(config, currentTime) {
-    const { startTime, endTime } = config;
+  async shouldPreloadNow(config, currentTime) {
+    const { startTime, endTime, workdaysOnly } = config;
     
+    // 步骤1: 检查时间段
+    const inTimeRange = this.isInTimeRange(currentTime, startTime, endTime);
+    if (!inTimeRange) {
+      return false;
+    }
+    
+    // 步骤2: 🆕 检查工作日（如果启用）
+    if (workdaysOnly) {
+      try {
+        const isWorkday = await this.workdayChecker.isWorkday();
+        
+        if (!isWorkday) {
+          logger.info('Today is not a workday, skipping preload', { 
+            channelId: config.channelId 
+          });
+          return false;
+        }
+        
+        logger.info('Today is a workday, preload allowed', { 
+          channelId: config.channelId 
+        });
+        
+      } catch (error) {
+        // 容错：API失败时降级为基础模式
+        logger.warn('Workday check failed, falling back to basic mode', { 
+          channelId: config.channelId,
+          error: error.message 
+        });
+        // 继续执行（降级为每日预加载）
+      }
+    }
+    
+    return true;
+  }
+
+  /**
+   * 🆕 辅助方法：检查时间是否在指定时段内
+   */
+  isInTimeRange(currentTime, startTime, endTime) {
     // 解析时间
     const [currentHour, currentMinute] = currentTime.split(':').map(Number);
     const [startHour, startMinute] = startTime.split(':').map(Number);
@@ -189,10 +242,22 @@ class PreloadScheduler {
       logger.info('Cron triggered: Starting preload', { 
         channelId, 
         time: startTime,
+        workdaysOnly: config.workdaysOnly,  // 🆕 记录设置
         cronExpression: startCron
       });
       
-      await this.startPreload(config);
+      // 🆕 实时检查是否应该启动（包含工作日检查）
+      const currentTime = this.getBeijingTime().format('HH:mm');
+      const shouldStart = await this.shouldPreloadNow(config, currentTime);
+      
+      if (shouldStart) {
+        await this.startPreload(config);
+      } else {
+        logger.info('Preload skipped by shouldPreloadNow check', { 
+          channelId,
+          reason: config.workdaysOnly ? 'Not a workday' : 'Out of time range'
+        });
+      }
     }, {
       timezone: 'Asia/Shanghai'
     });
