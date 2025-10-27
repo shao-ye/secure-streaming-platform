@@ -118,7 +118,7 @@ async function updatePreloadConfig(env, channelId, data, username) {
  */
 async function getPreloadStatus(env) {
   try {
-    const vpsUrl = `${env.VPS_API_URL}/api/preload/vps-status`;
+    const vpsUrl = `${env.VPS_API_URL}/api/simple-stream/preload/vps-status`;
     const response = await fetch(vpsUrl, {
       headers: {
         'X-API-Key': env.VPS_API_KEY
@@ -144,7 +144,7 @@ async function getPreloadStatus(env) {
  * 通知VPS重新加载调度器
  */
 async function notifyVpsReload(env) {
-  const vpsUrl = `${env.VPS_API_URL}/api/preload/reload-schedule`;
+  const vpsUrl = `${env.VPS_API_URL}/api/simple-stream/preload/reload-schedule`;
   const response = await fetch(vpsUrl, {
     method: 'POST',
     headers: {

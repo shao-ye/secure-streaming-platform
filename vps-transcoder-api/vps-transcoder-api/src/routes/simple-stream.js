@@ -1,5 +1,6 @@
 const express = require('express');
 const SimpleStreamManager = require('../services/SimpleStreamManager');
+const PreloadScheduler = require('../services/PreloadScheduler');
 const logger = require('../utils/logger');
 const authMiddleware = require('../middleware/auth');
 
@@ -10,6 +11,20 @@ router.use(authMiddleware);
 
 // 创建全局流管理器实例
 const streamManager = new SimpleStreamManager();
+
+// 🆕 创建预加载调度器实例
+const preloadScheduler = new PreloadScheduler(streamManager);
+
+// 🆕 延迟5秒启动预加载调度器（等待服务器完全启动）
+setTimeout(() => {
+  preloadScheduler.start()
+    .then(() => {
+      logger.info('✅ PreloadScheduler started successfully');
+    })
+    .catch((error) => {
+      logger.error('Failed to start PreloadScheduler', { error: error.message });
+    });
+}, 5000);
 
 /**
  * 开始观看频道 - 要求完整参数：channelId和rtmpUrl
@@ -226,5 +241,56 @@ router.post('/restart-channel', async (req, res) => {
   }
 });
 
+// ===== 🆕 预加载API端点 =====
+
+/**
+ * 获取预加载状态（从VPS）
+ * GET /api/preload/vps-status
+ */
+router.get('/preload/vps-status', (req, res) => {
+  try {
+    const schedulerStatus = preloadScheduler.getStatus();
+    const streamManagerStatus = streamManager.getPreloadStatus();
+    
+    res.json({
+      status: 'success',
+      data: {
+        scheduler: schedulerStatus,
+        streamManager: streamManagerStatus
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to get preload status', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * 重新加载预加载调度器（配置变更时调用）
+ * POST /api/preload/reload-schedule
+ */
+router.post('/preload/reload-schedule', async (req, res) => {
+  try {
+    logger.info('Reloading preload scheduler...');
+    
+    await preloadScheduler.reload();
+    
+    res.json({
+      status: 'success',
+      message: 'Schedule reloaded successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Failed to reload schedule', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
 // 导出路由和管理器实例
-module.exports = { router, streamManager };
+module.exports = { router, streamManager, preloadScheduler };

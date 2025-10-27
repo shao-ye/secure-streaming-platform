@@ -177,12 +177,27 @@ database_id = "<your-database-id>"
 **VPS (.env)**:
 ```bash
 # SSH到VPS后编辑 /opt/yoyo-transcoder/.env
-RECORDINGS_BASE_DIR=/var/recordings
+# ⚠️ 关键配置：录制目录必须与FileBrowser部署路径一致
+RECORDINGS_BASE_DIR=/srv/filebrowser/yoyo-k
 RECORDINGS_CLEANUP_HOUR=3
 RECORDINGS_RETENTION_DAYS=2
 RECORDINGS_SEGMENT_DURATION=3600
-WORKERS_API_URL=https://yoyoapi.5202021.xyz
+WORKER_API_URL=https://yoyoapi.5202021.xyz  # 🔥 修复Bug11: 统一为WORKER_API_URL(无S)
+VPS_API_KEY=85da076ae24b028b3d1ea1884e6b13c5afe34488be0f8d39a05fbbf26d23e938  # 与Workers保持一致
+
+# FileBrowser访问地址（已部署）
+FILEBROWSER_URL=https://cloud.5202021.xyz
+
+# 注意：RTMP URL现在从Workers API动态获取，不需要配置RTMP_BASE_URL
 ```
+
+**📋 FileBrowser配置说明**:
+- **实际部署地址**: https://cloud.5202021.xyz/
+- **监听端口**: 8080
+- **根目录**: /srv/filebrowser/
+- **录制目录**: /srv/filebrowser/yoyo-k/
+- **目录权限**: drwxr-x--- (0750) root:root
+- **重要**: 录制程序需要对录制目录有写入权限
 
 ### 准备3：备份文件
 
@@ -293,9 +308,12 @@ df -h /var
 CREATE TABLE IF NOT EXISTS recording_configs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   channel_id TEXT NOT NULL UNIQUE,
+  channel_name TEXT,
   enabled INTEGER DEFAULT 0,
+  schedule_enabled INTEGER DEFAULT 1,
   start_time TEXT DEFAULT '07:50',
   end_time TEXT DEFAULT '17:20',
+  weekdays TEXT DEFAULT '1,2,3,4,5',
   segment_duration INTEGER DEFAULT 3600,
   video_bitrate INTEGER DEFAULT 1500,
   retention_days INTEGER DEFAULT 2,
@@ -311,13 +329,24 @@ CREATE TABLE IF NOT EXISTS recording_files (
   file_path TEXT NOT NULL,
   start_time TEXT NOT NULL,
   end_time TEXT,
+  duration INTEGER DEFAULT 0,
   file_size INTEGER DEFAULT 0,
   status TEXT DEFAULT 'recording',
   repair_attempts INTEGER DEFAULT 0,
   repair_status TEXT,
+  last_repair_attempt TEXT,
+  repair_error TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 字段说明：
+-- duration: 视频时长（秒）
+-- file_size: 文件大小（字节bytes）🔥 统一单位
+-- repair_attempts: 修复尝试次数（最多3次）
+-- repair_status: 修复状态（repairing/failed/completed）
+-- last_repair_attempt: 最后修复时间
+-- repair_error: 修复失败原因
 
 -- 创建索引
 CREATE INDEX IF NOT EXISTS idx_configs_channel ON recording_configs(channel_id);
@@ -335,41 +364,716 @@ npx wrangler d1 execute yoyo-recordings --file=schema.sql --env production
 
 **创建文件**: `cloudflare-worker/src/handlers/recordingHandler.js`
 
-这个文件实现D1数据库CRUD操作。核心方法：
-- `getRecordingConfig()` - 获取频道录制配置
-- `updateRecordingConfig()` - 更新录制配置
-- `createRecordingFile()` - 创建录制文件记录
-- `updateRecordingFile()` - 更新文件状态
-- `getInterruptedRecordings()` - 获取需要修复的文件
-- `getRecordingFiles()` - 查询录制文件列表
+**完整实现代码** (约210行):
 
-**注意**: 由于代码较长，完整实现见VIDEO_RECORDING_SOLUTION.md第2200-2500行
+```javascript
+// ☁️ Workers端代码
+// cloudflare-worker/src/handlers/recordingHandler.js
 
-### 1.3 添加API路由
+import { RecordingDatabase } from '../utils/recordingDatabase';
+
+/**
+ * 录制功能API总入口
+ */
+export async function handleRecordingAPI(request, env, ctx) {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method;
+  
+  try {
+    // 🔐 验证API密钥（VPS调用时需要）
+    const apiKey = request.headers.get('X-API-Key');
+    const isVPSRequest = apiKey === env.VPS_API_KEY;
+    const isAuthenticated = isVPSRequest || await verifyUserSession(request, env);
+    
+    if (!isAuthenticated) {
+      return jsonResponse({ status: 'error', message: 'Unauthorized' }, 401);
+    }
+    
+    const db = new RecordingDatabase(env.RECORDING_DB);
+    
+    // ========== 录制配置管理API ==========
+    
+    // GET /api/recording/configs/active - 获取所有启用的配置
+    if (path === '/api/recording/configs/active' && method === 'GET') {
+      const configs = await db.getActiveRecordingConfigs();
+      return jsonResponse({ status: 'success', data: configs });
+    }
+    
+    // GET /api/recording/configs/:channelId - 获取单个频道配置
+    if (path.match(/^\/api\/recording\/configs\/[^\/]+$/) && method === 'GET') {
+      const channelId = path.split('/').pop();
+      const config = await db.getRecordingConfig(channelId);
+      return jsonResponse({ status: 'success', data: config });
+    }
+    
+    // POST /api/recording/configs - 创建录制配置
+    if (path === '/api/recording/configs' && method === 'POST') {
+      const body = await request.json();
+      const configId = await db.createRecordingConfig(body);
+      
+      // 通知VPS应用新配置
+      await notifyVPSConfigChange(env, body.channel_id, body);
+      
+      return jsonResponse({ 
+        status: 'success', 
+        message: '录制配置已创建',
+        data: { id: configId } 
+      });
+    }
+    
+    // PUT /api/recording/configs/:id - 更新录制配置
+    if (path.match(/^\/api\/recording\/configs\/[^\/]+$/) && method === 'PUT') {
+      const configId = path.split('/').pop();
+      const body = await request.json();
+      await db.updateRecordingConfig(configId, body);
+      
+      // 通知VPS应用新配置
+      await notifyVPSConfigChange(env, body.channel_id, body);
+      
+      return jsonResponse({ 
+        status: 'success', 
+        message: '录制配置已更新' 
+      });
+    }
+    
+    // DELETE /api/recording/configs/:id - 删除录制配置
+    if (path.match(/^\/api\/recording\/configs\/[^\/]+$/) && method === 'DELETE') {
+      const configId = path.split('/').pop();
+      await db.deleteRecordingConfig(configId);
+      return jsonResponse({ 
+        status: 'success', 
+        message: '录制配置已删除' 
+      });
+    }
+    
+    // ========== 录制文件管理API ==========
+    
+    // GET /api/recording/files/interrupted - 获取需要修复的文件
+    if (path === '/api/recording/files/interrupted' && method === 'GET') {
+      const files = await db.getInterruptedRecordings();
+      return jsonResponse({ status: 'success', data: files });
+    }
+    
+    // GET /api/recording/files - 查询录制文件列表
+    if (path === '/api/recording/files' && method === 'GET') {
+      const params = Object.fromEntries(url.searchParams);
+      const files = await db.getRecordingFiles(params);
+      return jsonResponse({ status: 'success', data: files });
+    }
+    
+    // POST /api/recording/files - 创建录制文件记录
+    if (path === '/api/recording/files' && method === 'POST') {
+      const body = await request.json();
+      const fileId = await db.createRecordingFile(body);
+      return jsonResponse({ 
+        status: 'success', 
+        data: { id: fileId } 
+      });
+    }
+    
+    // PATCH /api/recording/files/:id - 更新文件状态
+    if (path.match(/^\/api\/recording\/files\/[^\/]+$/) && method === 'PATCH') {
+      const fileId = path.split('/').pop();
+      const body = await request.json();
+      await db.updateRecordingFile(fileId, body);
+      return jsonResponse({ 
+        status: 'success', 
+        message: '文件状态已更新' 
+      });
+    }
+    
+    // POST /api/recording/files/:id/repair-attempt - 记录修复尝试
+    if (path.match(/^\/api\/recording\/files\/[^\/]+\/repair-attempt$/) && method === 'POST') {
+      // 🔥 修复：正确解析fileId (路径: /api/recording/files/{fileId}/repair-attempt)
+      const pathParts = path.split('/');
+      const fileId = pathParts[pathParts.length - 2];  // repair-attempt的前一个
+      const body = await request.json();
+      await db.updateRecordingFile(fileId, {
+        increment_repair_attempts: true,
+        last_repair_attempt: body.last_repair_attempt
+      });
+      return jsonResponse({ 
+        status: 'success', 
+        message: '修复尝试已记录' 
+      });
+    }
+    
+    // POST /api/recording/files/:id/retry-repair - 重试修复
+    if (path.match(/^\/api\/recording\/files\/[^\/]+\/retry-repair$/) && method === 'POST') {
+      // 🔥 修复：正确解析fileId (路径: /api/recording/files/{fileId}/retry-repair)
+      const pathParts = path.split('/');
+      const fileId = pathParts[pathParts.length - 2];  // retry-repair的前一个
+      await db.resetRepairAttempts(fileId);
+      
+      // 通知VPS重新尝试修复
+      await notifyVPSRetryRepair(env, fileId);
+      
+      return jsonResponse({ 
+        status: 'success', 
+        message: '已触发重新修复' 
+      });
+    }
+    
+    // ========== 录制统计API ==========
+    
+    // GET /api/recording/stats - 获取录制统计
+    if (path === '/api/recording/stats' && method === 'GET') {
+      const stats = await db.getRecordingStats();
+      return jsonResponse({ status: 'success', data: stats });
+    }
+    
+    // 未匹配的路由
+    return jsonResponse({ 
+      status: 'error', 
+      message: 'API endpoint not found' 
+    }, 404);
+    
+  } catch (error) {
+    console.error('Recording API error:', error);
+    return jsonResponse({ 
+      status: 'error', 
+      message: error.message 
+    }, 500);
+  }
+}
+
+/**
+ * 通知VPS配置已变更
+ */
+async function notifyVPSConfigChange(env, channelId, config) {
+  try {
+    await fetch(`${env.VPS_API_URL}/api/simple-stream/recording-config-changed`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': env.VPS_API_KEY
+      },
+      body: JSON.stringify({ channelId, recordingConfig: config })
+    });
+  } catch (error) {
+    console.error('Failed to notify VPS:', error);
+    // 不抛出错误，避免影响配置保存
+  }
+}
+
+/**
+ * 通知VPS重试修复文件
+ */
+async function notifyVPSRetryRepair(env, fileId) {
+  try {
+    await fetch(`${env.VPS_API_URL}/api/recording/retry-repair`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': env.VPS_API_KEY
+      },
+      body: JSON.stringify({ fileId })
+    });
+  } catch (error) {
+    console.error('Failed to notify VPS:', error);
+  }
+}
+
+/**
+ * 验证用户会话
+ */
+async function verifyUserSession(request, env) {
+  const sessionToken = request.headers.get('Authorization')?.replace('Bearer ', '');
+  if (!sessionToken) return false;
+  
+  const session = await env.YOYO_USER_DB.get(`session:${sessionToken}`);
+  return !!session;
+}
+
+/**
+ * 返回JSON响应
+ */
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+```
+
+### 1.3 创建RecordingDatabase.js
+
+**创建文件**: `cloudflare-worker/src/utils/recordingDatabase.js`
+
+**完整实现代码** (约300行):
+
+```javascript
+// ☁️ Workers端代码
+// cloudflare-worker/src/utils/recordingDatabase.js
+
+export class RecordingDatabase {
+  constructor(db) {
+    this.db = db;
+  }
+  
+  /**
+   * 获取所有启用的录制配置
+   */
+  async getActiveRecordingConfigs() {
+    const result = await this.db.prepare(`
+      SELECT * FROM recording_configs 
+      WHERE enabled = 1 AND schedule_enabled = 1
+      ORDER BY channel_id
+    `).all();
+    
+    return result.results || [];
+  }
+  
+  /**
+   * 获取单个频道的录制配置
+   */
+  async getRecordingConfig(channelId) {
+    return await this.db.prepare(`
+      SELECT * FROM recording_configs 
+      WHERE channel_id = ?
+    `).bind(channelId).first();
+  }
+  
+  /**
+   * 创建录制配置
+   */
+  async createRecordingConfig(config) {
+    const id = `rec_config_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    await this.db.prepare(`
+      INSERT INTO recording_configs (
+        id, channel_id, channel_name, enabled, schedule_enabled,
+        start_time, end_time, weekdays, segment_duration,
+        video_bitrate, retention_days, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id,
+      config.channel_id,
+      config.channel_name,
+      config.enabled ? 1 : 0,
+      config.schedule_enabled ? 1 : 0,
+      config.start_time,
+      config.end_time,
+      config.weekdays,
+      config.segment_duration || 3600,
+      config.video_bitrate || 1500,
+      config.retention_days || 7,
+      new Date().toISOString(),
+      new Date().toISOString()
+    ).run();
+    
+    return id;
+  }
+  
+  /**
+   * 更新录制配置
+   */
+  async updateRecordingConfig(id, config) {
+    await this.db.prepare(`
+      UPDATE recording_configs 
+      SET enabled = ?,
+          schedule_enabled = ?,
+          start_time = ?,
+          end_time = ?,
+          weekdays = ?,
+          segment_duration = ?,
+          video_bitrate = ?,
+          retention_days = ?,
+          updated_at = ?
+      WHERE id = ? OR channel_id = ?
+    `).bind(
+      config.enabled ? 1 : 0,
+      config.schedule_enabled ? 1 : 0,
+      config.start_time,
+      config.end_time,
+      config.weekdays,
+      config.segment_duration,
+      config.video_bitrate,
+      config.retention_days,
+      new Date().toISOString(),
+      id,
+      id  // 兼容用channel_id作为id的情况
+    ).run();
+  }
+  
+  /**
+   * 删除录制配置
+   */
+  async deleteRecordingConfig(id) {
+    await this.db.prepare(`
+      DELETE FROM recording_configs WHERE id = ? OR channel_id = ?
+    `).bind(id, id).run();
+  }
+  
+  /**
+   * 获取需要修复的录制文件
+   */
+  async getInterruptedRecordings() {
+    const result = await this.db.prepare(`
+      SELECT * FROM recording_files 
+      WHERE status = 'recording' AND repair_attempts < 3
+      ORDER BY created_at ASC
+    `).all();
+    
+    return result.results || [];
+  }
+  
+  /**
+   * 查询录制文件列表
+   */
+  async getRecordingFiles(params) {
+    const { channelId, status, page = 1, pageSize = 20, file_path } = params;
+    
+    let query = `SELECT * FROM recording_files WHERE 1=1`;
+    const bindings = [];
+    
+    if (channelId) {
+      query += ` AND channel_id = ?`;
+      bindings.push(channelId);
+    }
+    
+    if (status) {
+      query += ` AND status = ?`;
+      bindings.push(status);
+    }
+    
+    if (file_path) {
+      query += ` AND file_path = ?`;
+      bindings.push(file_path);
+    }
+    
+    // 获取总数
+    const countResult = await this.db.prepare(
+      query.replace('SELECT *', 'SELECT COUNT(*) as total')
+    ).bind(...bindings).first();
+    
+    // 分页查询
+    query += ` ORDER BY start_time DESC LIMIT ? OFFSET ?`;
+    bindings.push(pageSize, (page - 1) * pageSize);
+    
+    const result = await this.db.prepare(query).bind(...bindings).all();
+    
+    return {
+      total: countResult.total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize),
+      files: result.results || []
+    };
+  }
+  
+  /**
+   * 创建录制文件记录
+   */
+  async createRecordingFile(file) {
+    const id = `rec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    await this.db.prepare(`
+      INSERT INTO recording_files (
+        id, channel_id, filename, file_path, start_time, end_time,
+        duration, file_size, status, created_at, updated_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id,
+      file.channel_id,
+      file.filename,
+      file.file_path,
+      file.start_time,
+      file.end_time,
+      file.duration || 0,
+      file.file_size || 0,
+      file.status || 'completed',
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    ).run();
+    
+    return id;
+  }
+  
+  /**
+   * 更新录制文件状态
+   */
+  async updateRecordingFile(id, updates) {
+    const fields = [];
+    const values = [];
+    
+    if (updates.status) {
+      fields.push('status = ?');
+      values.push(updates.status);
+    }
+    
+    if (updates.file_size !== undefined) {
+      fields.push('file_size = ?');
+      values.push(updates.file_size);
+    }
+    
+    if (updates.repair_status) {
+      fields.push('repair_status = ?');
+      values.push(updates.repair_status);
+    }
+    
+    if (updates.repair_error) {
+      fields.push('repair_error = ?');
+      values.push(updates.repair_error);
+    }
+    
+    if (updates.increment_repair_attempts) {
+      fields.push('repair_attempts = repair_attempts + 1');
+      fields.push('last_repair_attempt = ?');
+      values.push(updates.last_repair_attempt || new Date().toISOString());
+    }
+    
+    if (updates.filename) {
+      fields.push('filename = ?');
+      values.push(updates.filename);
+    }
+    
+    if (updates.file_path) {
+      fields.push('file_path = ?');
+      values.push(updates.file_path);
+    }
+    
+    fields.push('updated_at = ?');
+    values.push(new Date().toISOString());
+    
+    values.push(id);
+    
+    await this.db.prepare(`
+      UPDATE recording_files SET ${fields.join(', ')} WHERE id = ?
+    `).bind(...values).run();
+  }
+  
+  /**
+   * 重置修复尝试次数
+   */
+  async resetRepairAttempts(id) {
+    await this.db.prepare(`
+      UPDATE recording_files 
+      SET repair_attempts = 0,
+          status = 'recording',
+          updated_at = ?
+      WHERE id = ?
+    `).bind(new Date().toISOString(), id).run();
+  }
+  
+  /**
+   * 获取录制统计
+   */
+  async getRecordingStats() {
+    // 总体统计
+    const totalResult = await this.db.prepare(`
+      SELECT 
+        COUNT(*) as total_recordings,
+        SUM(file_size) as total_size
+      FROM recording_files
+    `).first();
+    
+    // 按频道统计
+    const byChannelResult = await this.db.prepare(`
+      SELECT 
+        channel_id,
+        COUNT(*) as total_files,
+        SUM(file_size) as total_size,
+        SUM(duration) as total_duration
+      FROM recording_files
+      GROUP BY channel_id
+    `).all();
+    
+    // 按状态统计
+    const byStatusResult = await this.db.prepare(`
+      SELECT 
+        status,
+        COUNT(*) as count
+      FROM recording_files
+      GROUP BY status
+    `).all();
+    
+    const byStatus = {};
+    (byStatusResult.results || []).forEach(row => {
+      byStatus[row.status] = row.count;
+    });
+    
+    return {
+      total_recordings: totalResult.total_recordings || 0,
+      total_size: totalResult.total_size || 0,
+      by_channel: byChannelResult.results || [],
+      by_status: byStatus
+    };
+  }
+}
+```
+
+### 1.4 API端点清单
+
+| 端点 | 方法 | 用途 | 调用方 |
+|------|------|------|--------|
+| `/api/recording/configs/active` | GET | 获取所有启用的录制配置 | VPS自动恢复 |
+| `/api/recording/configs/:channelId` | GET | 获取单个频道录制配置 | VPS/前端 |
+| `/api/recording/configs` | POST | 创建录制配置 | 前端管理界面 |
+| `/api/recording/configs/:id` | PUT | 更新录制配置 | 前端管理界面 |
+| `/api/recording/configs/:id` | DELETE | 删除录制配置 | 前端管理界面 |
+| `/api/recording/files` | POST | 创建录制文件记录 | VPS录制完成 |
+| `/api/recording/files` | GET | 查询录制文件列表 | 前端文件列表 |
+| `/api/recording/files/interrupted` | GET | 获取需要修复的文件 | VPS启动修复 |
+| `/api/recording/files/:id` | PATCH | 更新文件状态 | VPS修复完成 |
+| `/api/recording/files/:id/repair-attempt` | POST | 记录修复尝试 | VPS修复流程 |
+| `/api/recording/files/:id/retry-repair` | POST | 重试修复文件 | 前端手动操作 |
+| `/api/recording/stats` | GET | 获取录制统计 | 前端仪表盘 |
+| **`/api/channels/:channelId`** 🆕 | GET | 获取频道完整配置(含RTMP) | VPS定时录制 |
+
+### 1.5 修改index.js添加路由
 
 **修改文件**: `cloudflare-worker/src/index.js`
 
-在路由部分添加：
-```javascript
-// 录制配置API
-router.get('/api/recording/config/:channelId', recordingHandler.getRecordingConfig);
-router.put('/api/recording/config/:channelId', recordingHandler.updateRecordingConfig);
+在路由部分添加录制API入口和频道配置API：
 
-// 录制文件API
-router.post('/api/recording/files', recordingHandler.createRecordingFile);
-router.patch('/api/recording/files/:id', recordingHandler.updateRecordingFile);
-router.get('/api/recording/files/interrupted', recordingHandler.getInterruptedRecordings);
-router.get('/api/recording/files', recordingHandler.getRecordingFiles);
+```javascript
+// cloudflare-worker/src/index.js
+import { handleRecordingAPI } from './handlers/recordingHandler';
+import { handleGetChannelConfig } from './handlers/channelHandler';
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const method = request.method;
+    
+    // ... 现有路由 ...
+    
+    // 🆕 录制功能API路由
+    if (url.pathname.startsWith('/api/recording/')) {
+      return handleRecordingAPI(request, env, ctx);
+    }
+    
+    // 🆕 频道配置API（供VPS定时录制调用）
+    if (url.pathname.match(/^\/api\/channels\/([^\/]+)$/) && method === 'GET') {
+      const channelId = url.pathname.split('/').pop();
+      return handleGetChannelConfig(request, env, channelId);
+    }
+    
+    // ... 其他路由 ...
+  }
+};
 ```
 
-### 1.4 部署Workers
+### 1.6 创建频道配置处理器
+
+**新建文件**: `cloudflare-worker/src/handlers/channelHandler.js`
+
+```javascript
+/**
+ * 获取频道完整配置（包含RTMP URL）
+ * 复用现有系统的RTMP获取逻辑
+ */
+export async function handleGetChannelConfig(request, env, channelId) {
+  try {
+    // 验证API密钥（VPS调用需要）
+    const apiKey = request.headers.get('X-API-Key');
+    if (apiKey !== env.VPS_API_KEY) {
+      return new Response(JSON.stringify({
+        status: 'error',
+        message: 'Invalid API key'
+      }), { 
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // 默认频道配置
+    const CHANNELS = {
+      'stream_ensxma2g': { name: '二楼教室1', order: 1 },
+      'stream_gkg5hknc': { name: '二楼教室2', order: 2 },
+      'stream_kcwxuedx': { name: '国际班', order: 3 },
+      'stream_kil0lecb': { name: 'C班', order: 4 },
+      'stream_noyoostd': { name: '三楼舞蹈室', order: 5 },
+      'stream_3blyhqh3': { name: '多功能厅', order: 6 },
+      'stream_8zf48z6g': { name: '操场1', order: 7 },
+      'stream_cpa2czoo': { name: '操场2', order: 8 }
+    };
+    
+    // 默认RTMP URLs
+    const defaultRtmpUrls = {
+      'stream_ensxma2g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+      'stream_gkg5hknc': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
+      'stream_kcwxuedx': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+      'stream_kil0lecb': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
+      'stream_noyoostd': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+      'stream_3blyhqh3': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
+      'stream_8zf48z6g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+      'stream_cpa2czoo': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b'
+    };
+    
+    // 1. 尝试从KV存储获取RTMP URL（优先）
+    let rtmpUrl = null;
+    let channelName = CHANNELS[channelId]?.name || channelId;
+    
+    if (env.YOYO_USER_DB) {
+      const channelKey = `CHANNEL_CONFIG:${channelId}`;
+      const kvData = await env.YOYO_USER_DB.get(channelKey);
+      if (kvData) {
+        const channelData = JSON.parse(kvData);
+        rtmpUrl = channelData.rtmpUrl;
+        channelName = channelData.name || channelName;
+      }
+    }
+    
+    // 2. 使用默认配置
+    if (!rtmpUrl) {
+      rtmpUrl = defaultRtmpUrls[channelId];
+    }
+    
+    if (!rtmpUrl) {
+      return new Response(JSON.stringify({
+        status: 'error',
+        message: `Channel not found: ${channelId}`
+      }), { 
+        status: 404,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // 3. 获取录制配置（如果启用了D1）
+    let recordingConfig = null;
+    if (env.DB) {
+      const db = new RecordingDatabase(env.DB);
+      recordingConfig = await db.getRecordingConfig(channelId);
+    }
+    
+    return new Response(JSON.stringify({
+      status: 'success',
+      data: {
+        channelId,
+        name: channelName,
+        rtmpUrl,
+        recordingEnabled: recordingConfig?.enabled || false,
+        recordingConfig
+      }
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+  } catch (error) {
+    console.error('Failed to get channel config:', error);
+    return new Response(JSON.stringify({
+      status: 'error',
+      message: error.message
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+```
+
+### 1.7 部署Workers
 
 ```bash
 cd cloudflare-worker
 npx wrangler deploy --env production
 ```
 
-### 1.5 验证测试
+### 1.7 验证测试
 
 **测试API端点**:
 ```powershell
@@ -499,7 +1203,9 @@ async spawnFFmpegProcess(channelId, rtmpUrl, options = {}) {
     );
     
     // 输出2: MP4分段录制
-    const recordingDir = `/var/recordings/${channelId}`;
+    // 🔥 修复Bug1: 使用环境变量而不是硬编码路径
+    const recordingsBaseDir = process.env.RECORDINGS_BASE_DIR || '/srv/filebrowser/yoyo-k';
+    const recordingDir = path.join(recordingsBaseDir, channelId);
     if (!fs.existsSync(recordingDir)) {
       fs.mkdirSync(recordingDir, { recursive: true });
     }
@@ -514,7 +1220,9 @@ async spawnFFmpegProcess(channelId, rtmpUrl, options = {}) {
       '-strftime', '1',
       '-segment_filename', `${recordingDir}/%Y-%m-%d_%H-%M-%S.mp4`,
       '-reset_timestamps', '1',
-      '-y'
+      '-y',
+      // 🔥 修复Bug2: FFmpeg segment模式需要输出文件参数
+      `${recordingDir}/output.mp4`  // 占位输出文件（实际使用segment_filename）
     );
   } else {
     // 只输出HLS（现有逻辑，已验证可用）
@@ -646,39 +1354,38 @@ async handleRecordingConfigChange(channelId, newRecordingConfig, channelConfig) 
 
 ```javascript
 /**
- * 设置录制心跳（防止被清理）
- * 关键：即使没有用户观看，录制进程也要保持运行
+ * 🔥 修复Bug6&7: 录制状态标记机制（不使用心跳）
+ * 核心思路：录制进程通过isRecording标记，不依赖心跳机制
+ * 这样既避免心跳冲突，又保证录制进程不被误清理
  */
-setRecordingHeartbeat(channelId) {
-  // 每30秒自动更新心跳时间戳
-  const intervalId = setInterval(() => {
-    this.channelHeartbeats.set(channelId, Date.now());
-    logger.debug('Recording heartbeat updated', { 
+markRecordingActive(channelId, recordingConfig) {
+  const processInfo = this.activeStreams.get(channelId);
+  if (processInfo) {
+    // 标记进程为录制状态
+    processInfo.isRecording = true;
+    processInfo.recordingConfig = recordingConfig;
+    processInfo.recordingStartTime = Date.now();
+    this.activeStreams.set(channelId, processInfo);
+    
+    logger.info('Channel marked as recording', { 
       channelId,
-      timestamp: Date.now()
+      config: recordingConfig 
     });
-  }, 30000); // 30秒间隔，远小于60秒超时
-  
-  // 保存定时器ID，用于后续清理
-  if (!this.recordingHeartbeats) {
-    this.recordingHeartbeats = new Map();
   }
-  this.recordingHeartbeats.set(channelId, intervalId);
-  
-  logger.info('Recording heartbeat started', { channelId });
 }
 
 /**
- * 清理录制心跳
+ * 清除录制状态标记
  */
-clearRecordingHeartbeat(channelId) {
-  if (!this.recordingHeartbeats) return;
-  
-  const intervalId = this.recordingHeartbeats.get(channelId);
-  if (intervalId) {
-    clearInterval(intervalId);
-    this.recordingHeartbeats.delete(channelId);
-    logger.info('Recording heartbeat stopped', { channelId });
+clearRecordingMark(channelId) {
+  const processInfo = this.activeStreams.get(channelId);
+  if (processInfo) {
+    processInfo.isRecording = false;
+    processInfo.recordingConfig = null;
+    processInfo.recordingStartTime = null;
+    this.activeStreams.set(channelId, processInfo);
+    
+    logger.info('Recording mark cleared', { channelId });
   }
 }
 
@@ -706,7 +1413,7 @@ isRecordingConfigChanged(oldConfig, newConfig) {
 
 ### 2.5 修改cleanupIdleChannels
 
-⚠️ **关键修改**：确保录制进程不会被误清理
+⚠️ **关键修改**：录制状态优先于心跳判断
 
 ```javascript
 async cleanupIdleChannels() {
@@ -715,14 +1422,15 @@ async cleanupIdleChannels() {
   for (const [channelId, lastHeartbeat] of this.channelHeartbeats) {
     const processInfo = this.activeStreams.get(channelId);
     
-    // 🔥 关键：跳过正在录制的频道
-    // 即使超过60秒无用户心跳，录制进程也不能停止
+    // 🔥 修复Bug7: 录制状态优先级高于心跳超时
+    // 逻辑：如果正在录制，忽略心跳超时，不清理进程
     if (processInfo && processInfo.isRecording) {
-      logger.debug('Skip cleanup for recording channel', { 
+      logger.debug('Skip cleanup: recording active', { 
         channelId,
-        isRecording: true 
+        isRecording: true,
+        recordingDuration: Math.floor((now - processInfo.recordingStartTime) / 1000) + 's'
       });
-      continue;
+      continue;  // 录制进程永远不清理，直到录制结束
     }
     
     // 正常清理逻辑：超过60秒无心跳的频道
@@ -749,9 +1457,9 @@ async stopChannel(channelId) {
   if (!processInfo) return;
   
   try {
-    // 🆕 如果是录制进程，清理录制心跳
+    // 🆕 如果是录制进程，清理录制状态标记
     if (processInfo.isRecording) {
-      this.clearRecordingHeartbeat(channelId);
+      this.clearRecordingMark(channelId);  // 🔥 修复Bug9: 方法名一致
       logger.info('Stopped recording', { channelId });
     }
     
@@ -906,7 +1614,7 @@ const logger = require('../utils/logger');
 
 class SegmentedRecordingManager {
   constructor() {
-    this.recordingsDir = process.env.RECORDINGS_BASE_DIR || '/var/recordings';
+    this.recordingsDir = process.env.RECORDINGS_BASE_DIR || '/srv/filebrowser/yoyo-k';
     this.activeWatchers = new Map(); // 文件监听器
     this.workerApiUrl = process.env.WORKER_API_URL || 'https://yoyoapi.5202021.xyz';
     this.apiKey = process.env.VPS_API_KEY;
@@ -963,14 +1671,20 @@ class SegmentedRecordingManager {
       const outputDir = path.join(this.recordingsDir, channelId);
       const filePath = path.join(outputDir, filename);
       
-      // 步骤1：检查是否为临时文件
-      // FFmpeg生成的临时文件通常有特殊后缀或命名模式
-      if (filename.includes('_temp') || filename.includes('.tmp')) {
-        logger.debug('Detected temp file, waiting for completion', { 
-          channelId, 
-          filename 
-        });
-        return; // 等待文件完成
+      // 🔥 修复Bug3: FFmpeg segment模式生成的文件名检查
+      // FFmpeg使用-strftime生成: %Y-%m-%d_%H-%M-%S.mp4 (如: 2025-10-25_01-30-15.mp4)
+      // 这些文件直接以最终名称创建，不需要临时文件检查
+      
+      // 步骤1：检查文件名格式，跳过非标准文件
+      if (!filename.endsWith('.mp4')) {
+        logger.debug('Skipping non-MP4 file', { channelId, filename });
+        return;
+      }
+      
+      // 检查是否为output.mp4占位文件（FFmpeg segment模式的占位输出）
+      if (filename === 'output.mp4') {
+        logger.debug('Skipping placeholder output file', { channelId, filename });
+        return;
       }
       
       // 步骤2：等待文件写入稳定
@@ -1197,19 +1911,44 @@ class SimpleStreamManager {
   }
   
   async startNewStream(channelId, rtmpUrl, options = {}) {
-    // ... 现有代码
+    // 1. 启动FFmpeg进程
+    const ffmpegProcess = await this.spawnFFmpegProcess(channelId, rtmpUrl, options);
+    const hlsUrl = this.generateHLSUrl(channelId);
     
+    // 2. 保存进程信息
+    this.activeStreams.set(channelId, {
+      process: ffmpegProcess,
+      hlsUrl: hlsUrl,
+      rtmpUrl: rtmpUrl,
+      recordingConfig: options.recordingConfig || null,
+      isRecording: false,  // 初始为false
+      startTime: Date.now()
+    });
+    
+    // 3. 🔥 修复Bug10: 如果启用录制，标记录制状态
     if (options.recordingConfig?.enabled) {
-      // 启动录制目录监听
+      this.markRecordingActive(channelId, options.recordingConfig);  // ⭐ 关键调用
       this.recordingManager.startWatching(channelId);
+      logger.info('Recording started and marked active', { channelId });
     }
+    
+    return hlsUrl;
   }
   
   async stopChannel(channelId) {
-    // ... 现有代码
+    const processInfo = this.activeStreams.get(channelId);
+    if (!processInfo) return;
     
-    // 停止录制监听
-    this.recordingManager.stopWatching(channelId);
+    // 1. 如果是录制进程，清理录制状态
+    if (processInfo.isRecording) {
+      this.clearRecordingMark(channelId);
+      this.recordingManager.stopWatching(channelId);
+    }
+    
+    // 2. 停止FFmpeg和清理
+    await this.stopFFmpegProcess(channelId);
+    await this.cleanupChannelHLS(channelId);
+    this.activeStreams.delete(channelId);
   }
 }
 ```
@@ -1275,7 +2014,7 @@ const logger = require('../utils/logger');
 
 class RecordingRecoveryManager {
   constructor() {
-    this.recordingsDir = process.env.RECORDINGS_BASE_DIR || '/var/recordings';
+    this.recordingsDir = process.env.RECORDINGS_BASE_DIR || '/srv/filebrowser/yoyo-k';
     this.workerApiUrl = process.env.WORKER_API_URL || 'https://yoyoapi.5202021.xyz';
     this.apiKey = process.env.VPS_API_KEY;
   }
@@ -1288,6 +2027,9 @@ class RecordingRecoveryManager {
     logger.info('Starting recording recovery process...');
     
     try {
+      // 🔍 步骤-1: 清理遗留的临时修复文件（防止上次修复中断污染）
+      await this.cleanupStaleRepairFiles();
+      
       // 🔍 步骤0: 处理临时文件（重命名为标准格式）
       await this.processTempFiles();
       
@@ -1307,11 +2049,24 @@ class RecordingRecoveryManager {
           continue;
         }
         
+        // 🔥 新增：检查修复次数限制（最多3次）
+        if (recording.repair_attempts >= 3) {
+          logger.warn('Max repair attempts reached', {
+            filePath,
+            attempts: recording.repair_attempts
+          });
+          await this.markAsCorrupted(recording.id, 'Max repair attempts exceeded');
+          continue;
+        }
+        
         // 步骤3: 验证文件完整性
         const isValid = await this.validateMP4File(filePath);
         
         if (!isValid) {
           logger.info('File needs repair', { filePath });
+          
+          // 🔥 新增：记录修复尝试
+          await this.incrementRepairAttempts(recording.id);
           
           // 步骤4: 尝试修复损坏文件
           const repaired = await this.repairMP4WithRecovery(filePath);
@@ -1336,6 +2091,69 @@ class RecordingRecoveryManager {
       logger.error('Recovery process failed', {
         error: error.message,
         stack: error.stack
+      });
+    }
+  }
+  
+  /**
+   * 清理遗留的临时修复文件
+   * 防止上次修复过程中断导致的临时文件污染
+   */
+  async cleanupStaleRepairFiles() {
+    logger.info('Cleaning up stale repair files...');
+    
+    try {
+      const channels = await fs.readdir(this.recordingsDir);
+      let cleanedCount = 0;
+      
+      for (const channelDir of channels) {
+        const channelPath = path.join(this.recordingsDir, channelDir);
+        const stat = await fs.stat(channelPath);
+        
+        if (!stat.isDirectory()) continue;
+        
+        const files = await fs.readdir(channelPath);
+        
+        // 查找所有 .repairing 和 .backup 文件
+        const staleFiles = files.filter(f => 
+          f.endsWith('.repairing') || f.endsWith('.backup')
+        );
+        
+        for (const staleFile of staleFiles) {
+          const stalePath = path.join(channelPath, staleFile);
+          const originalPath = stalePath.replace(/\.(repairing|backup)$/, '');
+          
+          logger.warn('Found stale repair file', { 
+            channel: channelDir,
+            file: staleFile 
+          });
+          
+          // 如果是 .backup 文件且原文件损坏，尝试恢复
+          if (staleFile.endsWith('.backup')) {
+            if (await this.fileExists(originalPath)) {
+              const isOriginalValid = await this.validateMP4File(originalPath);
+              
+              if (!isOriginalValid) {
+                // 原文件损坏，从备份恢复
+                logger.info('Restoring from backup', { originalPath });
+                await fs.copyFile(stalePath, originalPath);
+              }
+            }
+          }
+          
+          // 删除临时文件
+          await fs.unlink(stalePath);
+          cleanedCount++;
+        }
+      }
+      
+      logger.info('Stale repair files cleanup completed', { 
+        cleanedCount 
+      });
+      
+    } catch (error) {
+      logger.error('Failed to cleanup stale repair files', {
+        error: error.message
       });
     }
   }
@@ -1588,10 +2406,52 @@ class RecordingRecoveryManager {
   }
   
   /**
+   * 增加修复尝试次数
+   */
+  async incrementRepairAttempts(recordingId) {
+    try {
+      const response = await fetch(
+        `${this.workerApiUrl}/api/recording/files/${recordingId}/repair-attempt`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': this.apiKey
+          },
+          body: JSON.stringify({
+            last_repair_attempt: new Date().toISOString()
+          })
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
+      }
+      
+    } catch (error) {
+      logger.error('Failed to increment repair attempts', {
+        recordingId,
+        error: error.message
+      });
+    }
+  }
+  
+  /**
    * 更新录制状态
    */
   async updateRecordingStatus(recordingId, status, repairStatus) {
     try {
+      const updateData = {
+        status,
+        repair_status: repairStatus,
+        updated_at: new Date().toISOString()
+      };
+      
+      // 如果是失败状态，记录错误原因
+      if (status === 'corrupted' && repairStatus) {
+        updateData.repair_error = repairStatus;
+      }
+      
       const response = await fetch(
         `${this.workerApiUrl}/api/recording/files/${recordingId}`,
         {
@@ -1600,10 +2460,7 @@ class RecordingRecoveryManager {
             'Content-Type': 'application/json',
             'X-API-Key': this.apiKey
           },
-          body: JSON.stringify({
-            status,
-            repair_status: repairStatus
-          })
+          body: JSON.stringify(updateData)
         }
       );
       
@@ -1806,14 +2663,64 @@ export default {
   </el-table>
   
   <!-- 录制配置对话框 -->
-  <el-dialog v-model="recordingDialogVisible" title="录制配置">
-    <el-form :model="recordingForm">
+  <el-dialog v-model="recordingDialogVisible" title="录制配置" width="600px">
+    <el-form :model="recordingForm" label-width="100px">
       <el-form-item label="开始时间">
         <el-time-picker v-model="recordingForm.startTime" format="HH:mm" />
       </el-form-item>
       <el-form-item label="结束时间">
         <el-time-picker v-model="recordingForm.endTime" format="HH:mm" />
       </el-form-item>
+      
+      <!-- 🔥 新增：分段时长配置 -->
+      <el-form-item label="分段时长" prop="segment_duration">
+        <el-select v-model="recordingForm.segment_duration" placeholder="选择分段时长">
+          <el-option label="1小时（推荐）" :value="3600">
+            <span>1小时</span>
+            <span style="color: var(--el-text-color-secondary); margin-left: 8px;">
+              （推荐）
+            </span>
+          </el-option>
+          <el-option label="2小时" :value="7200" />
+          <el-option label="3.5小时" :value="12600" />
+          <el-option label="5小时" :value="18000" />
+          <el-option label="不限时" :value="0">
+            <span>不限时</span>
+            <span style="color: var(--el-text-color-secondary); margin-left: 8px;">
+              （整个时段一个文件）
+            </span>
+          </el-option>
+        </el-select>
+        <div class="form-tip">
+          <el-icon><InfoFilled /></el-icon>
+          分段录制更安全：中断只损失一段，修复更快。推荐1-2小时。
+        </div>
+      </el-form-item>
+      
+      <!-- 🔥 新增：预估信息显示 -->
+      <div v-if="recordingForm.startTime && recordingForm.endTime" class="segment-preview">
+        <div class="segment-preview-item">
+          <span class="segment-preview-label">预估文件数量：</span>
+          <span class="segment-preview-value">
+            {{ estimatedFileCount }} 个/天
+          </span>
+        </div>
+        <div class="segment-preview-item">
+          <span class="segment-preview-label">
+            {{ recordingForm.segment_duration === 0 ? '总文件大小' : '单个文件大小' }}：
+          </span>
+          <span class="segment-preview-value">
+            {{ formatFileSize(estimatedFileSize) }}
+          </span>
+        </div>
+        <div v-if="recordingForm.segment_duration === 0" class="segment-preview-item">
+          <span class="segment-preview-label">⚠️ 风险提示：</span>
+          <span class="segment-preview-value" style="color: var(--el-color-danger);">
+            不分段风险较高
+          </span>
+        </div>
+      </div>
+      
       <el-form-item label="保留天数">
         <el-input-number v-model="recordingForm.retentionDays" :min="1" :max="7" />
       </el-form-item>
@@ -1826,8 +2733,61 @@ export default {
 </template>
 
 <script setup>
+import { ref, computed } from 'vue';
+import { InfoFilled } from '@element-plus/icons-vue';
 import recordingApi from '@/services/recordingApi';
 import { ElMessageBox, ElMessage } from 'element-plus';
+
+const recordingForm = ref({
+  startTime: '07:50',
+  endTime: '17:20',
+  segment_duration: 3600,  // 默认1小时
+  retentionDays: 2
+});
+
+// 🔥 新增：计算预估文件数量
+const estimatedFileCount = computed(() => {
+  if (!recordingForm.value.startTime || !recordingForm.value.endTime) return 0
+  
+  const [startHour, startMin] = recordingForm.value.startTime.split(':').map(Number)
+  const [endHour, endMin] = recordingForm.value.endTime.split(':').map(Number)
+  
+  const totalMinutes = (endHour * 60 + endMin) - (startHour * 60 + startMin)
+  
+  if (recordingForm.value.segment_duration === 0) {
+    return 1  // 不限时，一个文件
+  }
+  
+  return Math.ceil((totalMinutes * 60) / recordingForm.value.segment_duration)
+});
+
+// 🔥 新增：预估单个文件大小（基于1500kbps码率）
+const estimatedFileSize = computed(() => {
+  if (!recordingForm.value.startTime || !recordingForm.value.endTime) return 0
+  
+  const [startHour, startMin] = recordingForm.value.startTime.split(':').map(Number)
+  const [endHour, endMin] = recordingForm.value.endTime.split(':').map(Number)
+  
+  const totalSeconds = ((endHour * 60 + endMin) - (startHour * 60 + startMin)) * 60
+  const bitrate = 1500  // kbps
+  
+  if (recordingForm.value.segment_duration === 0) {
+    // 不限时：整个时段的大小
+    return (totalSeconds * bitrate) / 8 / 1024  // MB
+  } else {
+    // 分段：单个段的大小
+    const segmentSeconds = Math.min(recordingForm.value.segment_duration, totalSeconds)
+    return (segmentSeconds * bitrate) / 8 / 1024  // MB
+  }
+});
+
+// 🔥 新增：格式化文件大小
+const formatFileSize = (mb) => {
+  if (mb >= 1024) {
+    return `${(mb / 1024).toFixed(2)} GB`
+  }
+  return `${mb.toFixed(0)} MB`
+};
 
 // 切换录制开关
 async function handleRecordingToggle(channel) {
@@ -1894,6 +2854,45 @@ async function checkActiveViewers(channelId) {
   }
 }
 </script>
+
+<style scoped>
+.form-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.segment-preview {
+  margin-top: 12px;
+  margin-bottom: 12px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.segment-preview-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.segment-preview-item:last-child {
+  margin-bottom: 0;
+}
+
+.segment-preview-label {
+  color: var(--el-text-color-regular);
+}
+
+.segment-preview-value {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+</style>
 ```
 
 ### 5.3 部署前端
@@ -1952,7 +2951,7 @@ class ScheduledTaskManager {
     this.streamManager = simpleStreamManager;
     this.tasks = new Map(); // 定时任务跟踪
     this.activeRecordings = new Map(); // 当前活跃的定时录制
-    this.recordingsDir = process.env.RECORDINGS_BASE_DIR || '/var/recordings';
+    this.recordingsDir = process.env.RECORDINGS_BASE_DIR || '/srv/filebrowser/yoyo-k';
     this.cleanupHour = process.env.RECORDINGS_CLEANUP_HOUR || 3;
     this.retentionDays = process.env.RECORDINGS_RETENTION_DAYS || 2;
     this.workerApiUrl = process.env.WORKER_API_URL || 'https://yoyoapi.5202021.xyz';
@@ -2191,38 +3190,86 @@ class ScheduledTaskManager {
   }
   
   /**
-   * 获取频道配置（从Workers API）
+   * 🔥 修复Bug12 (v2): 获取频道配置（包含RTMP URL）
+   * 更新方案：调用Workers新增的频道配置API，复用现有RTMP获取逻辑
+   * 
+   * 注意：需要在Workers端添加 /api/channels/:channelId 端点
+   * Workers端会从KV获取RTMP URL（优先）或使用默认配置
    */
   async getChannelConfig(channel_id) {
     try {
-      const response = await fetch(`${this.workerApiUrl}/api/channels/${channel_id}`, {
-        headers: {
-          'X-API-Key': this.apiKey
+      // 调用Workers API获取完整的频道配置（包含RTMP URL）
+      const response = await fetch(
+        `${this.workerApiUrl}/api/channels/${channel_id}`,
+        {
+          headers: {
+            'X-API-Key': this.apiKey
+          }
         }
-      });
+      );
       
       if (!response.ok) {
-        throw new Error(`API request failed: ${response.status}`);
+        throw new Error(`Failed to get channel config: ${response.status}`);
       }
       
-      const data = await response.json();
-      return data.data;
+      const channelData = await response.json();
+      
+      // Workers API应该返回：
+      // {
+      //   status: 'success',
+      //   data: {
+      //     channelId: 'stream_xxx',
+      //     name: '二楼教室1',
+      //     rtmpUrl: 'rtmp://push228.dodool.com.cn/55/3?auth_key=...',
+      //     recordingEnabled: true,
+      //     recordingConfig: { ... }
+      //   }
+      // }
+      
+      if (!channelData.data?.rtmpUrl) {
+        throw new Error('No RTMP URL found in channel config');
+      }
+      
+      return channelData.data;
       
     } catch (error) {
       logger.error('Failed to get channel config', {
         channel_id,
         error: error.message
       });
+      
+      // 🔥 降级方案：使用默认RTMP配置（与Workers保持一致）
+      const defaultRtmpUrls = {
+        'stream_ensxma2g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+        'stream_gkg5hknc': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
+        'stream_kcwxuedx': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+        'stream_kil0lecb': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
+        'stream_noyoostd': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+        'stream_3blyhqh3': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
+        'stream_8zf48z6g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
+        'stream_cpa2czoo': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b'
+      };
+      
+      if (defaultRtmpUrls[channel_id]) {
+        logger.warn('Using fallback RTMP URL', { channel_id });
+        return {
+          channelId: channel_id,
+          rtmpUrl: defaultRtmpUrls[channel_id],
+          name: channel_id // 使用channelId作为默认名称
+        };
+      }
+      
       return null;
     }
   }
   
   /**
-   * 在D1中创建录制记录（通过Workers API）
+   * 🔥 修复Bug13: 在D1中创建录制记录（使用正确的API端点）
    */
   async createRecordingInD1(recordData) {
     try {
-      const response = await fetch(`${this.workerApiUrl}/api/admin/recordings`, {
+      // 使用正确的API端点 /api/recording/files
+      const response = await fetch(`${this.workerApiUrl}/api/recording/files`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
