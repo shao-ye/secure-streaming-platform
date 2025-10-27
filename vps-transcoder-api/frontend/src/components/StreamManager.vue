@@ -44,7 +44,23 @@
         </el-table-column>
         <el-table-column label="预加载状态" width="110" align="center">
           <template #default="scope">
+            <el-tooltip 
+              v-if="scope.row.preloadConfig?.enabled"
+              :content="getPreloadConfigDescription(scope.row)"
+              placement="top"
+              effect="dark"
+            >
+              <el-tag 
+                :type="getPreloadStatusType(scope.row)"
+                size="small"
+                effect="plain"
+                style="cursor: help"
+              >
+                {{ getPreloadStatusText(scope.row) }}
+              </el-tag>
+            </el-tooltip>
             <el-tag 
+              v-else
               :type="getPreloadStatusType(scope.row)"
               size="small"
               effect="plain"
@@ -423,6 +439,29 @@ const getPreloadStatusType = (stream) => {
     return 'info'
   }
   return stream.preloadConfig.enabled ? 'success' : 'info'
+}
+
+// 获取预加载配置描述文本（用于tooltip）
+const getPreloadConfigDescription = (stream) => {
+  if (!stream.preloadConfig || !stream.preloadConfig.enabled) {
+    return ''
+  }
+  
+  const config = stream.preloadConfig
+  const start = config.startTime || '07:00'
+  const end = config.endTime || '17:30'
+  
+  // 根据工作日设置选择时段描述
+  const timePrefix = config.workdaysOnly ? '工作日' : '每天'
+  
+  // 判断是否跨天
+  const isCrossDay = end < start
+  
+  if (isCrossDay) {
+    return `预加载时段: ${timePrefix} ${start} - 次日 ${end} (跨天)`
+  } else {
+    return `预加载时段: ${timePrefix} ${start} - ${end}`
+  }
 }
 
 // 处理添加对话框关闭
