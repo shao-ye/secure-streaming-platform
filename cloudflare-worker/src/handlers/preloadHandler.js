@@ -72,10 +72,11 @@ async function getAllPreloadConfigs(env) {
 
 /**
  * 更新频道的预加载配置
+ * 🆕 整合策略：将预加载配置嵌入到频道配置中
  */
 async function updatePreloadConfig(env, channelId, data, username) {
   try {
-    const { enabled, startTime, endTime, workdaysOnly } = data;  // 🆕 接受workdaysOnly参数
+    const { enabled, startTime, endTime, workdaysOnly } = data;
     
     // 验证时间格式
     if (!isValidTimeFormat(startTime) || !isValidTimeFormat(endTime)) {
@@ -85,30 +86,60 @@ async function updatePreloadConfig(env, channelId, data, username) {
       };
     }
     
-    const config = {
-      channelId,
+    // 🆕 读取现有频道配置
+    const channelKey = `channel:${channelId}`;
+    let channelData = null;
+    
+    try {
+      const existingData = await env.YOYO_USER_DB.get(channelKey);
+      if (existingData) {
+        channelData = JSON.parse(existingData);
+      }
+    } catch (error) {
+      console.error('读取频道配置失败:', error);
+    }
+    
+    // 如果频道不存在，创建基础配置
+    if (!channelData) {
+      channelData = {
+        id: channelId,
+        name: channelId,
+        rtmpUrl: '',
+        sortOrder: 999,
+        updatedAt: new Date().toISOString()
+      };
+    }
+    
+    // 🆕 构建预加载配置
+    const preloadConfig = {
       enabled: enabled === true,
       startTime,
       endTime,
-      workdaysOnly: workdaysOnly === true,  // 🆕 保存工作日限制设置
+      workdaysOnly: workdaysOnly === true,
       updatedAt: new Date().toISOString(),
       updatedBy: username || 'unknown'
     };
     
-    const key = `PRELOAD_CONFIG:${channelId}`;
-    await env.YOYO_USER_DB.put(key, JSON.stringify(config));
+    // 🆕 嵌入到频道配置（只写这里，不再写旧键）
+    channelData.preloadConfig = preloadConfig;
+    channelData.updatedAt = new Date().toISOString();
     
-    // 🆕 通知VPS重新加载调度器（可选，如果VPS API可用）
+    // 🆕 保存更新后的频道配置
+    await env.YOYO_USER_DB.put(channelKey, JSON.stringify(channelData));
+    
+    // 通知VPS重新加载调度器
     try {
       await notifyVpsReload(env);
     } catch (error) {
-      // 通知失败不影响配置保存
-      console.error('Failed to notify VPS:', error);
+      console.error('通知VPS失败:', error);
     }
     
     return {
       status: 'success',
-      data: config
+      data: {
+        channelId,
+        ...preloadConfig
+      }
     };
   } catch (error) {
     console.error('Failed to update preload config:', error);
