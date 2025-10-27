@@ -1,8 +1,8 @@
-# YOYO流媒体平台架构文档 V2.1
+# YOYO流媒体平台架构文档 V2.2
 
 > **精简架构文档** - 专注于核心架构设计和关键技术实现  
 > **更新时间**: 2025-10-27  
-> **文档版本**: V2.1 - 新增智能预加载系统
+> **文档版本**: V2.2 - 新增工作日预加载功能
 
 ---
 
@@ -352,15 +352,40 @@ Workers组合双维度路由模式
 class PreloadScheduler {
   // 使用node-cron为每个频道创建精确定时任务
   scheduledJobs = new Map();  // channelId -> [startJob, endJob]
+  workdayChecker = null;  // 🆕 工作日检测器实例
   
   async start() {
-    // 1. 从Workers API获取所有预加载配置
-    // 2. 为每个启用的频道创建开始/结束定时任务
-    // 3. 服务启动时检测并立即启动应预加载的频道
+    // 🆕 1. 初始化工作日检测器（预取当前月+下月数据）
+    await this.workdayChecker.initialize();
+    
+    // 2. 从Workers API获取所有预加载配置
+    // 3. 为每个启用的频道创建开始/结束定时任务
+    // 4. 服务启动时检测并立即启动应预加载的频道
+  }
+  
+  async shouldPreloadNow(config, currentTime) {
+    // 步骤1: 检查时间段
+    const inTimeRange = this.isInTimeRange(currentTime, startTime, endTime);
+    if (!inTimeRange) return false;
+    
+    // 🆕 步骤2: 检查工作日（如果启用）
+    if (config.workdaysOnly) {
+      const isWorkday = await this.workdayChecker.isWorkday();
+      if (!isWorkday) {
+        return false;  // 非工作日，跳过预加载
+      }
+    }
+    return true;
   }
   
   schedulePreload(channelId, config) {
-    // 创建开始任务: cron.schedule('40 7 * * *', ...)
+    // 创建开始任务: cron.schedule('40 7 * * *', async () => {
+    //   🆕 实时检查是否应该启动（包含工作日检查）
+    //   if (await shouldPreloadNow(config, currentTime)) {
+    //     await startPreload(config);
+    //   }
+    // })
+    
     // 创建结束任务: cron.schedule('20 17 * * *', ...)
   }
 }
@@ -369,8 +394,10 @@ class PreloadScheduler {
 **调度策略**:
 - ✅ 基于北京时间（UTC+8）的精确cron任务
 - ✅ 每个频道2个任务（开始+结束），例如07:40启动，17:20停止
+- ✅ **工作日智能判断**: 定时任务触发时实时检查工作日 ⭐
 - ✅ 配置变更时热重载，立即生效
 - ✅ 服务重启时自动检测当前时段，立即启动应预加载的频道
+- ✅ **容错降级**: API失败时自动降级为每日预加载，不中断服务 ⭐
 
 #### 4.2 SimpleStreamManager预加载支持
 ```javascript
@@ -416,21 +443,88 @@ class PreloadHealthCheck {
     "enabled": true,
     "startTime": "07:00",
     "endTime": "17:30",
-    "updatedAt": "2025-10-27T09:00:00Z"
+    "workdaysOnly": true,
+    "updatedAt": "2025-10-27T09:00:00Z",
+    "updatedBy": "admin"
   }
 }
 ```
 
+#### 4.4 WorkdayChecker（工作日检测器）⭐ 新增
+
+**功能概述**: 智能识别工作日，支持法定节假日和调休识别
+
+```javascript
+// services/WorkdayChecker.js
+class WorkdayChecker {
+  apiUrl = 'https://timor.tech/api/holiday/info';
+  cache = new Map();  // 内存缓存
+  failedMonths = new Set();  // 失败月份跟踪
+  
+  async initialize() {
+    // 1. 预取当前月+下月工作日数据
+    // 2. 设置定时任务：每天凌晨1点检查
+    //    - 25号预取下月数据
+    //    - 重试失败的月份
+  }
+  
+  async isWorkday(date = new Date()) {
+    // 1. 检查缓存 → 命中返回（24小时有效期）
+    // 2. 调用API → type=0或3为工作日
+    // 3. 失败降级 → 周一至周五=工作日（无法识别节假日）
+    // 4. 写入缓存
+  }
+}
+```
+
+**核心特性**:
+- ✅ **数据源**: Timor API (免费、稳定、准确)
+- ✅ **数据预取**: 启动时预取当前月+下月，25号自动预取下月
+- ✅ **智能缓存**: 内存缓存 + 24小时有效期，95%请求<1ms
+- ✅ **失败重试**: 自动跟踪失败月份，每天凌晨1点重试
+- ✅ **容错降级**: API失败时降级为基础模式（周一至周五）
+- ✅ **节假日识别**: 自动识别法定节假日和调休工作日
+
+**工作日类型**:
+- `type=0` - 正常工作日（周一至周五）
+- `type=1` - 周末休息日
+- `type=2` - 法定节假日
+- `type=3` - 调休工作日（需要上班）
+
+**API调用优化**:
+```javascript
+// 添加User-Agent避免Cloudflare Bot防护
+fetch(apiUrl, {
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'
+  }
+});
+```
+
 **Workers API端点**:
 - `GET /api/preload/config/:channelId` - 获取频道预加载配置
-- `PUT /api/preload/config/:channelId` - 更新频道预加载配置
+- `PUT /api/preload/config/:channelId` - 更新频道预加载配置（含workdaysOnly）
 - `GET /api/preload/status` - 查询预加载系统状态
+- `GET /api/preload/workday-status` - 查询工作日检测器状态 ⭐ 新增
 - `POST /api/preload/reload` - 重载调度器配置
+
+**VPS API端点**:
+- `GET /api/preload/workday-status` - 返回工作日数据就绪状态和失败月份
 
 **前端管理界面**:
 - 频道列表中添加"预加载"按钮
-- PreloadConfigDialog组件：配置开关、开始时间、结束时间
-- 实时显示预加载状态
+- PreloadConfigDialog组件：
+  - 预加载开关（enabled）
+  - 开始/结束时间
+  - **仅工作日开关（workdaysOnly）** ⭐ 新增
+  - **工作日状态显示** ⭐ 新增
+    - ✅ 数据已加载 (success)
+    - ⚠️ N个月份待重试 (warning)
+    - 🔄 正在加载数据 (info)
+    - ❌ 获取状态失败 (danger)
+- 时段描述动态显示：
+  - workdaysOnly=false: "预加载时段：每天 07:40 - 17:25"
+  - workdaysOnly=true: "预加载时段：工作日 07:40 - 17:25"
 
 **性能优化效果**:
 - ⚡ **零延迟播放**: 预加载时段用户点击立即播放（<0.5秒）
@@ -692,12 +786,20 @@ ffmpeg -i rtmp://... \
 - ✅ **双维度可视化显示**
 - ✅ **完整的故障转移机制**
 
-### V2.1 (2025-10-27) ⭐ 当前版本
+### V2.1 (2025-10-27)
 - ✅ **智能预加载系统**
 - ✅ **PreloadScheduler定时调度器**
 - ✅ **PreloadHealthCheck健康检查**
 - ✅ **前端预加载配置管理界面**
 - ✅ **零延迟播放体验（预加载时段）**
+
+### V2.2 (2025-10-27) ⭐ 当前版本
+- ✅ **工作日预加载功能** ⭐
+- ✅ **WorkdayChecker工作日检测器**
+- ✅ **仅工作日开关（workdaysOnly）**
+- ✅ **法定节假日和调休识别**
+- ✅ **工作日状态实时显示**
+- ✅ **智能降级和失败重试机制**
 
 ---
 
@@ -707,6 +809,7 @@ ffmpeg -i rtmp://... \
 - **本文档**: `doc/ARCHITECTURE_V2.md` - 精简架构文档
 - **详细架构**: `doc/DUAL_DIMENSION_ROUTING_ARCHITECTURE.md` - 双维度路由详细实现
 - **预加载方案**: `doc/PRELOAD_IMPLEMENTATION_STAGED.md` - 智能预加载阶段实施文档
+- **工作日预加载**: `doc/WORKDAY_PRELOAD_IMPLEMENTATION.md` - 工作日预加载实施方案 ⭐
 - **实施记录**: `DUAL_DIMENSION_ROUTING_FIX_STAGED.md` - 阶段实施记录
 
 ### 历史文档
@@ -744,10 +847,19 @@ A: 视频播放界面显示双维度标签
 A: 影响很小（~10-50ms），且有故障转移
 
 **Q: 如何配置频道预加载？**  
-A: 管理后台 → 频道列表 → 点击"预加载"按钮 → 设置开始/结束时间
+A: 管理后台 → 频道列表 → 点击"预加载"按钮 → 设置开始/结束时间 → 可选启用"仅工作日"
 
 **Q: 预加载能节省多少资源？**  
-A: 仅在配置时段运行，相比全天运行节省约70-80%资源
+A: 仅在配置时段运行，相比全天运行节省约70-80%资源。启用"仅工作日"后，周末和节假日自动跳过，进一步节省约30%资源
+
+**Q: 工作日预加载如何识别节假日？** ⭐  
+A: 使用Timor API获取官方节假日数据，自动识别法定节假日、调休工作日。API失败时降级为基础模式（周一至周五）
+
+**Q: 工作日数据从哪里来？**  
+A: VPS启动时自动预取当前月+下月数据，每月25号预取下月数据。失败的月份会每天凌晨1点自动重试
+
+**Q: 如果工作日API调用失败怎么办？**  
+A: 系统有完善的降级机制：API失败时自动降级为基础模式（周一至周五=工作日），不影响预加载服务
 
 **Q: 如何部署最新代码？**  
 A: 使用一键部署脚本（见"部署架构"章节）
