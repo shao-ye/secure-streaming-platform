@@ -140,7 +140,15 @@ class WorkdayChecker {
       // 降级为基础模式：周一至周五视为工作日
       // 注意：此模式无法识别法定节假日和调休
       const dayOfWeek = date.getDay();
-      return dayOfWeek >= 1 && dayOfWeek <= 5;
+      const isWorkday = dayOfWeek >= 1 && dayOfWeek <= 5;
+      
+      // 🆕 基础模式结果也要缓存（避免重复判断）
+      this.cache.set(dateStr, {
+        isWorkday,
+        cachedAt: Date.now()
+      });
+      
+      return isWorkday;
     }
   }
 
