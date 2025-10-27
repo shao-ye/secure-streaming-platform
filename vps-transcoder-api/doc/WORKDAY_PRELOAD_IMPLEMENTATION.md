@@ -216,26 +216,183 @@ curl .../api/preload/config/test
 
 **文件**: `src/services/PreloadScheduler.js`
 
-### 修改点
+### 3.1 修改点概述
+
+需要在3个关键位置加入工作日判断：
+1. **构造函数** - 初始化WorkdayChecker
+2. **start()** - 启动时初始化工作日数据
+3. **shouldPreloadNow()** - 改为异步，加入工作日检查
+4. **initializePreloads()** - 启动时检查工作日
+5. **scheduleChannel()** - 定时任务触发时检查工作日
+
+### 3.2 构造函数修改
+
 ```javascript
-// 1. 构造函数
-this.workdayChecker = new WorkdayChecker();
+const WorkdayChecker = require('./WorkdayChecker');
 
-// 2. start()
-await this.workdayChecker.initialize();
-
-// 3. shouldStartPreloadNow()
-if (config.workdaysOnly) {
-  try {
-    const isWorkday = await this.workdayChecker.isWorkday();
-    if (!isWorkday) {
-      console.log('非工作日，跳过');
-      return false;
-    }
-  } catch (error) {
-    console.warn('API失败，降级为每日预加载');
-    // 继续执行
+class PreloadScheduler {
+  constructor(streamManager) {
+    this.streamManager = streamManager;
+    this.cronTasks = new Map();
+    
+    // 🆕 初始化工作日检测器
+    this.workdayChecker = new WorkdayChecker();
+    
+    this.workersApiUrl = process.env.WORKERS_API_URL || 'https://yoyoapi.5202021.xyz';
+    this.workersApiKey = process.env.WORKERS_API_KEY || '';
   }
+}
+```
+
+### 3.3 start() 方法修改
+
+```javascript
+async start() {
+  try {
+    logger.info('Starting PreloadScheduler...');
+    
+    // 🆕 1. 初始化工作日检测器（预取当前月+下月数据）
+    logger.info('Initializing WorkdayChecker...');
+    await this.workdayChecker.initialize();
+    logger.info('WorkdayChecker initialized successfully');
+    
+    // 2. 获取所有预加载配置
+    const configs = await this.fetchPreloadConfigs();
+    
+    // ... 现有代码
+  }
+}
+```
+
+### 3.4 shouldPreloadNow() 方法改造 ⭐
+
+**关键修改**：从同步改为异步，加入工作日检查
+
+```javascript
+// 旧版本（同步）
+shouldPreloadNow(config, currentTime) {
+  const { startTime, endTime } = config;
+  // 只检查时间段...
+  return inTimeRange;
+}
+
+// 🆕 新版本（异步，含工作日检查）
+async shouldPreloadNow(config, currentTime) {
+  const { startTime, endTime, workdaysOnly } = config;
+  
+  // 步骤1: 检查时间段
+  const inTimeRange = this.isInTimeRange(currentTime, startTime, endTime);
+  if (!inTimeRange) {
+    return false;
+  }
+  
+  // 步骤2: 🆕 检查工作日（如果启用）
+  if (workdaysOnly) {
+    try {
+      const isWorkday = await this.workdayChecker.isWorkday();
+      
+      if (!isWorkday) {
+        logger.info('Today is not a workday, skipping preload', { 
+          channelId: config.channelId 
+        });
+        return false;
+      }
+      
+      logger.info('Today is a workday, preload allowed', { 
+        channelId: config.channelId 
+      });
+      
+    } catch (error) {
+      // 容错：API失败时降级为基础模式
+      logger.warn('Workday check failed, falling back to basic mode', { 
+        channelId: config.channelId,
+        error: error.message 
+      });
+      // 继续执行（降级为每日预加载）
+    }
+  }
+  
+  return true;
+}
+
+// 🆕 辅助方法：时间段检查（从shouldPreloadNow提取）
+isInTimeRange(currentTime, startTime, endTime) {
+  const [currentHour, currentMinute] = currentTime.split(':').map(Number);
+  const [startHour, startMinute] = startTime.split(':').map(Number);
+  const [endHour, endMinute] = endTime.split(':').map(Number);
+  
+  const currentMinutes = currentHour * 60 + currentMinute;
+  const startMinutes = startHour * 60 + startMinute;
+  const endMinutes = endHour * 60 + endMinute;
+  
+  // 处理跨天情况
+  if (endMinutes < startMinutes) {
+    return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+  } else {
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  }
+}
+```
+
+### 3.5 initializePreloads() 方法修改
+
+```javascript
+async initializePreloads(configs) {
+  const currentTime = this.getBeijingTime().format('HH:mm');
+  
+  logger.info('Initializing preloads at startup', { currentTime });
+  
+  for (const config of configs) {
+    // 🆕 改为await异步调用（支持工作日检查）
+    if (await this.shouldPreloadNow(config, currentTime)) {
+      logger.info('Starting preload at startup', { 
+        channelId: config.channelId,
+        currentTime,
+        startTime: config.startTime,
+        endTime: config.endTime,
+        workdaysOnly: config.workdaysOnly  // 🆕 记录工作日设置
+      });
+      
+      await this.startPreload(config);
+    }
+  }
+}
+```
+
+### 3.6 scheduleChannel() 定时任务修改
+
+```javascript
+scheduleChannel(config) {
+  const { channelId, startTime, endTime } = config;
+  
+  // ... 取消旧任务代码
+  
+  // 创建开始任务
+  const startCron = `${startMinute} ${startHour} * * *`;
+  const startTask = cron.schedule(startCron, async () => {
+    logger.info('Cron triggered: Starting preload', { 
+      channelId, 
+      time: startTime,
+      workdaysOnly: config.workdaysOnly  // 🆕 记录设置
+    });
+    
+    // 🆕 实时检查是否应该启动（包含工作日检查）
+    const currentTime = this.getBeijingTime().format('HH:mm');
+    const shouldStart = await this.shouldPreloadNow(config, currentTime);
+    
+    if (shouldStart) {
+      await this.startPreload(config);
+    } else {
+      logger.info('Preload skipped by shouldPreloadNow check', { 
+        channelId,
+        reason: config.workdaysOnly ? 'Not a workday' : 'Out of time range'
+      });
+    }
+  }, {
+    timezone: 'Asia/Shanghai'
+  });
+  
+  // ... 创建结束任务代码（无需修改）
 }
 ```
 
