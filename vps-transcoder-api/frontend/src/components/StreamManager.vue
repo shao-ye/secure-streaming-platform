@@ -74,7 +74,7 @@
             </el-button-group>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="scope">
             <el-button
               type="primary"
@@ -83,6 +83,14 @@
               @click="startEdit(scope.row)"
             >
               编辑
+            </el-button>
+            <el-button
+              type="success"
+              size="small"
+              :icon="Timer"
+              @click="openPreloadConfig(scope.row)"
+            >
+              预加载
             </el-button>
             <el-button
               type="danger"
@@ -195,14 +203,23 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 🆕 预加载配置对话框 -->
+    <PreloadConfigDialog
+      v-model="preloadDialogVisible"
+      :channel-id="currentChannel.id"
+      :channel-name="currentChannel.name"
+      @saved="handlePreloadSaved"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Edit, Delete, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { Refresh, Edit, Delete, ArrowUp, ArrowDown, Timer } from '@element-plus/icons-vue'
 import { useStreamsStore } from '../stores/streams'
+import PreloadConfigDialog from './admin/PreloadConfigDialog.vue'
 import dayjs from 'dayjs'
 
 const streamsStore = useStreamsStore()
@@ -213,6 +230,10 @@ const addLoading = ref(false)
 const editLoading = ref(false)
 const editDialogVisible = ref(false)
 const showAddDialog = ref(false)
+
+// 🆕 预加载配置对话框
+const preloadDialogVisible = ref(false)
+const currentChannel = ref({ id: '', name: '' })
 
 // 排序后的频道列表
 const sortedStreams = computed(() => {
@@ -418,6 +439,20 @@ const moveDown = async (index) => {
     ElMessage.error('排序更新失败')
     console.error('排序更新错误:', error)
   }
+}
+
+// 🆕 打开预加载配置对话框
+const openPreloadConfig = (stream) => {
+  currentChannel.value = {
+    id: stream.id,
+    name: stream.name
+  }
+  preloadDialogVisible.value = true
+}
+
+// 🆕 预加载配置保存成功回调
+const handlePreloadSaved = () => {
+  ElMessage.success('预加载配置已更新')
 }
 
 onMounted(() => {
