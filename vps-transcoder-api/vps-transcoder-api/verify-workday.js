@@ -26,15 +26,19 @@ async function testWorkdayChecker() {
     const isTodayWorkday2 = await checker.isWorkday(today);
     console.log(`   结果: ${isTodayWorkday2 ? '✅ 工作日' : '❌ 非工作日'} (应从缓存读取)`);
     
-    // 测试3: 测试已知工作日
+    // 测试3: 测试已知工作日（使用本地时间避免时区问题）
     console.log('\n3. 测试周一 (2025-10-27)...');
-    const monday = new Date('2025-10-27');
+    const monday = new Date(2025, 9, 27); // 月份从0开始，9=10月
+    const mondayStr = checker.formatDate(monday);
+    console.log(`   实际检查日期: ${mondayStr}`);
     const isMondayWorkday = await checker.isWorkday(monday);
     console.log(`   结果: ${isMondayWorkday ? '✅ 工作日' : '❌ 非工作日'} (期望: 工作日)`);
     
     // 测试4: 测试已知周末
     console.log('\n4. 测试周日 (2025-10-26)...');
-    const sunday = new Date('2025-10-26');
+    const sunday = new Date(2025, 9, 26); // 月份从0开始，9=10月
+    const sundayStr = checker.formatDate(sunday);
+    console.log(`   实际检查日期: ${sundayStr}`);
     const isSundayWorkday = await checker.isWorkday(sunday);
     console.log(`   结果: ${isSundayWorkday ? '❌ 工作日' : '✅ 非工作日'} (期望: 非工作日)`);
     
