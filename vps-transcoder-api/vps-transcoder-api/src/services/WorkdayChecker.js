@@ -14,7 +14,7 @@ const logger = require('../utils/logger');
 class WorkdayChecker {
   constructor() {
     // Timor API配置
-    this.apiUrl = 'https://timor.tech/api/holiday/year';
+    this.apiUrl = 'https://timor.tech/api/holiday/info';  // 🆕 修正为info端点
     
     // 内存缓存 Map<'YYYY-MM-DD', {isWorkday: boolean, cachedAt: timestamp}>
     this.cache = new Map();
@@ -104,7 +104,12 @@ class WorkdayChecker {
     
     // 2. 调用API获取
     try {
-      const response = await fetch(`${this.apiUrl}/${dateStr}`);
+      // 🆕 添加User-Agent避免Cloudflare Bot防护
+      const response = await fetch(`${this.apiUrl}/${dateStr}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
