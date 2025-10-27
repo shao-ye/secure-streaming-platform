@@ -7,7 +7,7 @@
   >
     <el-form :model="form" label-width="100px" :rules="rules" ref="formRef">
       <el-form-item label="频道">
-        <el-input v-model="channelName" disabled />
+        <el-input :value="channelName" disabled />
       </el-form-item>
       
       <el-form-item label="预加载开关" prop="enabled">
@@ -61,7 +61,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import api from '@/api';
+import axios from '@/utils/axios';
 
 const props = defineProps({
   modelValue: {
@@ -130,7 +130,7 @@ watch(() => props.modelValue, async (val) => {
 // 加载预加载配置
 async function loadConfig() {
   try {
-    const response = await api.get(`/api/preload/config/${props.channelId}`);
+    const response = await axios.get(`/api/preload/config/${props.channelId}`);
     
     if (response.data.status === 'success') {
       const config = response.data.data;
@@ -153,7 +153,7 @@ async function handleSave() {
     
     saving.value = true;
     
-    const response = await api.put(`/api/preload/config/${props.channelId}`, {
+    const response = await axios.put(`/api/preload/config/${props.channelId}`, {
       enabled: form.value.enabled,
       startTime: form.value.startTime,
       endTime: form.value.endTime
