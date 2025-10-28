@@ -584,11 +584,11 @@ const openPreloadConfig = (stream) => {
   preloadDialogVisible.value = true
 }
 
-// 🆕 预加载配置保存成功回调
+// 🆕 频道配置保存成功回调（预加载 + 录制）
 const handlePreloadSaved = async () => {
-  ElMessage.success('预加载配置已更新')
-  // 刷新频道列表以更新预加载状态显示
+  // 刷新频道列表以更新预加载和录制状态显示
   await streamsStore.fetchAdminStreams()
+  // 提示消息已经在ChannelConfigDialog中显示，这里不重复显示
 }
 
 onMounted(() => {
