@@ -866,10 +866,10 @@ async function handleRequest(request, env, ctx) {
         }
         
         // 2. 同步到VPS配置
-        const vpsApiUrl = 'https://yoyo-vps.5202021.xyz/api/simple-stream/configure';
+        const vpsApiUrl = `${env.VPS_API_URL}/api/simple-stream/configure`;
         const vpsHeaders = {
           'Content-Type': 'application/json',
-          'X-API-Key': '85da076ae24b028b3d1ea1884e6b13c5afe34488be0f8d39a05fbbf26d23e938'
+          'X-API-Key': env.VPS_API_KEY  // 使用环境变量，与预加载/录制保持一致
         };
         
         const vpsData = {
