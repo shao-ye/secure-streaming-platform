@@ -69,6 +69,33 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="录制状态" width="110" align="center">
+          <template #default="scope">
+            <el-tooltip 
+              v-if="scope.row.recordConfig?.enabled"
+              :content="getRecordConfigDescription(scope.row)"
+              placement="top"
+              effect="dark"
+            >
+              <el-tag 
+                :type="getRecordStatusType(scope.row)"
+                size="small"
+                effect="plain"
+                style="cursor: help"
+              >
+                {{ getRecordStatusText(scope.row) }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag 
+              v-else
+              :type="getRecordStatusType(scope.row)"
+              size="small"
+              effect="plain"
+            >
+              {{ getRecordStatusText(scope.row) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="排序" width="100" align="center">
           <template #default="scope">
             <span class="sort-order">{{ scope.row.sortOrder || 0 }}</span>
@@ -439,6 +466,47 @@ const getPreloadStatusType = (stream) => {
     return 'info'
   }
   return stream.preloadConfig.enabled ? 'success' : 'info'
+}
+
+// 获取录制状态文字
+const getRecordStatusText = (stream) => {
+  if (!stream.recordConfig) {
+    return '未配置'
+  }
+  return stream.recordConfig.enabled ? '已启用' : '已禁用'
+}
+
+// 获取录制状态标签类型
+const getRecordStatusType = (stream) => {
+  if (!stream.recordConfig) {
+    return 'info'
+  }
+  return stream.recordConfig.enabled ? 'danger' : 'info'
+}
+
+// 获取录制配置描述文本（用于tooltip）
+const getRecordConfigDescription = (stream) => {
+  if (!stream.recordConfig || !stream.recordConfig.enabled) {
+    return ''
+  }
+  
+  const config = stream.recordConfig
+  const start = config.startTime || '07:40'
+  const end = config.endTime || '17:25'
+  
+  // 根据工作日设置选择时段描述
+  const timePrefix = config.workdaysOnly ? '工作日' : '每天'
+  
+  // 判断是否跨天
+  const startHour = parseInt(start.split(':')[0])
+  const endHour = parseInt(end.split(':')[0])
+  const isCrossDay = endHour < startHour || (endHour === startHour && end < start)
+  
+  if (isCrossDay) {
+    return `录制时段：${timePrefix} ${start} - 次日 ${end}`
+  } else {
+    return `录制时段：${timePrefix} ${start} - ${end}`
+  }
 }
 
 // 获取预加载配置描述文本（用于tooltip）
