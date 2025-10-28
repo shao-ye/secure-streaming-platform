@@ -1,8 +1,8 @@
-# YOYO流媒体平台架构文档 V2.3
+# YOYO流媒体平台架构文档 V2.4
 
 > **精简架构文档** - 专注于核心架构设计和关键技术实现  
-> **更新时间**: 2025-10-27  
-> **文档版本**: V2.3 - KV存储结构优化（频道配置与预加载配置合并）
+> **更新时间**: 2025-10-28  
+> **文档版本**: V2.4 - 新增频道定时录制功能
 
 ---
 
@@ -12,6 +12,8 @@
 - [系统架构](#-系统架构)
 - [双维度路由优化](#-双维度路由优化核心)
 - [核心技术组件](#-核心技术组件)
+- [智能预加载系统](#-智能预加载系统)
+- [频道定时录制系统](#-频道定时录制系统)
 - [数据流转机制](#-数据流转机制)
 - [部署架构](#-部署架构)
 - [性能优化](#-性能优化)
@@ -26,8 +28,8 @@
 
 ### 核心定位
 
-- **目标**: 多用户、多频道的实时视频流播放
-- **特色**: 双维度路由优化，智能网络调度，智能预加载
+- **目标**: 多用户、多频道的实时视频流播放与录制
+- **特色**: 双维度路由优化，智能网络调度，智能预加载，定时录制
 - **部署**: 生产环境运行中（2025-10-01上线）
 
 ### 技术栈概览
@@ -543,6 +545,252 @@ fetch(apiUrl, {
 
 ---
 
+## 🎬 频道定时录制系统
+
+**版本**: V2.4 (2025-10-28)  
+**文档**: `doc/RECORDING_IMPLEMENTATION_STAGED.md`  
+**状态**: ✅ 已部署
+
+### 5.1 核心架构
+
+**设计理念**: 一进程双输出，零冗余数据
+
+```javascript
+// 单个FFmpeg进程同时输出HLS（观看）和MP4（录制）
+ffmpeg -i rtmp://input
+  // HLS输出（实时观看）
+  -c:v libx264 -preset ultrafast -an
+  -f hls -hls_time 2 -hls_list_size 6
+  output.m3u8
+  
+  // MP4输出（录制文件）
+  -c:v copy -f mp4 -y
+  recording.mp4
+```
+
+### 5.2 RecordScheduler（录制调度器）
+
+**功能**: 基于node-cron的定时任务管理
+
+```javascript
+// services/RecordScheduler.js
+class RecordScheduler {
+  constructor(streamManager) {
+    this.streamManager = streamManager;
+    this.cronTasks = new Map();  // Map<channelId, {startTask, stopTask}>
+    this.workdayChecker = new WorkdayChecker();  // 复用工作日检测器
+  }
+  
+  scheduleChannel(config) {
+    const { channelId, startTime, endTime } = config;
+    
+    // 开始录制任务（如 07:40）
+    const startCron = `${startM} ${startH} * * *`;
+    const startTask = cron.schedule(startCron, async () => {
+      if (await this.shouldRecordNow(config)) {
+        await this.streamManager.enableRecording(channelId, config);
+      }
+    }, { timezone: 'Asia/Shanghai' });
+    
+    // 停止录制任务（如 17:25）
+    const stopCron = `${endM} ${endH} * * *`;
+    const stopTask = cron.schedule(stopCron, async () => {
+      await this.streamManager.disableRecording(channelId);
+    }, { timezone: 'Asia/Shanghai' });
+    
+    this.cronTasks.set(channelId, { startTask, stopTask });
+  }
+}
+```
+
+**核心特性**:
+- ✅ **定时任务**: 基于node-cron的准点触发
+- ✅ **工作日支持**: 复用WorkdayChecker，支持法定节假日识别
+- ✅ **跨天支持**: 正确处理23:00-01:00等跨天时间段
+- ✅ **配置热重载**: 配置更新后自动重载调度
+- ✅ **启动恢复**: 服务重启时检测当前时段，自动恢复录制
+
+### 5.3 SimpleStreamManager录制支持
+
+**扩展功能**: 在原有转码管理基础上添加录制能力
+
+```javascript
+class SimpleStreamManager {
+  recordingChannels = new Set();      // 录制中的频道集合
+  recordingConfigs = new Map();       // 频道录制配置
+  recordingBaseDir = '/var/www/recordings';
+  
+  async enableRecording(channelId, recordConfig) {
+    // 1. 保存配置
+    this.recordingConfigs.set(channelId, recordConfig);
+    this.recordingChannels.add(channelId);
+    
+    // 2. 启动带录制的FFmpeg进程（或重启现有进程）
+    await this.startStreamWithRecording(channelId, rtmpUrl, recordConfig);
+  }
+  
+  async spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath) {
+    // FFmpeg一进程双输出配置
+    const ffmpegArgs = [
+      '-i', rtmpUrl,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-an',
+      
+      // HLS输出
+      '-f', 'hls', '-hls_time', '2', '-hls_list_size', '6',
+      'playlist.m3u8',
+      
+      // MP4录制输出（copy编码，零损耗）
+      '-c:v', 'copy', '-f', 'mp4', '-y',
+      recordingPath
+    ];
+  }
+  
+  cleanupIdleChannels() {
+    // 跳过录制频道的自动清理
+    if (this.recordingChannels.has(channelId)) {
+      return; // 保留录制进程
+    }
+  }
+}
+```
+
+**关键改进**:
+- ✅ 录制进程不受心跳清理影响
+- ✅ 与观看、预加载共享同一FFmpeg进程
+- ✅ 自动创建录制目录（`fs.mkdirSync(recordDir, { recursive: true })`）
+
+### 5.4 文件命名方案
+
+**混合命名**: channelName + channelId + 时间信息
+
+```javascript
+generateRecordingPath(channelId, channelName, recordConfig) {
+  const dateStr = '20251028';          // YYYYMMDD
+  const startTimeStr = '074000';       // HHMMSS
+  const endTimeStr = '172500';         // HHMMSS
+  
+  // 格式: {频道名}_{频道ID}_{日期}_{开始时间}_to_{结束时间}.mp4
+  const filename = `${channelName}_${channelId}_${dateStr}_${startTimeStr}_to_${endTimeStr}.mp4`;
+  
+  // 路径: /var/www/recordings/{channelId}/{YYYYMMDD}/filename.mp4
+  return path.join(basePath, channelId, dateStr, filename);
+}
+```
+
+**示例文件名**:
+```
+/var/www/recordings/stream_ensxma2g/20251028/
+  二楼教室1_stream_ensxma2g_20251028_074000_to_172500.mp4
+```
+
+**优势**:
+- ✅ 可读性好：包含中文频道名
+- ✅ 唯一性强：包含频道ID避免冲突
+- ✅ 信息完整：包含日期和时间段
+- ✅ UTF-8支持：现代系统原生支持中文文件名
+
+### 5.5 KV存储结构
+
+**整合到频道配置** (recordConfig字段):
+
+```json
+{
+  "channel:stream_ensxma2g": {
+    "id": "stream_ensxma2g",
+    "name": "二楼教室1",
+    "rtmpUrl": "rtmp://...",
+    "preloadConfig": {
+      "enabled": true,
+      "startTime": "07:40",
+      "endTime": "17:25",
+      "workdaysOnly": true
+    },
+    "recordConfig": {
+      "enabled": true,
+      "startTime": "07:40",
+      "endTime": "17:25",
+      "workdaysOnly": true,
+      "storagePath": "/var/www/recordings",
+      "updatedAt": "2025-10-28T12:00:00Z",
+      "updatedBy": "admin"
+    }
+  }
+}
+```
+
+**注**: 
+- recordConfig不存储channelName，从顶层name获取（避免数据冗余）
+- storagePath可配置，支持FileBrowser路径映射
+
+### 5.6 API端点
+
+**Workers API**:
+- `GET /api/record/config/:channelId` - 获取频道录制配置
+- `PUT /api/record/config/:channelId` - 更新频道录制配置
+- `GET /api/record/configs` - 获取所有启用录制的频道（VPS调用）
+
+**VPS API**:
+- `POST /api/record/reload-schedule` - 重新加载录制调度
+- `GET /api/record/status` - 获取录制状态
+
+### 5.7 前端管理界面
+
+**ChannelConfigDialog** (统一配置对话框):
+
+```vue
+<template>
+  <el-dialog title="频道配置">
+    <!-- 上半部分：预加载配置 -->
+    <el-divider>预加载配置</el-divider>
+    <el-switch v-model="preloadConfig.enabled" />
+    <el-time-picker v-model="preloadConfig.startTime" />
+    <el-time-picker v-model="preloadConfig.endTime" />
+    <el-switch v-model="preloadConfig.workdaysOnly" />
+    
+    <!-- 下半部分：录制配置 -->
+    <el-divider>录制配置</el-divider>
+    <el-switch v-model="recordConfig.enabled" />
+    <el-time-picker v-model="recordConfig.startTime" />
+    <el-time-picker v-model="recordConfig.endTime" />
+    <el-switch v-model="recordConfig.workdaysOnly" />
+    <el-input v-model="recordConfig.storagePath" 
+              placeholder="/var/www/recordings" />
+  </el-dialog>
+</template>
+```
+
+**特点**:
+- ✅ 上下分区，清晰直观
+- ✅ 并行保存预加载和录制配置
+- ✅ 实时状态显示
+- ✅ 表单验证
+
+### 5.8 技术亮点
+
+**1. 一进程双输出**
+- 单个FFmpeg进程同时生成HLS（实时观看）和MP4（录制文件）
+- 资源占用minimal，对观看无影响
+
+**2. 零数据冗余**
+- recordConfig不存储channelName
+- 需要时从顶层channel.name获取
+- 保证数据一致性
+
+**3. 进程协调**
+- 录制与观看、预加载共享FFmpeg进程
+- 智能判断：有观看者时重启进程添加录制，无观看者时停止进程
+
+**4. 配置热重载**
+- Workers保存配置后自动通知VPS
+- VPS调用`reloadSchedule()`重新加载所有定时任务
+- 无需重启服务
+
+**5. 自动恢复**
+- 服务启动5秒后自动启动RecordScheduler
+- 检测当前时段，立即恢复应录制的频道
+
+---
+
 ## 🔄 数据流转机制
 
 ### 完整播放流程
@@ -840,13 +1088,29 @@ ffmpeg -i rtmp://... \
 - ✅ **前端预加载配置管理界面**
 - ✅ **零延迟播放体验（预加载时段）**
 
-### V2.2 (2025-10-27) ⭐ 当前版本
-- ✅ **工作日预加载功能** ⭐
+### V2.2 (2025-10-27)
+- ✅ **工作日预加载功能**
 - ✅ **WorkdayChecker工作日检测器**
 - ✅ **仅工作日开关（workdaysOnly）**
 - ✅ **法定节假日和调休识别**
 - ✅ **工作日状态实时显示**
 - ✅ **智能降级和失败重试机制**
+
+### V2.3 (2025-10-27)
+- ✅ **KV存储结构优化**
+- ✅ **频道配置与预加载配置合并**
+- ✅ **减少KV读写操作**
+- ✅ **提升数据一致性**
+
+### V2.4 (2025-10-28) ⭐ 当前版本
+- ✅ **频道定时录制功能** ⭐⭐
+- ✅ **RecordScheduler录制调度器**
+- ✅ **一进程双输出（HLS+MP4同时生成）**
+- ✅ **混合文件命名方案（channelName + channelId）**
+- ✅ **工作日录制支持**
+- ✅ **ChannelConfigDialog统一配置界面**
+- ✅ **录制配置API（Workers + VPS）**
+- ✅ **自动目录创建和热重载**
 
 ---
 
@@ -856,7 +1120,8 @@ ffmpeg -i rtmp://... \
 - **本文档**: `doc/ARCHITECTURE_V2.md` - 精简架构文档
 - **详细架构**: `doc/DUAL_DIMENSION_ROUTING_ARCHITECTURE.md` - 双维度路由详细实现
 - **预加载方案**: `doc/PRELOAD_IMPLEMENTATION_STAGED.md` - 智能预加载阶段实施文档
-- **工作日预加载**: `doc/WORKDAY_PRELOAD_IMPLEMENTATION.md` - 工作日预加载实施方案 ⭐
+- **工作日预加载**: `doc/WORKDAY_PRELOAD_IMPLEMENTATION.md` - 工作日预加载实施方案
+- **录制方案**: `doc/RECORDING_IMPLEMENTATION_STAGED.md` - 频道定时录制阶段实施文档 ⭐
 - **实施记录**: `DUAL_DIMENSION_ROUTING_FIX_STAGED.md` - 阶段实施记录
 
 ### 历史文档
@@ -878,7 +1143,9 @@ ffmpeg -i rtmp://... \
 | 双维度路由 | 前后端路径独立优化 | 本文档 + DUAL_DIMENSION_ROUTING_ARCHITECTURE.md |
 | Workers代理 | 解决隧道SSL问题 | 本文档 "Workers代理方案" |
 | 智能预加载 | 定时预加载，零延迟播放 | 本文档 "智能预加载系统" + PRELOAD_IMPLEMENTATION_STAGED.md |
+| 频道定时录制 | 定时录制视频文件 | 本文档 "频道定时录制系统" + RECORDING_IMPLEMENTATION_STAGED.md |
 | SimpleStreamManager | 转码进程管理 | 本文档 "核心技术组件" |
+| RecordScheduler | 录制调度器 | 本文档 "频道定时录制系统" |
 | 路由决策引擎 | TunnelRouter实现 | DUAL_DIMENSION_ROUTING_ARCHITECTURE.md |
 | 部署流程 | 一键部署命令 | 本文档 "部署架构" |
 
@@ -907,6 +1174,15 @@ A: VPS启动时自动预取当前月+下月数据，每月25号预取下月数�
 
 **Q: 如果工作日API调用失败怎么办？**  
 A: 系统有完善的降级机制：API失败时自动降级为基础模式（周一至周五=工作日），不影响预加载服务
+
+**Q: 如何配置频道录制？** ⭐  
+A: 管理后台 → 频道列表 → 点击"设置"按钮 → 录制配置区域 → 设置开始/结束时间、存储路径 → 可选启用"仅工作日"
+
+**Q: 录制文件如何命名？**  
+A: 使用混合命名方案：`{频道名称}_{频道ID}_{日期}_{开始时间}_to_{结束时间}.mp4`，例如：`二楼教室1_stream_ensxma2g_20251028_074000_to_172500.mp4`
+
+**Q: 录制会影响观看吗？**  
+A: 不会。系统使用一个FFmpeg进程同时输出HLS（观看）和MP4（录制），资源占用minimal
 
 **Q: 如何部署最新代码？**  
 A: 使用一键部署脚本（见"部署架构"章节）
@@ -976,5 +1252,5 @@ A: 使用一键部署脚本（见"部署架构"章节）
 ---
 
 **文档维护者**: AI Assistant  
-**最后更新**: 2025-10-27 17:55 (UTC+8)  
-**文档状态**: ✅ V2.3 - KV存储结构优化（频道配置与预加载配置合并）
+**最后更新**: 2025-10-28 13:20 (UTC+8)  
+**文档状态**: ✅ V2.4 - 频道定时录制功能上线
