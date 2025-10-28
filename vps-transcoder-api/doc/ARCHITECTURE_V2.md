@@ -1,8 +1,8 @@
-# YOYO流媒体平台架构文档 V2.4
+# YOYO流媒体平台架构文档 V2.5
 
 > **精简架构文档** - 专注于核心架构设计和关键技术实现  
 > **更新时间**: 2025-10-28  
-> **文档版本**: V2.4 - 新增频道定时录制功能
+> **文档版本**: V2.5 - 新增频道定时录制功能和视频文件清理系统
 
 ---
 
@@ -14,6 +14,7 @@
 - [核心技术组件](#-核心技术组件)
 - [智能预加载系统](#-智能预加载系统)
 - [频道定时录制系统](#-频道定时录制系统)
+- [视频文件清理系统](#-视频文件清理系统)
 - [数据流转机制](#-数据流转机制)
 - [部署架构](#-部署架构)
 - [性能优化](#-性能优化)
@@ -29,7 +30,7 @@
 ### 核心定位
 
 - **目标**: 多用户、多频道的实时视频流播放与录制
-- **特色**: 双维度路由优化，智能网络调度，智能预加载，定时录制
+- **特色**: 双维度路由优化，智能网络调度，智能预加载，定时录制，自动清理
 - **部署**: 生产环境运行中（2025-10-01上线）
 
 ### 技术栈概览
@@ -791,6 +792,262 @@ generateRecordingPath(channelId, channelName, recordConfig) {
 
 ---
 
+## 🗑️ 视频文件清理系统
+
+**版本**: V2.4 (2025-10-28)  
+**文档**: `doc/VIDEO_CLEANUP_IMPLEMENTATION.md`  
+**状态**: ✅ 已部署
+
+### 6.1 核心架构
+
+**设计理念**: 自动化清理，安全可控，零人工干预
+
+```javascript
+// VideoCleanupScheduler - 定时清理调度器
+class VideoCleanupScheduler {
+  constructor() {
+    this.cronTask = null;
+    this.isRunning = false;
+    this.workerApiUrl = process.env.WORKER_API_URL;
+    this.apiKey = process.env.VPS_API_KEY;
+  }
+  
+  // 每天凌晨1点（北京时间）自动执行
+  start() {
+    this.cronTask = cron.schedule('0 1 * * *', async () => {
+      await this.executeCleanup();
+    }, { timezone: 'Asia/Shanghai' });
+  }
+}
+```
+
+**清理策略**:
+- ✅ **定时清理**: 每天凌晨1点自动执行
+- ✅ **保留天数**: 可配置（默认2天）
+- ✅ **频道隔离**: 单个频道失败不影响其他频道
+- ✅ **安全验证**: 严格的日期格式校验，防止误删
+
+### 6.2 清理流程
+
+```javascript
+async executeCleanup() {
+  // 1. 获取清理配置
+  const config = await this.fetchCleanupConfig();  // KV: system:cleanup:config
+  if (!config.enabled) return;
+  
+  // 2. 计算截止日期
+  const cutoffDate = moment().tz('Asia/Shanghai')
+    .subtract(config.retentionDays, 'days')
+    .format('YYYYMMDD');  // 如: 20251026
+  
+  // 3. 获取所有频道配置
+  const channels = await this.fetchChannelConfigs();
+  
+  // 4. 遍历每个频道进行清理
+  for (const channel of channels) {
+    if (channel.recordConfig?.enabled) {
+      const storagePath = path.join(
+        channel.recordConfig.storagePath || '/var/www/recordings',
+        channel.id
+      );
+      await this.cleanupChannelVideos(channel.id, storagePath, cutoffDate);
+    }
+  }
+}
+```
+
+### 6.3 文件夹校验机制
+
+**严格的日期格式验证** - 防止误删重要文件
+
+```javascript
+isValidDateFolder(folderName) {
+  // 格式: YYYYMMDD
+  if (!/^\d{8}$/.test(folderName)) return false;
+  
+  // 年份: 1900-2099
+  const year = parseInt(folderName.substring(0, 4));
+  if (year < 1900 || year > 2099) return false;
+  
+  // 月份: 01-12
+  const month = parseInt(folderName.substring(4, 6));
+  if (month < 1 || month > 12) return false;
+  
+  // 日期: 01-31
+  const day = parseInt(folderName.substring(6, 8));
+  if (day < 1 || day > 31) return false;
+  
+  return true;
+}
+```
+
+**示例**:
+```
+✅ 20251025  → 删除（符合YYYYMMDD格式）
+✅ 20251026  → 删除（符合YYYYMMDD格式）
+❌ videos    → 跳过（不符合日期格式）
+❌ backup    → 跳过（不符合日期格式）
+❌ 2025-10-25 → 跳过（包含特殊字符）
+```
+
+### 6.4 目录结构
+
+**实际文件存储**:
+```
+/srv/filebrowser/yoyo-k/
+├── stream_gkg5hknc/
+│   ├── 20251025/           ← 自动删除（2天前）
+│   ├── 20251026/           ← 自动删除（2天前）
+│   ├── 20251027/           ← 保留
+│   └── 20251028/           ← 保留
+└── stream_kcwxuedx/
+    ├── 20251027/           ← 保留
+    └── 20251028/           ← 保留
+```
+
+### 6.5 KV存储结构
+
+**清理配置** (`system:cleanup:config`):
+
+```json
+{
+  "enabled": true,
+  "retentionDays": 2
+}
+```
+
+**字段说明**:
+- `enabled`: 是否启用自动清理（Boolean）
+- `retentionDays`: 保留天数（Number，范围1-365）
+
+### 6.6 API端点
+
+**Workers API**:
+- `GET /api/admin/cleanup/config` - 获取清理配置
+- `PUT /api/admin/cleanup/config` - 更新清理配置
+- `POST /api/admin/cleanup/trigger` - 手动触发清理
+
+**VPS API**:
+- `POST /api/admin/cleanup/execute` - 执行清理（需API Key认证）
+
+**调用流程**:
+```
+前端 → Workers → VPS
+1. 前端点击"手动清理"
+2. Workers验证用户权限
+3. Workers调用VPS执行清理
+4. VPS返回清理结果
+5. 前端显示清理统计
+```
+
+### 6.7 前端管理界面
+
+**SystemSettingsDialog** (系统设置对话框):
+
+```vue
+<template>
+  <el-dialog title="系统设置">
+    <el-divider>视频清理配置</el-divider>
+    
+    <!-- 启用开关 -->
+    <el-switch v-model="form.enabled" label="启用自动清理" />
+    
+    <!-- 保留天数 -->
+    <el-input-number v-model="form.retentionDays" 
+                     :min="1" :max="365" />
+    <div class="hint">删除 {{ form.retentionDays }} 天前的视频文件</div>
+    
+    <!-- 清理时间提示 -->
+    <el-tag type="info">每天 01:00 (北京时间)</el-tag>
+    
+    <!-- 操作按钮 -->
+    <el-button type="warning" @click="handleManualCleanup">
+      手动清理
+    </el-button>
+    <el-button type="primary" @click="handleSave">
+      保存
+    </el-button>
+  </el-dialog>
+</template>
+```
+
+**交互流程**:
+1. 管理员点击"设置"按钮
+2. 弹出SystemSettingsDialog对话框
+3. 修改配置 → 点击"保存" → 更新KV存储
+4. 点击"手动清理" → 确认对话框 → 触发立即清理
+
+### 6.8 安全机制
+
+**1. 严格的日期格式校验**
+```javascript
+// ✅ 只删除严格匹配YYYYMMDD格式的文件夹
+// ❌ 任何其他格式一律跳过
+if (!this.isValidDateFolder(folderName)) {
+  continue; // 跳过非日期文件夹
+}
+```
+
+**2. API认证**
+```javascript
+// VPS清理端点需要API Key认证
+const apiKey = req.headers['x-api-key'];
+if (!apiKey || apiKey !== process.env.VPS_API_KEY) {
+  return res.status(401).json({ status: 'error', message: 'Unauthorized' });
+}
+```
+
+**3. 错误隔离**
+```javascript
+// 单个频道失败不影响其他频道
+for (const channel of channels) {
+  try {
+    await this.cleanupChannelVideos(channel.id, ...);
+  } catch (error) {
+    // 记录错误，继续处理下一个频道
+    result.errors.push({ channelId: channel.id, error: error.message });
+  }
+}
+```
+
+### 6.9 技术亮点
+
+**1. 定时任务**
+- 基于node-cron，精准到分钟级
+- 北京时间（Asia/Shanghai）支持
+- 服务启动自动恢复
+
+**2. 路径动态拼接**
+```javascript
+// 从KV获取基础路径，动态拼接频道ID
+const baseStoragePath = channel.recordConfig.storagePath;
+const storagePath = path.join(baseStoragePath, channel.id);
+// 结果: /srv/filebrowser/yoyo-k/stream_kcwxuedx
+```
+
+**3. 配置可控**
+- 前端可视化配置
+- 实时生效无需重启
+- 支持启用/禁用开关
+
+**4. 安全保障**
+- 三重校验：格式、年份、月份、日期
+- 白名单机制：只处理录制频道
+- API认证：防止未授权访问
+
+**5. 监控友好**
+```javascript
+// 详细的日志记录
+logger.info('Video cleanup completed', {
+  totalChannels: 8,
+  processedChannels: 2,
+  deletedFolders: 4,
+  duration: '2.3s'
+});
+```
+
+---
+
 ## 🔄 数据流转机制
 
 ### 完整播放流程
@@ -1195,8 +1452,10 @@ grep "VPS_API_KEY" cloudflare-worker/wrangler.toml
 | Workers代理 | 解决隧道SSL问题 | 本文档 "Workers代理方案" |
 | 智能预加载 | 定时预加载，零延迟播放 | 本文档 "智能预加载系统" + PRELOAD_IMPLEMENTATION_STAGED.md |
 | 频道定时录制 | 定时录制视频文件 | 本文档 "频道定时录制系统" + RECORDING_IMPLEMENTATION_STAGED.md |
+| 视频文件清理 | 自动清理过期录制文件 | 本文档 "视频文件清理系统" + VIDEO_CLEANUP_IMPLEMENTATION.md |
 | SimpleStreamManager | 转码进程管理 | 本文档 "核心技术组件" |
 | RecordScheduler | 录制调度器 | 本文档 "频道定时录制系统" |
+| VideoCleanupScheduler | 清理调度器 | 本文档 "视频文件清理系统" |
 | 路由决策引擎 | TunnelRouter实现 | DUAL_DIMENSION_ROUTING_ARCHITECTURE.md |
 | 部署流程 | 一键部署命令 | 本文档 "部署架构" |
 
@@ -1260,6 +1519,48 @@ A: 使用一键部署脚本（见"部署架构"章节）
 
 ## 📝 版本历史
 
+### V2.5 (2025-10-28)
+**视频文件清理系统上线**
+
+**核心功能**:
+- ✅ VideoCleanupScheduler 定时清理调度器
+- ✅ 自动清理过期录制文件（默认保留2天）
+- ✅ 严格的日期格式验证机制
+- ✅ 前端可视化配置界面（SystemSettingsDialog）
+
+**技术亮点**:
+- ✅ 每天凌晨1点自动执行清理
+- ✅ 手动清理功能（前端一键触发）
+- ✅ 频道隔离（单频道失败不影响其他）
+- ✅ API认证保护（VPS API Key）
+- ✅ 详细的清理日志和统计
+
+**API端点**:
+- `GET /api/admin/cleanup/config` - 获取清理配置
+- `PUT /api/admin/cleanup/config` - 更新清理配置
+- `POST /api/admin/cleanup/trigger` - 手动触发清理
+- `POST /api/admin/cleanup/execute` - VPS执行清理
+
+### V2.4 (2025-10-28)
+**频道定时录制系统上线**
+
+**核心功能**:
+- ✅ RecordScheduler 录制调度器
+- ✅ 基于node-cron的定时任务管理
+- ✅ 工作日支持（复用WorkdayChecker）
+- ✅ 一进程双输出（HLS+MP4）
+
+**技术实现**:
+- ✅ SimpleStreamManager 扩展录制能力
+- ✅ FFmpeg 进程复用（观看+录制）
+- ✅ 录制进程不受心跳清理影响
+- ✅ 启动自动恢复当前时段录制
+
+**配置管理**:
+- ✅ KV存储 recordConfig 字段
+- ✅ 前端ChannelConfigDialog统一配置
+- ✅ 配置热重载无需重启
+
 ### V2.3 (2025-10-27)
 **KV存储结构优化 - 频道配置与预加载配置合并**
 
@@ -1303,5 +1604,5 @@ A: 使用一键部署脚本（见"部署架构"章节）
 ---
 
 **文档维护者**: AI Assistant  
-**最后更新**: 2025-10-28 13:20 (UTC+8)  
-**文档状态**: ✅ V2.4 - 频道定时录制功能上线
+**最后更新**: 2025-10-28 23:10 (UTC+8)  
+**文档状态**: ✅ V2.5 - 频道定时录制与视频清理系统上线
