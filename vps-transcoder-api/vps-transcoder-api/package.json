@@ -29,7 +29,9 @@
     "bcrypt": "^5.1.1",
     "dotenv": "^16.3.1",
     "winston": "^3.11.0",
-    "express-rate-limit": "^7.1.5"
+    "express-rate-limit": "^7.1.5",
+    "node-cron": "^3.0.3",
+    "moment-timezone": "^0.5.45"
   },
   "devDependencies": {
     "nodemon": "^3.0.2",
