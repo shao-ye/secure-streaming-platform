@@ -245,36 +245,49 @@ watch(() => props.modelValue, async (val) => {
 // 加载配置
 async function loadConfig() {
   try {
-    // 并行加载预加载和录制配置
+    console.log('🔄 开始加载频道配置', { channelId: props.channelId });
+    
+    // 并行加载预加载和录制配置（添加时间戳防止缓存）
+    const timestamp = Date.now();
     const [preloadResponse, recordResponse] = await Promise.all([
-      axios.get(`/api/preload/config/${props.channelId}`),
-      axios.get(`/api/record/config/${props.channelId}`)
+      axios.get(`/api/preload/config/${props.channelId}?t=${timestamp}`),
+      axios.get(`/api/record/config/${props.channelId}?t=${timestamp}`)
     ]);
     
     // 加载预加载配置
     if (preloadResponse.data.status === 'success') {
       const config = preloadResponse.data.data;
+      console.log('✅ 预加载配置加载成功', config);
       form.value.preloadConfig = {
-        enabled: config.enabled || false,
+        enabled: config.enabled === true,  // 🔧 修复：严格判断，避免 || 导致的问题
         startTime: config.startTime || '07:00',
         endTime: config.endTime || '17:30',
-        workdaysOnly: config.workdaysOnly || false
+        workdaysOnly: config.workdaysOnly === true
       };
     }
     
     // 加载录制配置
     if (recordResponse.data.status === 'success') {
       const config = recordResponse.data.data;
+      console.log('✅ 录制配置加载成功', config);
+      console.log('📝 录制开关状态:', {
+        原始值: config.enabled,
+        类型: typeof config.enabled,
+        设置为: config.enabled === true
+      });
+      
       form.value.recordConfig = {
-        enabled: config.enabled || false,
+        enabled: config.enabled === true,  // 🔧 修复：严格判断 true，false 保持为 false
         startTime: config.startTime || '07:40',
         endTime: config.endTime || '17:25',
-        workdaysOnly: config.workdaysOnly || false,
+        workdaysOnly: config.workdaysOnly === true,
         storagePath: config.storagePath || '/var/www/recordings'
       };
+      
+      console.log('✅ form.recordConfig.enabled 最终值:', form.value.recordConfig.enabled);
     }
   } catch (error) {
-    console.error('加载配置失败:', error);
+    console.error('❌ 加载配置失败:', error);
     ElMessage.error('加载配置失败');
   }
 }

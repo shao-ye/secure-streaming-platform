@@ -279,19 +279,41 @@ class RecordScheduler {
     try {
       logger.info('Reloading record schedule...');
       
-      // 停止所有现有任务
+      // 1. 获取新的配置
+      const configs = await this.fetchRecordConfigs();
+      const newEnabledChannels = new Set(configs.map(c => c.channelId));
+      
+      // 2. 停止不再需要录制的频道
+      const recordingStatus = this.streamManager.getRecordingStatus();
+      for (const channel of recordingStatus.channels) {
+        if (channel.isRecording && !newEnabledChannels.has(channel.channelId)) {
+          logger.info('Stopping recording for disabled channel', { 
+            channelId: channel.channelId 
+          });
+          try {
+            await this.streamManager.stopRecording(channel.channelId);
+          } catch (error) {
+            logger.error('Failed to stop recording', { 
+              channelId: channel.channelId, 
+              error: error.message 
+            });
+          }
+        }
+      }
+      
+      // 3. 停止所有现有的定时任务
       for (const channelId of this.cronTasks.keys()) {
         this.unscheduleChannel(channelId);
       }
       
-      // 重新获取配置并设置任务
-      const configs = await this.fetchRecordConfigs();
-      
+      // 4. 为启用的频道设置新任务
       for (const config of configs) {
         try {
+          // 如果当前时间在录制时段内，立即开始录制
           if (await this.shouldRecordNow(config)) {
             await this.startRecording(config);
           }
+          // 设置定时任务
           this.scheduleChannel(config);
         } catch (error) {
           logger.error('Failed to reload config', { 
@@ -302,7 +324,8 @@ class RecordScheduler {
       }
       
       logger.info('Record schedule reloaded successfully', {
-        scheduledChannels: this.cronTasks.size
+        scheduledChannels: this.cronTasks.size,
+        stoppedChannels: recordingStatus.channels.length - newEnabledChannels.size
       });
       
       return {

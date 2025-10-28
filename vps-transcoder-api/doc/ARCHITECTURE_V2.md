@@ -1041,6 +1041,57 @@ ffmpeg -i rtmp://... \
 - VPS API密钥认证
 - Workers环境变量保护
 
+#### API密钥配置详解 ⚠️ 重要
+
+**环境变量命名差异**：
+
+系统中存在两个不同名称的环境变量，但值相同：
+
+1. **VPS 服务器端** (`vps-transcoder-api/.env`)
+   ```bash
+   API_SECRET_KEY=85da076ae24b028b3d1ea1884e6b13c5afe34b5b
+   ```
+   - 用途：VPS 认证中间件验证 `X-API-Key` 请求头
+   - 代码位置：`src/middleware/auth.js` (line 76)
+   - 验证逻辑：`apiKey !== process.env.API_SECRET_KEY`
+
+2. **Cloudflare Workers** (`cloudflare-worker/wrangler.toml`)
+   ```toml
+   [env.production.vars]
+   VPS_API_KEY = "85da076ae24b028b3d1ea1884e6b13c5afe34b5b"
+   ```
+   - 用途：Workers 调用 VPS API 时使用
+   - 代码使用：`headers: { 'X-API-Key': env.VPS_API_KEY }`
+
+**关键要求**：
+- ✅ 两个环境变量的**值必须完全相同**
+- ✅ VPS 端变量名为 `API_SECRET_KEY`
+- ✅ Workers 端变量名为 `VPS_API_KEY`
+- ❌ 不可混淆使用变量名
+
+**各功能使用情况**：
+
+| 功能模块 | Workers使用 | VPS验证 | 状态 |
+|---------|-----------|---------|------|
+| 频道编辑 | `env.VPS_API_KEY` | `API_SECRET_KEY` | ✅ 正常 |
+| 视频录制 | `env.VPS_API_KEY` | `API_SECRET_KEY` | ✅ 正常 |
+| 智能预加载 | `env.VPS_API_KEY` | `API_SECRET_KEY` | ✅ 正常 |
+| 代理配置 | `env.VPS_API_KEY` | `API_SECRET_KEY` | ✅ 正常 |
+| SimpleStream* | 硬编码错误密钥 | `API_SECRET_KEY` | ⚠️ 待修复 |
+
+**已知问题**：
+- `handlers/simple-streams.js` 使用了硬编码的错误密钥（64位）
+- 应修改为使用 `env.VPS_API_KEY` 以保持一致性
+
+**配置验证**：
+```bash
+# VPS 端检查
+grep "API_SECRET_KEY" /opt/yoyo-transcoder/.env
+
+# Workers 端检查（wrangler.toml）
+grep "VPS_API_KEY" cloudflare-worker/wrangler.toml
+```
+
 ### 监控指标
 
 **系统监控**:
