@@ -67,6 +67,7 @@ echo "🔍 检查关键文件..."
 KEY_FILES=(
     "$TARGET_DIR/routes/proxy.js"
     "$TARGET_DIR/services/ProxyManager.js"
+    "$TARGET_DIR/services/VideoCleanupScheduler.js"
     "$TARGET_DIR/app.js"
 )
 
@@ -82,6 +83,7 @@ done
 # 5. 验证代码版本同步
 echo "🔍 验证代码版本同步..."
 PROXY_MANAGER_FILE="$TARGET_DIR/services/ProxyManager.js"
+APP_FILE="$TARGET_DIR/app.js"
 
 # 检查是否包含最新的调试日志
 if grep -q "进程监控" "$PROXY_MANAGER_FILE" && grep -q "自动重启" "$PROXY_MANAGER_FILE"; then
@@ -101,6 +103,14 @@ else
     else
         echo "❌ 代码同步可能存在问题，请手动检查"
     fi
+fi
+
+# 验证VideoCleanupScheduler集成
+echo "🔍 验证视频清理服务集成..."
+if grep -q "VideoCleanupScheduler" "$APP_FILE"; then
+    echo "✅ 视频清理服务已集成到app.js"
+else
+    echo "⚠️ app.js中未找到VideoCleanupScheduler引用"
 fi
 
 # 6. 检查和安装系统依赖
@@ -152,30 +162,61 @@ if [ ! -f "package.json" ]; then
     exit 1
 fi
 
-# 检查node-cron依赖（预加载功能需要）
-if ! npm list node-cron >/dev/null 2>&1; then
-    echo "⚠️ node-cron未安装（预加载功能需要），正在安装..."
-    npm install node-cron
-    
-    # 验证安装
-    if npm list node-cron >/dev/null 2>&1; then
-        echo "✅ node-cron安装成功"
+# 定义所需依赖列表
+REQUIRED_DEPS=(
+    "node-cron"        # 预加载、录制、清理功能定时任务
+    "moment-timezone"  # 录制和清理功能时区支持
+    "axios"            # HTTP请求（清理功能与Workers通信）
+    "express"          # Web框架
+)
+
+# 检查并安装缺失的依赖
+echo "🔍 检查关键依赖..."
+MISSING_DEPS=()
+
+for dep in "${REQUIRED_DEPS[@]}"; do
+    if npm list "$dep" >/dev/null 2>&1; then
+        echo "✅ $dep 已安装"
     else
-        echo "❌ node-cron安装失败"
+        echo "⚠️ $dep 未安装"
+        MISSING_DEPS+=("$dep")
+    fi
+done
+
+# 如果有缺失的依赖，批量安装
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+    echo "📦 安装缺失的依赖: ${MISSING_DEPS[*]}"
+    npm install "${MISSING_DEPS[@]}"
+    
+    # 验证安装结果
+    echo "🔍 验证安装结果..."
+    FAILED_DEPS=()
+    for dep in "${MISSING_DEPS[@]}"; do
+        if npm list "$dep" >/dev/null 2>&1; then
+            echo "✅ $dep 安装成功"
+        else
+            echo "❌ $dep 安装失败"
+            FAILED_DEPS+=("$dep")
+        fi
+    done
+    
+    # 如果有安装失败的依赖，退出
+    if [ ${#FAILED_DEPS[@]} -gt 0 ]; then
+        echo "❌ 以下依赖安装失败: ${FAILED_DEPS[*]}"
         exit 1
     fi
 else
-    echo "✅ node-cron已安装"
+    echo "✅ 所有关键依赖已安装"
 fi
 
-# 检查其他可能缺失的依赖
-echo "🔍 检查并安装其他缺失的依赖..."
-if ! npm list axios >/dev/null 2>&1 || ! npm list express >/dev/null 2>&1; then
-    echo "⚠️ 检测到缺失依赖，运行npm install..."
+# 检查package.json中的其他依赖
+echo "🔍 检查package.json完整性..."
+if ! npm list >/dev/null 2>&1; then
+    echo "⚠️ 检测到其他缺失依赖，运行npm install..."
     npm install
     echo "✅ 依赖安装完成"
 else
-    echo "✅ 核心依赖完整"
+    echo "✅ 所有依赖完整"
 fi
 
 # 5. 验证proxy.js包含新路由
