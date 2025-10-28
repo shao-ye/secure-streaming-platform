@@ -7,6 +7,7 @@ export {}
 
 declare module 'vue' {
   export interface GlobalComponents {
+    ChannelConfigDialog: typeof import('./src/components/admin/ChannelConfigDialog.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElButtonGroup: typeof import('element-plus/es')['ElButtonGroup']
@@ -17,6 +18,7 @@ declare module 'vue' {
     ElDescriptions: typeof import('element-plus/es')['ElDescriptions']
     ElDescriptionsItem: typeof import('element-plus/es')['ElDescriptionsItem']
     ElDialog: typeof import('element-plus/es')['ElDialog']
+    ElDivider: typeof import('element-plus/es')['ElDivider']
     ElDropdown: typeof import('element-plus/es')['ElDropdown']
     ElDropdownItem: typeof import('element-plus/es')['ElDropdownItem']
     ElDropdownMenu: typeof import('element-plus/es')['ElDropdownMenu']
@@ -58,6 +60,7 @@ declare module 'vue' {
     StreamList: typeof import('./src/components/StreamList.vue')['default']
     StreamManager: typeof import('./src/components/StreamManager.vue')['default']
     SystemDiagnostics: typeof import('./src/components/SystemDiagnostics.vue')['default']
+    SystemSettingsDialog: typeof import('./src/components/admin/SystemSettingsDialog.vue')['default']
     TunnelConfig: typeof import('./src/components/admin/TunnelConfig.vue')['default']
     UnifiedVideoPlayer: typeof import('./src/components/video/UnifiedVideoPlayer.vue')['default']
     UserForm: typeof import('./src/components/user/UserForm.vue')['default']

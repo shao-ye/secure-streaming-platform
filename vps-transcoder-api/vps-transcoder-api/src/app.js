@@ -145,6 +145,53 @@ try {
   logger.error('预加载管理API路由加载失败:', error.message);
 }
 
+// 🆕 视频清理服务
+let videoCleanupScheduler = null;
+try {
+  const VideoCleanupScheduler = require('./services/VideoCleanupScheduler');
+  videoCleanupScheduler = new VideoCleanupScheduler();
+  
+  // 启动清理调度器
+  videoCleanupScheduler.start()
+    .then(() => {
+      logger.info('✅ 视频清理调度器已启动');
+    })
+    .catch((error) => {
+      logger.error('视频清理调度器启动失败:', error.message);
+    });
+  
+  // 手动触发清理API端点
+  app.post('/api/admin/cleanup/execute', async (req, res) => {
+    try {
+      // API Key验证
+      const apiKey = req.headers['x-api-key'];
+      if (!apiKey || apiKey !== process.env.VPS_API_KEY) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Unauthorized'
+        });
+      }
+      
+      const result = await videoCleanupScheduler.executeCleanup();
+      
+      res.json({
+        status: 'success',
+        data: result
+      });
+    } catch (error) {
+      logger.error('手动清理执行失败:', error);
+      res.status(500).json({
+        status: 'error',
+        message: error.message
+      });
+    }
+  });
+  
+  logger.info('✅ 视频清理API端点已注册');
+} catch (error) {
+  logger.error('视频清理服务加载失败:', error.message);
+}
+
 // 代理管理API路由
 try {
   const proxyRoutes = require('./routes/proxy');
@@ -196,19 +243,30 @@ app.use(errorHandler);
 // 创建ProcessManager实例
 const processManager = new ProcessManager();
 
+// 声明videoCleanupScheduler（在外部作用域，供gracefulShutdown访问）
+// videoCleanupScheduler在上面的try块中已初始化
+
 // 优雅退出处理
-const gracefulShutdown = (signal) => {
+const gracefulShutdown = async (signal) => {
     logger.info(`${signal} received, shutting down gracefully...`);
 
-    processManager.stopAllStreams()
-        .then(() => {
-            logger.info('All streams stopped, exiting process');
-            process.exit(0);
-        })
-        .catch((error) => {
-            logger.error('Error stopping streams during shutdown:', error);
-            process.exit(1);
-        });
+    try {
+        // 停止所有流
+        await processManager.stopAllStreams();
+        logger.info('All streams stopped');
+        
+        // 停止视频清理调度器
+        if (videoCleanupScheduler) {
+            await videoCleanupScheduler.stop();
+            logger.info('Video cleanup scheduler stopped');
+        }
+        
+        logger.info('Graceful shutdown completed, exiting process');
+        process.exit(0);
+    } catch (error) {
+        logger.error('Error during graceful shutdown:', error);
+        process.exit(1);
+    }
 };
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
