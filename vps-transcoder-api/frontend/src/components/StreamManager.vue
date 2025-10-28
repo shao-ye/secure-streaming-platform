@@ -481,7 +481,7 @@ const getRecordStatusType = (stream) => {
   if (!stream.recordConfig) {
     return 'info'
   }
-  return stream.recordConfig.enabled ? 'danger' : 'info'
+  return stream.recordConfig.enabled ? 'success' : 'info'
 }
 
 // 获取录制配置描述文本（用于tooltip）
