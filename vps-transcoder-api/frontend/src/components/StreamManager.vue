@@ -20,6 +20,12 @@
             >
               刷新
             </el-button>
+            <el-button 
+              :icon="Setting"
+              @click="showSettingsDialog = true"
+            >
+              设置
+            </el-button>
           </div>
         </div>
       </template>
@@ -265,15 +271,21 @@
       :channel-name="currentChannel.name"
       @saved="handlePreloadSaved"
     />
+
+    <!-- 🆕 系统设置对话框（视频清理配置） -->
+    <SystemSettingsDialog
+      v-model="showSettingsDialog"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Edit, Delete, ArrowUp, ArrowDown, Timer } from '@element-plus/icons-vue'
+import { Refresh, Edit, Delete, ArrowUp, ArrowDown, Timer, Setting } from '@element-plus/icons-vue'
 import { useStreamsStore } from '../stores/streams'
 import ChannelConfigDialog from './admin/ChannelConfigDialog.vue'
+import SystemSettingsDialog from './admin/SystemSettingsDialog.vue'
 import dayjs from 'dayjs'
 
 const streamsStore = useStreamsStore()
@@ -288,6 +300,9 @@ const showAddDialog = ref(false)
 // 🆕 预加载配置对话框
 const preloadDialogVisible = ref(false)
 const currentChannel = ref({ id: '', name: '' })
+
+// 🆕 系统设置对话框
+const showSettingsDialog = ref(false)
 
 // 排序后的频道列表
 const sortedStreams = computed(() => {
