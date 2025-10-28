@@ -291,7 +291,8 @@ class RecordScheduler {
             channelId: channel.channelId 
           });
           try {
-            await this.streamManager.stopRecording(channel.channelId);
+            // 🔧 修复：使用正确的方法名 disableRecording
+            await this.streamManager.disableRecording(channel.channelId);
           } catch (error) {
             logger.error('Failed to stop recording', { 
               channelId: channel.channelId, 
