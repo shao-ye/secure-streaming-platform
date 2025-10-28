@@ -116,7 +116,9 @@ class VideoCleanupScheduler {
       for (const channel of channels) {
         try {
           if (channel.recordConfig && channel.recordConfig.enabled) {
-            const storagePath = channel.recordConfig.storagePath || `/var/www/recordings/${channel.id}`;
+            // 存储路径需要加上频道ID
+            const baseStoragePath = channel.recordConfig.storagePath || `/var/www/recordings`;
+            const storagePath = path.join(baseStoragePath, channel.id);
             
             const channelResult = await this.cleanupChannelVideos(
               channel.id,
