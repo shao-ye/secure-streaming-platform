@@ -2,6 +2,7 @@ const express = require('express');
 const SimpleStreamManager = require('../services/SimpleStreamManager');
 const PreloadScheduler = require('../services/PreloadScheduler');
 const PreloadHealthCheck = require('../services/PreloadHealthCheck');
+const RecordScheduler = require('../services/RecordScheduler');  // 🆕 录制调度器
 const logger = require('../utils/logger');
 const authMiddleware = require('../middleware/auth');
 
@@ -19,8 +20,12 @@ const preloadScheduler = new PreloadScheduler(streamManager);
 // 🆕 创建预加载健康检查实例
 const preloadHealthCheck = new PreloadHealthCheck(streamManager, preloadScheduler);
 
-// 🆕 延迟5秒启动预加载调度器（等待服务器完全启动）
+// 🆕 创建录制调度器实例
+const recordScheduler = new RecordScheduler(streamManager);
+
+// 🆕 延迟5秒启动调度器（等待服务器完全启动）
 setTimeout(() => {
+  // 启动预加载调度器
   preloadScheduler.start()
     .then(() => {
       logger.info('✅ PreloadScheduler started successfully');
@@ -31,6 +36,15 @@ setTimeout(() => {
     })
     .catch((error) => {
       logger.error('Failed to start PreloadScheduler', { error: error.message });
+    });
+  
+  // 启动录制调度器
+  recordScheduler.start()
+    .then(() => {
+      logger.info('✅ RecordScheduler started successfully');
+    })
+    .catch((error) => {
+      logger.error('Failed to start RecordScheduler', { error: error.message });
     });
 }, 5000);
 
@@ -300,5 +314,56 @@ router.post('/preload/reload-schedule', async (req, res) => {
   }
 });
 
+// ===== 🆕 录制API端点 =====
+
+/**
+ * 重新加载录制调度器（配置变更时调用）
+ * POST /api/record/reload-schedule
+ */
+router.post('/record/reload-schedule', async (req, res) => {
+  try {
+    logger.info('Reloading record scheduler...');
+    
+    await recordScheduler.reloadSchedule();
+    
+    res.json({
+      status: 'success',
+      message: 'Record schedule reloaded successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Failed to reload record schedule', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * 获取录制状态（从VPS）
+ * GET /api/record/status
+ */
+router.get('/record/status', (req, res) => {
+  try {
+    const schedulerStatus = recordScheduler.getStatus();
+    const recordingStatus = streamManager.getRecordingStatus();
+    
+    res.json({
+      status: 'success',
+      data: {
+        scheduler: schedulerStatus,
+        streamManager: recordingStatus
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to get recording status', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
 // 导出路由和管理器实例
-module.exports = { router, streamManager, preloadScheduler };
+module.exports = { router, streamManager, preloadScheduler, recordScheduler };
