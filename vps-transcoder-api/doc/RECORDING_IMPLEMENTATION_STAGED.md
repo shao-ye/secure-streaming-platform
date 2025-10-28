@@ -1,11 +1,12 @@
 # 🎬 频道定时录制功能实施方案 - 阶段化执行文档
 
-**版本**: v1.2 | **创建时间**: 2025-10-28 09:20 | **更新时间**: 2025-10-28 11:58  
+**版本**: v1.3 | **创建时间**: 2025-10-28 09:20 | **更新时间**: 2025-10-28 12:13  
 **基于**: 预加载功能实施经验  
 **参照文档**: `PRELOAD_IMPLEMENTATION_STAGED.md` + `ARCHITECTURE_V2.md`  
 **更新日志**: 
 - v1.1 - 优化文件命名规范，采用混合方案（channelName + channelId），提升可读性和实用性
 - v1.2 - 移除纯ASCII备选方案；完善代码实现细节（channelName自动填充、fetchRecordConfigs方法、环境变量配置、npm依赖安装）
+- v1.3 - 删除手动创建目录步骤；删除recordConfig中冗余的channelName字段，改为从顶层name获取，避免数据不一致
 
 ---
 
@@ -246,11 +247,10 @@ curl http://localhost:3000/health
 ```javascript
 {
   "id": "stream_xxx",
-  "name": "二楼教室1",  // 现有字段，录制文件命名需要
+  "name": "二楼教室1",  // 现有字段，录制文件命名会使用此字段
   "preloadConfig": { /* 现有 */ },
   "recordConfig": {  // 新增
     "enabled": false,
-    "channelName": "二楼教室1",  // 🔥 关键字段：用于生成可读文件名
     "startTime": "07:40",
     "endTime": "17:25",
     "workdaysOnly": false,
@@ -272,7 +272,6 @@ curl http://localhost:3000/health
   },
   "recordConfig": {
     "enabled": true,
-    "channelName": "二楼教室1",  // 从 name 字段复制
     "startTime": "07:40",
     "endTime": "17:25",
     "workdaysOnly": true,
@@ -281,7 +280,7 @@ curl http://localhost:3000/health
 }
 ```
 
-**注意**：`recordConfig.channelName` 应与 `name` 字段保持一致，用于生成可读的文件名。
+**注意**：频道名称使用顶层的 `name` 字段，避免数据冗余。
 
 ### 验证
 
@@ -311,8 +310,8 @@ this.recordingBaseDir = '/var/www/recordings';
 
 // 新增方法
 async enableRecording(channelId, recordConfig) {
-  // recordConfig 必须包含:
-  // - channelName: 频道名称（如"二楼教室1"）
+  // recordConfig 由Workers API传递，包含:
+  // - channelName: 频道名称（从KV的顶层name字段获取，如"二楼教室1"）
   // - startTime: 开始时间（如"07:40"）
   // - endTime: 结束时间（如"17:25"）
   // - storagePath: 存储路径（可选，默认使用this.recordingBaseDir）
@@ -557,7 +556,6 @@ async function updateRecordConfig(env, channelId, data, username) {
   // 更新recordConfig字段
   channelData.recordConfig = {
     enabled: data.enabled === true,
-    channelName: channelData.name,  // 🔥 从频道name字段自动填充
     startTime: data.startTime,
     endTime: data.endTime,
     workdaysOnly: data.workdaysOnly === true,
@@ -584,7 +582,7 @@ async function getAllRecordConfigs(env) {
     if (channelData?.recordConfig?.enabled) {
       configs.push({
         channelId: channelData.id,
-        channelName: channelData.recordConfig.channelName || channelData.name,  // 兼容旧数据
+        channelName: channelData.name,  // 🔥 从顶层name获取
         ...channelData.recordConfig
       });
     }
