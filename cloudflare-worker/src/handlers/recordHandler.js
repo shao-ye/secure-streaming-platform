@@ -53,8 +53,11 @@ async function getAllRecordConfigs(env) {
     // 🔥 从频道索引获取所有频道ID列表
     const channelIndexData = await env.YOYO_USER_DB.get('system:channel_index', { type: 'json' });
     
-    if (!channelIndexData || !channelIndexData.channels || channelIndexData.channels.length === 0) {
-      console.warn('Channel index is empty or not found');
+    console.log('[getAllRecordConfigs] Channel index:', JSON.stringify(channelIndexData));
+    
+    // 🔥 修复：字段名应该是 channelIds，不是 channels
+    if (!channelIndexData || !channelIndexData.channelIds || channelIndexData.channelIds.length === 0) {
+      console.warn('[getAllRecordConfigs] Channel index is empty or not found');
       return {
         status: 'success',
         data: []
@@ -63,28 +66,38 @@ async function getAllRecordConfigs(env) {
     
     const configs = [];
     // 遍历索引中的所有频道
-    for (const channelId of channelIndexData.channels) {
+    for (const channelId of channelIndexData.channelIds) {
+      console.log(`[getAllRecordConfigs] Checking channel: ${channelId}`);
       const channelData = await env.YOYO_USER_DB.get(`channel:${channelId}`, { type: 'json' });
+      
+      if (!channelData) {
+        console.warn(`[getAllRecordConfigs] Channel data not found for: ${channelId}`);
+        continue;
+      }
+      
+      console.log(`[getAllRecordConfigs] Channel ${channelId} recordConfig:`, JSON.stringify(channelData.recordConfig));
       
       // 检查频道是否启用录制
       if (channelData?.recordConfig?.enabled) {
-        configs.push({
+        const config = {
           channelId: channelData.id,
           channelName: channelData.name,  // 从顶层name获取
           rtmpUrl: channelData.rtmpUrl,   // 提供RTMP URL
           ...channelData.recordConfig
-        });
+        };
+        console.log(`[getAllRecordConfigs] Adding config for ${channelId}:`, JSON.stringify(config));
+        configs.push(config);
       }
     }
     
-    console.log(`Found ${configs.length} channels with recording enabled`);
+    console.log(`[getAllRecordConfigs] Found ${configs.length} channels with recording enabled`);
     
     return {
       status: 'success',
       data: configs
     };
   } catch (error) {
-    console.error('Failed to get all record configs:', error);
+    console.error('[getAllRecordConfigs] Failed to get all record configs:', error);
     return {
       status: 'error',
       message: error.message
