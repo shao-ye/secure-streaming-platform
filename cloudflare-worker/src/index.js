@@ -1022,12 +1022,60 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (path === '/api/admin/diagnostics' && method === 'GET') {
+      const startTime = Date.now();
+      
+      // 测试KV可用性
+      let kvAvailable = false;
+      let kvNamespace = 'YOYO_USER_DB';
+      let kvTestResult = null;
+      try {
+        await env.YOYO_USER_DB.get('test');
+        kvAvailable = true;
+      } catch (error) {
+        kvTestResult = error.message;
+      }
+      
+      // 测试VPS连接
+      let vpsAvailable = false;
+      let vpsUrl = env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz';
+      let vpsTestResult = null;
+      try {
+        const vpsResponse = await fetch(`${vpsUrl}/health`, {
+          headers: { 'X-API-Key': env.VPS_API_KEY }
+        });
+        vpsAvailable = vpsResponse.ok;
+        if (!vpsAvailable) {
+          vpsTestResult = `HTTP ${vpsResponse.status}`;
+        }
+      } catch (error) {
+        vpsTestResult = error.message;
+      }
+      
+      const diagnosticsTime = Date.now() - startTime;
+      
       return new Response(JSON.stringify({
         status: 'success',
         data: {
-          vps: { status: 'running' },
-          streams: { configured: Object.keys(CHANNELS).length },
-          cloudflare: { worker: { timestamp: new Date().toISOString() } }
+          worker: {
+            version: env.VERSION || '2.0.0',
+            environment: env.ENVIRONMENT || 'production'
+          },
+          kv: {
+            available: kvAvailable,
+            namespace: kvNamespace,
+            testResult: kvTestResult
+          },
+          vps: {
+            available: vpsAvailable,
+            url: vpsUrl,
+            testResult: vpsTestResult
+          },
+          cache: {
+            totalItems: 0  // 可以从KV中获取实际数量
+          },
+          performance: {
+            diagnosticsTime: diagnosticsTime
+          }
         }
       }), {
         status: 200,
@@ -1055,13 +1103,28 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (path === '/api/admin/cache/stats' && method === 'GET') {
+      // 获取KV中的缓存项数量
+      let totalItems = 0;
+      let items = [];
+      try {
+        const list = await env.YOYO_USER_DB.list({ limit: 100 });
+        totalItems = list.keys.length;
+        items = list.keys.map(k => k.name);
+      } catch (error) {
+        console.error('获取缓存统计失败:', error);
+      }
+      
       return new Response(JSON.stringify({
         status: 'success',
         data: {
-          hitRate: 95.5,
-          totalRequests: 1000,
-          cacheHits: 955,
-          cacheMisses: 45
+          cache: {
+            totalItems: totalItems,
+            items: items,
+            hitRate: 95.5,
+            totalRequests: 1000,
+            cacheHits: 955,
+            cacheMisses: 45
+          }
         }
       }), {
         status: 200,
