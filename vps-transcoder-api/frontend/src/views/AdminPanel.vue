@@ -140,10 +140,11 @@ const refreshSystemStats = async () => {
     if (response.data.status === 'success') {
       const data = response.data.data
       systemStats.value = {
-        totalSessions: data.sessions?.total || 0,
-        activeStreams: data.streams?.active || 0,
-        activeChannels: data.streams?.active || 0
+        totalSessions: data.sessions.total || 0,  // 活跃用户会话数
+        activeStreams: data.streams.active || 0,  // 活跃转码进程数
+        activeChannels: data.streams.active || 0  // 活跃频道数
       }
+      console.log('📊 系统状态已更新:', systemStats.value)
     }
   } catch (error) {
     console.error('获取系统状态失败:', error)
