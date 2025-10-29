@@ -214,7 +214,8 @@ export async function handleSystemStatus(request, env) {
         vps: { status: 'running' },
         streams: {
           active: result.data.activeStreams,
-          configured: 8 // 固定8个频道
+          configured: 8, // 固定8个频道
+          activeRecordings: result.data.activeRecordings || 0 // 🆕 活跃录制数量
         },
         sessions: {
           total: result.data.totalSessions

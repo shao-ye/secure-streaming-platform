@@ -38,13 +38,13 @@
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
-              <el-icon size="32" color="#e6a23c">
-                <Monitor />
+              <el-icon size="32" :color="systemStatus.streams?.activeRecordings > 0 ? '#e6a23c' : '#909399'">
+                <VideoCameraFilled />
               </el-icon>
             </div>
             <div class="status-info">
-              <div class="status-value">{{ systemStatus.vps?.status || 'Unknown' }}</div>
-              <div class="status-label">VPS状态</div>
+              <div class="status-value">{{ systemStatus.streams?.activeRecordings || 0 }}</div>
+              <div class="status-label">活跃录制</div>
             </div>
           </div>
         </el-card>
@@ -418,7 +418,8 @@ import {
   Refresh,
   Delete,
   Download,
-  VideoCamera
+  VideoCamera,
+  VideoCameraFilled
 } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
 import { debugLog, errorLog, infoLog } from '../utils/config'

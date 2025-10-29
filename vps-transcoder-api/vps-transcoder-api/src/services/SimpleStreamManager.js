@@ -574,7 +574,8 @@ class SimpleStreamManager {
     return {
       activeStreams: this.activeStreams.size,      // FFmpeg转码进程数
       totalSessions: this.userSessions.size,        // 🆕 真实用户会话数
-      activeChannels: this.channelHeartbeats.size   // 🆕 活跃频道数（向后兼容）
+      activeChannels: this.channelHeartbeats.size,  // 🆕 活跃频道数（向后兼容）
+      activeRecordings: this.recordingChannels.size // 🆕 活跃录制数量
     };
   }
 
