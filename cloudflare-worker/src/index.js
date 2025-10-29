@@ -1008,39 +1008,21 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (path === '/api/admin/traffic/stats' && method === 'GET') {
-      // 生成模拟的月度流量数据
-      const currentDate = new Date();
-      const monthlyData = [];
-      
-      for (let i = 5; i >= 0; i--) {
-        const date = new Date(currentDate);
-        date.setMonth(date.getMonth() - i);
-        const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-        
-        monthlyData.push({
-          month: month,
-          bandwidth: (50 + Math.random() * 100).toFixed(2),
-          requests: Math.floor(5000 + Math.random() * 10000),
-          cost: (2.5 + Math.random() * 5).toFixed(2)
-        });
-      }
-      
-      const totalBandwidth = monthlyData.reduce((sum, m) => sum + parseFloat(m.bandwidth), 0);
-      const totalRequests = monthlyData.reduce((sum, m) => sum + m.requests, 0);
-      const totalCost = monthlyData.reduce((sum, m) => sum + parseFloat(m.cost), 0);
-      
+      // 流量统计需要配置Cloudflare Analytics API
+      // 暂时返回空数据
       return new Response(JSON.stringify({
         status: 'success',
         data: {
           traffic: {
             summary: {
-              totalBandwidth: totalBandwidth.toFixed(2),
-              totalRequests: totalRequests,
-              totalCost: totalCost.toFixed(2),
-              avgMonthlyBandwidth: (totalBandwidth / monthlyData.length).toFixed(2)
+              totalBandwidth: '0',
+              totalRequests: 0,
+              totalCost: '0',
+              avgMonthlyBandwidth: '0'
             },
-            monthly: monthlyData
-          }
+            monthly: []
+          },
+          message: '流量统计功能需要配置Cloudflare Analytics API'
         }
       }), {
         status: 200,
@@ -1116,47 +1098,41 @@ async function handleRequest(request, env, ctx) {
       const limit = parseInt(url.searchParams.get('limit') || '20');
       const offset = parseInt(url.searchParams.get('offset') || '0');
       
-      // 生成模拟的登录日志数据（最近7天）
-      const logs = [];
-      const now = new Date();
-      const userAgents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'
-      ];
-      const ips = ['127.0.0.1', '192.168.1.100', '10.0.0.50'];
-      const locations = ['本地', '中国 - 北京', '中国 - 上海', '中国 - 广州'];
+      // 从R2读取登录日志（如果配置了LOGIN_LOGS绑定）
+      let logs = [];
+      let total = 0;
       
-      // 生成最近7天的登录记录
-      for (let i = 0; i < 15; i++) {
-        const timestamp = new Date(now.getTime() - i * 3600000 * 4); // 每4小时一条记录
-        const isSuccess = Math.random() > 0.1; // 90%成功率
-        
-        logs.push({
-          id: `log_${timestamp.getTime()}_${Math.random().toString(36).substr(2, 9)}`,
-          timestamp: timestamp.toISOString(),
-          username: 'admin',
-          ip: ips[Math.floor(Math.random() * ips.length)],
-          location: locations[Math.floor(Math.random() * locations.length)],
-          userAgent: userAgents[Math.floor(Math.random() * userAgents.length)],
-          status: isSuccess ? 'success' : 'failed',
-          success: isSuccess,
-          details: {
-            source: 'Mock',
-            reason: isSuccess ? null : '密码错误'
+      if (env.LOGIN_LOGS) {
+        try {
+          // 从R2读取登录日志索引
+          const indexObj = await env.LOGIN_LOGS.get('index.json');
+          if (indexObj) {
+            const index = JSON.parse(await indexObj.text());
+            total = index.logs?.length || 0;
+            
+            // 获取分页数据
+            const logIds = index.logs.slice(offset, offset + limit);
+            
+            // 读取每条日志详情
+            for (const logId of logIds) {
+              const logObj = await env.LOGIN_LOGS.get(`logs/${logId}.json`);
+              if (logObj) {
+                logs.push(JSON.parse(await logObj.text()));
+              }
+            }
           }
-        });
+        } catch (error) {
+          console.error('读取登录日志失败:', error);
+        }
       }
-      
-      // 应用分页
-      const paginatedLogs = logs.slice(offset, offset + limit);
       
       return new Response(JSON.stringify({
         status: 'success',
         data: {
-          logs: paginatedLogs,
-          total: logs.length,
-          source: 'Mock'
+          logs: logs,
+          total: total,
+          source: env.LOGIN_LOGS ? 'R2' : 'None',
+          message: env.LOGIN_LOGS ? null : '登录日志功能需要配置LOGIN_LOGS R2存储桶'
         }
       }), {
         status: 200,
