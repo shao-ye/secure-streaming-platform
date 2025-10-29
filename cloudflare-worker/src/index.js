@@ -1369,28 +1369,58 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
-    // 用户管理API端点 - 从 KV 存储读取真实用户数据
-    if (path === '/api/users' && method === 'GET') {
+    // 用户管理API端点 - 从 KV 存储读取真实用户数据（优化：使用用户索引避免list()操作）
+    if (path === '/api/admin/users' && method === 'GET') {
       try {
-        // 获取所有以 'user:' 开头的键
-        const userKeys = [];
-        const listResult = await env.YOYO_USER_DB.list({ prefix: 'user:' });
+        // 🔥 优化：从用户索引读取用户名列表，避免list()操作超限
+        const userIndexData = await env.YOYO_USER_DB.get('system:user_index');
+        let usernames = [];
+        
+        if (userIndexData) {
+          try {
+            const indexObj = JSON.parse(userIndexData);
+            usernames = indexObj.usernames || [];
+          } catch (e) {
+            console.error('解析用户索引失败:', e);
+          }
+        }
+        
+        // 如果索引为空，返回空列表（避免list操作）
+        if (usernames.length === 0) {
+          return new Response(JSON.stringify({
+            status: 'success',
+            data: {
+              users: [],
+              total: 0,
+              stats: {
+                admin: 0,
+                user: 0,
+                active: 0,
+                inactive: 0
+              }
+            },
+            message: '用户索引为空，请联系管理员重建索引'
+          }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+          });
+        }
         
         const users = [];
         let adminCount = 0;
         let userCount = 0;
         let activeCount = 0;
         
-        // 逐个获取用户数据
-        for (const key of listResult.keys) {
+        // 根据索引逐个读取用户数据
+        for (const username of usernames) {
           try {
-            const userData = await env.YOYO_USER_DB.get(key.name);
+            const userData = await env.YOYO_USER_DB.get(`user:${username}`);
             if (userData) {
               const user = JSON.parse(userData);
               
               // 构建用户对象
               const userObj = {
-                id: user.id || key.name.replace('user:', ''),
+                id: user.id || username,
                 username: user.username,
                 displayName: user.displayName || user.username,
                 role: user.role || 'user',
@@ -1410,7 +1440,7 @@ async function handleRequest(request, env, ctx) {
               if (userObj.status === 'active') activeCount++;
             }
           } catch (parseError) {
-            console.error(`Error parsing user data for ${key.name}:`, parseError);
+            console.error(`Error parsing user data for ${username}:`, parseError);
           }
         }
         
@@ -1449,7 +1479,7 @@ async function handleRequest(request, env, ctx) {
     }
 
     // 创建用户API端点
-    if (path === '/api/users' && method === 'POST') {
+    if (path === '/api/admin/users' && method === 'POST') {
       try {
         const body = await request.json();
         
@@ -1509,9 +1539,9 @@ async function handleRequest(request, env, ctx) {
     }
 
     // 更新用户API端点
-    if (path.match(/^\/api\/users\/[^/]+$/) && method === 'PUT') {
+    if (path.match(/^\/api\/admin\/users\/[^/]+$/) && method === 'PUT') {
       try {
-        const userId = decodeURIComponent(path.split('/')[3]);
+        const userId = decodeURIComponent(path.split('/')[4]);
         const body = await request.json();
         
         // 获取现有用户数据
@@ -1563,9 +1593,9 @@ async function handleRequest(request, env, ctx) {
     }
 
     // 删除用户API端点
-    if (path.match(/^\/api\/users\/[^/]+$/) && method === 'DELETE') {
+    if (path.match(/^\/api\/admin\/users\/[^/]+$/) && method === 'DELETE') {
       try {
-        const userId = decodeURIComponent(path.split('/')[3]);
+        const userId = decodeURIComponent(path.split('/')[4]);
         
         // 检查用户是否存在
         const existingUserData = await env.YOYO_USER_DB.get(`user:${userId}`);
@@ -1688,9 +1718,9 @@ async function handleRequest(request, env, ctx) {
     }
     
     // 修改密码API端点
-    if (path.match(/^\/api\/users\/[^/]+\/password$/) && method === 'PUT') {
+    if (path.match(/^\/api\/admin\/users\/[^/]+\/password$/) && method === 'PUT') {
       try {
-        const userId = decodeURIComponent(path.split('/')[3]);
+        const userId = decodeURIComponent(path.split('/')[4]);
         const body = await request.json();
         
         // 获取现有用户数据
@@ -1742,9 +1772,9 @@ async function handleRequest(request, env, ctx) {
     }
     
     // 禁用/启用用户API端点
-    if (path.match(/^\/api\/users\/[^/]+\/status$/) && method === 'PUT') {
+    if (path.match(/^\/api\/admin\/users\/[^/]+\/status$/) && method === 'PUT') {
       try {
-        const userId = decodeURIComponent(path.split('/')[3]);
+        const userId = decodeURIComponent(path.split('/')[4]);
         const body = await request.json();
         
         // 获取现有用户数据
