@@ -1093,34 +1093,51 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (path === '/api/admin/login/logs' && method === 'GET') {
-      // 从URL参数获取分页信息
+      // 从URL参数获取分页信息和日期范围
       const url = new URL(request.url);
       const limit = parseInt(url.searchParams.get('limit') || '20');
       const offset = parseInt(url.searchParams.get('offset') || '0');
+      const startDate = url.searchParams.get('startDate'); // YYYY-MM-DD
+      const endDate = url.searchParams.get('endDate'); // YYYY-MM-DD
       
-      // 从R2读取登录日志（如果配置了LOGIN_LOGS绑定）
-      let logs = [];
+      // 从R2读取登录日志
+      let allLogs = [];
       let total = 0;
       
       if (env.LOGIN_LOGS) {
         try {
-          // 从R2读取登录日志索引
-          const indexObj = await env.LOGIN_LOGS.get('index.json');
-          if (indexObj) {
-            const index = JSON.parse(await indexObj.text());
-            total = index.logs?.length || 0;
+          // 计算日期范围（默认最近7天）
+          const end = endDate ? new Date(endDate) : new Date();
+          const start = startDate ? new Date(startDate) : new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+          
+          // 遍历日期范围，读取每天的日志
+          for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const dateStr = `${year}-${month}-${day}`;
+            const filePath = `${year}/${month}/${day}/login-logs.json`;
             
-            // 获取分页数据
-            const logIds = index.logs.slice(offset, offset + limit);
-            
-            // 读取每条日志详情
-            for (const logId of logIds) {
-              const logObj = await env.LOGIN_LOGS.get(`logs/${logId}.json`);
-              if (logObj) {
-                logs.push(JSON.parse(await logObj.text()));
+            try {
+              const logFile = await env.LOGIN_LOGS.get(filePath);
+              if (logFile) {
+                const dayData = JSON.parse(await logFile.text());
+                if (dayData.logs && Array.isArray(dayData.logs)) {
+                  allLogs.push(...dayData.logs);
+                }
               }
+            } catch (err) {
+              console.warn(`读取日志文件失败: ${filePath}`, err.message);
             }
           }
+          
+          // 按时间倒序排列
+          allLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          total = allLogs.length;
+          
+          // 应用分页
+          allLogs = allLogs.slice(offset, offset + limit);
+          
         } catch (error) {
           console.error('读取登录日志失败:', error);
         }
@@ -1129,10 +1146,9 @@ async function handleRequest(request, env, ctx) {
       return new Response(JSON.stringify({
         status: 'success',
         data: {
-          logs: logs,
+          logs: allLogs,
           total: total,
-          source: env.LOGIN_LOGS ? 'R2' : 'None',
-          message: env.LOGIN_LOGS ? null : '登录日志功能需要配置LOGIN_LOGS R2存储桶'
+          source: env.LOGIN_LOGS ? 'R2' : 'None'
         }
       }), {
         status: 200,
