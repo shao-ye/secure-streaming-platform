@@ -719,6 +719,62 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
+    // 🆕 重新加载预加载调度器
+    if (path === '/api/simple-stream/preload/reload-schedule' && method === 'POST') {
+      try {
+        const vpsResponse = await fetch(`${env.VPS_API_URL}/api/simple-stream/preload/reload-schedule`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': env.VPS_API_KEY
+          }
+        });
+        
+        const responseData = await vpsResponse.json();
+        
+        return new Response(JSON.stringify(responseData), {
+          status: vpsResponse.status,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: `Failed to reload preload schedule: ${error.message}`
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
+    // 🆕 重新加载录制调度器
+    if (path === '/api/simple-stream/record/reload-schedule' && method === 'POST') {
+      try {
+        const vpsResponse = await fetch(`${env.VPS_API_URL}/api/simple-stream/record/reload-schedule`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': env.VPS_API_KEY
+          }
+        });
+        
+        const responseData = await vpsResponse.json();
+        
+        return new Response(JSON.stringify(responseData), {
+          status: vpsResponse.status,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: `Failed to reload record schedule: ${error.message}`
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
     // HLS代理
     if (path.match(/^\/hls\/(.+?)\/(.+)$/) && method === 'GET') {
       const [, channelId, file] = path.match(/^\/hls\/(.+?)\/(.+)$/);
