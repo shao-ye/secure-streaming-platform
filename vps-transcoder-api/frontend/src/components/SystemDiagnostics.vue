@@ -11,11 +11,11 @@
     
     <!-- 系统状态概览 -->
     <el-row :gutter="10" class="status-overview" style="margin-bottom: 15px;">
-      <el-col :xs="8" :sm="6" :md="3" :lg="3">
+      <el-col :xs="12" :sm="8" :md="4" :lg="4">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
-              <el-icon size="24" color="#67c23a">
+              <el-icon size="28" color="#67c23a">
                 <CircleCheck />
               </el-icon>
             </div>
@@ -27,11 +27,11 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="8" :sm="6" :md="3" :lg="3">
+      <el-col :xs="12" :sm="8" :md="4" :lg="4">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
-              <el-icon size="24" :color="systemStatus.streams?.active > 0 ? '#67c23a' : '#909399'">
+              <el-icon size="28" :color="systemStatus.streams?.active > 0 ? '#67c23a' : '#909399'">
                 <VideoCamera />
               </el-icon>
             </div>
@@ -43,11 +43,11 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="8" :sm="6" :md="3" :lg="3">
+      <el-col :xs="12" :sm="8" :md="4" :lg="4">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
-              <el-icon size="24" color="#409eff">
+              <el-icon size="28" color="#409eff">
                 <List />
               </el-icon>
             </div>
@@ -59,11 +59,11 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="8" :sm="6" :md="3" :lg="3">
+      <el-col :xs="12" :sm="8" :md="4" :lg="4">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
-              <el-icon size="24" color="#e6a23c">
+              <el-icon size="28" color="#e6a23c">
                 <User />
               </el-icon>
             </div>
@@ -75,11 +75,11 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="8" :sm="6" :md="3" :lg="3">
+      <el-col :xs="12" :sm="8" :md="4" :lg="4">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
-              <el-icon size="24" :color="systemStatus.sessions?.total > 0 ? '#67c23a' : '#909399'">
+              <el-icon size="28" :color="systemStatus.sessions?.total > 0 ? '#67c23a' : '#909399'">
                 <UserFilled />
               </el-icon>
             </div>
@@ -91,11 +91,11 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="8" :sm="6" :md="3" :lg="3">
+      <el-col :xs="12" :sm="8" :md="4" :lg="4">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
-              <el-icon size="24" :color="systemStatus.streams?.activeRecordings > 0 ? '#e6a23c' : '#909399'">
+              <el-icon size="28" :color="systemStatus.streams?.activeRecordings > 0 ? '#e6a23c' : '#909399'">
                 <VideoCameraFilled />
               </el-icon>
             </div>
@@ -107,21 +107,6 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="8" :sm="6" :md="3" :lg="3">
-        <el-card class="status-card" shadow="hover">
-          <div class="status-item">
-            <div class="status-icon">
-              <el-icon size="24" color="#f56c6c">
-                <Clock />
-              </el-icon>
-            </div>
-            <div class="status-info">
-              <div class="status-value">{{ formatRunTime(systemStatus.cloudflare?.worker?.timestamp) }}</div>
-              <div class="status-label">运行时间</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
     </el-row>
 
     <!-- 操作按钮 -->
@@ -471,7 +456,6 @@ import {
   CircleClose,
   DataBoard,
   Monitor,
-  Clock,
   Refresh,
   Delete,
   Download,
@@ -558,13 +542,6 @@ const formatBytes = (bytes) => {
 const formatTime = (timestamp) => {
   if (!timestamp) return 'N/A'
   return new Date(timestamp).toLocaleString('zh-CN')
-}
-
-// 格式化运行时间（只显示时间部分）
-const formatRunTime = (timestamp) => {
-  if (!timestamp) return 'N/A'
-  const date = new Date(timestamp)
-  return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
 const formatUptime = (seconds) => {
@@ -892,7 +869,7 @@ onUnmounted(() => {
 .status-item {
   display: flex;
   align-items: center;
-  padding: 12px 8px;
+  padding: 16px 12px;
 }
 
 .status-icon {
@@ -904,14 +881,14 @@ onUnmounted(() => {
 }
 
 .status-value {
-  font-size: 20px;
+  font-size: 26px;
   font-weight: bold;
   color: #303133;
   margin-bottom: 4px;
 }
 
 .status-label {
-  font-size: 12px;
+  font-size: 13px;
   color: #909399;
 }
 
