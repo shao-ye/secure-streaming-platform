@@ -172,12 +172,10 @@ async function updatePreloadConfig(env, channelId, data, username) {
     // 🆕 保存更新后的频道配置
     await env.YOYO_USER_DB.put(channelKey, JSON.stringify(channelData));
     
-    // 通知VPS重新加载调度器
-    try {
-      await notifyVpsReload(env);
-    } catch (error) {
-      console.error('通知VPS失败:', error);
-    }
+    // 🔧 异步通知VPS重新加载调度器（不等待响应，避免死锁）
+    notifyVpsReload(env).catch(error => {
+      console.error('VPS reload notification failed (non-blocking):', error.message);
+    });
     
     return {
       status: 'success',

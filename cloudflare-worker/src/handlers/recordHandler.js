@@ -130,8 +130,11 @@ async function updateRecordConfig(env, channelId, data, username) {
     
     await env.YOYO_USER_DB.put(channelKey, JSON.stringify(channelData));
     
-    // 通知VPS重载调度
-    await notifyVpsReload(env, channelId);
+    // 🔧 异步通知VPS重载调度（不等待响应，避免死锁）
+    // 使用 event.waitUntil 或直接fire-and-forget
+    notifyVpsReload(env, channelId).catch(err => {
+      console.error('VPS reload notification failed (non-blocking):', err.message);
+    });
     
     return {
       status: 'success',
