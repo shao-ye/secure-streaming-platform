@@ -855,65 +855,81 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
-    // 管理员API端点
+    // 管理员API端点 - 🔥 使用频道索引（移除CHANNELS硬编码）
     if (path === '/api/admin/streams' && method === 'GET') {
       try {
-        // 默认的RTMP源配置
-        const defaultRtmpUrls = {
-          'stream_ensxma2g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-          'stream_gkg5hknc': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
-          'stream_kcwxuedx': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-          'stream_kil0lecb': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
-          'stream_noyoostd': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-          'stream_3blyhqh3': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
-          'stream_8zf48z6g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-          'stream_cpa2czoo': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b'
-        };
-
-        // 构建频道列表，优先使用KV存储中的更新数据
+        // 1. 从频道索引读取所有频道ID
+        const channelIndexData = await env.YOYO_USER_DB.get('system:channel_index');
+        let channelIds = [];
+        
+        if (channelIndexData) {
+          try {
+            const indexObj = JSON.parse(channelIndexData);
+            channelIds = indexObj.channelIds || [];
+          } catch (e) {
+            console.error('解析频道索引失败:', e);
+          }
+        }
+        
+        // 2. 如果索引为空，尝试降级方案（使用CHANNELS作为后备）
+        if (channelIds.length === 0) {
+          console.warn('频道索引为空，使用CHANNELS后备方案');
+          channelIds = Object.keys(CHANNELS);
+        }
+        
+        // 3. 根据索引读取每个频道的完整配置
         const streams = [];
         
-        for (const [id, config] of Object.entries(CHANNELS)) {
-          // 只读取频道配置（已包含预加载配置）
-          const channelKey = `channel:${id}`;
-          let channelData = null;
-          
+        for (const id of channelIds) {
           try {
-            if (env.YOYO_USER_DB) {
-              const kvData = await env.YOYO_USER_DB.get(channelKey);
-              if (kvData) {
-                channelData = JSON.parse(kvData);
+            const channelData = await env.YOYO_USER_DB.get(`channel:${id}`);
+            
+            if (channelData) {
+              const channel = JSON.parse(channelData);
+              
+              // 🔧 安全获取preloadConfig（过滤错误值）
+              let preloadConfig = channel.preloadConfig;
+              if (!preloadConfig || preloadConfig === 'undefined' || preloadConfig === '') {
+                preloadConfig = null;
+              }
+              
+              // 🔧 安全获取recordConfig（过滤错误值）
+              let recordConfig = channel.recordConfig;
+              if (!recordConfig || recordConfig === 'undefined' || recordConfig === '') {
+                recordConfig = null;
+              }
+              
+              streams.push({
+                id: channel.id,
+                name: channel.name,
+                rtmpUrl: channel.rtmpUrl,
+                sortOrder: channel.sortOrder || 999,
+                createdAt: channel.createdAt || channel.updatedAt || '2025-10-03T12:00:00Z',
+                preloadConfig: preloadConfig,
+                recordConfig: recordConfig
+              });
+            } else {
+              // 频道数据不存在，使用CHANNELS默认值
+              const defaultConfig = CHANNELS[id];
+              if (defaultConfig) {
+                streams.push({
+                  id,
+                  name: defaultConfig.name,
+                  rtmpUrl: '',
+                  sortOrder: defaultConfig.order,
+                  createdAt: '2025-10-03T12:00:00Z',
+                  preloadConfig: null,
+                  recordConfig: null
+                });
               }
             }
           } catch (kvError) {
             console.error('KV read error for', id, ':', kvError);
           }
-          
-          // 🔧 安全获取preloadConfig（过滤错误值）
-          let preloadConfig = channelData?.preloadConfig;
-          // 过滤无效值：undefined、字符串"undefined"、空字符串
-          if (!preloadConfig || preloadConfig === 'undefined' || preloadConfig === '') {
-            preloadConfig = null;
-          }
-          
-          // 🔧 安全获取recordConfig（过滤错误值）
-          let recordConfig = channelData?.recordConfig;
-          // 过滤无效值：undefined、字符串"undefined"、空字符串
-          if (!recordConfig || recordConfig === 'undefined' || recordConfig === '') {
-            recordConfig = null;
-          }
-          
-          // 使用KV数据或默认配置
-          streams.push({
-            id,
-            name: channelData?.name || config.name,
-            rtmpUrl: channelData?.rtmpUrl || defaultRtmpUrls[id] || `rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b`,
-            sortOrder: channelData?.sortOrder || config.order,
-            createdAt: channelData?.updatedAt || '2025-10-03T12:00:00Z',
-            preloadConfig: preloadConfig,  // ✨ 直接从频道配置读取（已过滤错误值）
-            recordConfig: recordConfig      // 🆕 添加录制配置
-          });
         }
+        
+        // 按sortOrder排序
+        streams.sort((a, b) => a.sortOrder - b.sortOrder);
 
         return new Response(JSON.stringify({
           status: 'success',
@@ -933,6 +949,82 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
+    // 🆕 创建频道API端点 - 自动维护频道索引
+    if (path === '/api/admin/streams' && method === 'POST') {
+      try {
+        const body = await request.json();
+        const { id, name, rtmpUrl, sortOrder } = body;
+        
+        if (!id || !name) {
+          return new Response(JSON.stringify({
+            status: 'error',
+            message: '频道ID和名称为必填项'
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+          });
+        }
+        
+        // 1. 检查频道是否已存在
+        const existingChannel = await env.YOYO_USER_DB.get(`channel:${id}`);
+        if (existingChannel) {
+          return new Response(JSON.stringify({
+            status: 'error',
+            message: '频道ID已存在'
+          }), {
+            status: 409,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+          });
+        }
+        
+        // 2. 创建频道数据
+        const channelData = {
+          id,
+          name,
+          rtmpUrl: rtmpUrl || '',
+          sortOrder: parseInt(sortOrder) || 999,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        
+        // 3. 保存频道到KV
+        await env.YOYO_USER_DB.put(`channel:${id}`, JSON.stringify(channelData));
+        
+        // 4. 更新频道索引
+        const channelIndexData = await env.YOYO_USER_DB.get('system:channel_index');
+        let index = { channelIds: [], lastUpdated: '', totalChannels: 0 };
+        
+        if (channelIndexData) {
+          index = JSON.parse(channelIndexData);
+        }
+        
+        if (!index.channelIds.includes(id)) {
+          index.channelIds.push(id);
+          index.lastUpdated = new Date().toISOString();
+          index.totalChannels = index.channelIds.length;
+          await env.YOYO_USER_DB.put('system:channel_index', JSON.stringify(index));
+          console.log(`频道索引已更新，新增频道: ${id}`);
+        }
+        
+        return new Response(JSON.stringify({
+          status: 'success',
+          message: '频道创建成功',
+          data: channelData
+        }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '创建频道失败: ' + error.message
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
     // 编辑频道API端点
     if (path.startsWith('/api/admin/streams/') && method === 'PUT') {
       const streamId = path.split('/')[4];
@@ -941,44 +1033,36 @@ async function handleRequest(request, env, ctx) {
         const body = await request.json();
         const { name, rtmpUrl, sortOrder } = body;
         
-        // 1. 准备频道数据
-        const channelData = {
+        // 1. 读取现有频道数据（保留其他配置如preloadConfig等）
+        const existingData = await env.YOYO_USER_DB.get(`channel:${streamId}`);
+        let channelData = existingData ? JSON.parse(existingData) : {};
+        
+        // 2. 更新频道数据
+        channelData = {
+          ...channelData,
           id: streamId,
-          name,
-          rtmpUrl,
-          sortOrder: parseInt(sortOrder) || 1,
+          name: name || channelData.name,
+          rtmpUrl: rtmpUrl || channelData.rtmpUrl,
+          sortOrder: sortOrder !== undefined ? parseInt(sortOrder) : channelData.sortOrder,
           updatedAt: new Date().toISOString()
         };
         
-        // 尝试更新KV存储（如果可用）
+        // 3. 保存到KV
+        await env.YOYO_USER_DB.put(`channel:${streamId}`, JSON.stringify(channelData));
+        
+        // 4. 同步到VPS配置（可选）
         try {
-          if (env.YOYO_USER_DB) {
-            const channelKey = `channel:${streamId}`;
-            await env.YOYO_USER_DB.put(channelKey, JSON.stringify(channelData));
-          }
-        } catch (kvError) {
-          console.error('KV update failed:', kvError);
-          // 继续执行，不因KV失败而中断
-        }
-        
-        // 2. 同步到VPS配置
-        const vpsApiUrl = `${env.VPS_API_URL}/api/simple-stream/configure`;
-        const vpsHeaders = {
-          'Content-Type': 'application/json',
-          'X-API-Key': env.VPS_API_KEY  // 使用环境变量，与预加载/录制保持一致
-        };
-        
-        const vpsData = {
-          channelId: streamId,
-          name,
-          rtmpUrl
-        };
-        
-        try {
-          const vpsResponse = await fetch(vpsApiUrl, {
+          const vpsResponse = await fetch(`${env.VPS_API_URL}/api/simple-stream/configure`, {
             method: 'POST',
-            headers: vpsHeaders,
-            body: JSON.stringify(vpsData)
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': env.VPS_API_KEY
+            },
+            body: JSON.stringify({
+              channelId: streamId,
+              name: channelData.name,
+              rtmpUrl: channelData.rtmpUrl
+            })
           });
           
           if (!vpsResponse.ok) {
@@ -986,12 +1070,11 @@ async function handleRequest(request, env, ctx) {
           }
         } catch (vpsError) {
           console.error('VPS sync error:', vpsError);
-          // 继续执行，不因VPS同步失败而中断
         }
         
         return new Response(JSON.stringify({
           status: 'success',
-          message: 'Stream updated successfully',
+          message: '频道更新成功',
           data: channelData
         }), {
           status: 200,
@@ -1000,9 +1083,59 @@ async function handleRequest(request, env, ctx) {
       } catch (error) {
         return new Response(JSON.stringify({
           status: 'error',
-          message: 'Invalid request body: ' + error.message
+          message: '更新频道失败: ' + error.message
         }), {
           status: 400,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
+    // 🆕 删除频道API端点 - 自动维护频道索引
+    if (path.startsWith('/api/admin/streams/') && method === 'DELETE') {
+      const streamId = path.split('/')[4];
+      
+      try {
+        // 1. 检查频道是否存在
+        const existingChannel = await env.YOYO_USER_DB.get(`channel:${streamId}`);
+        if (!existingChannel) {
+          return new Response(JSON.stringify({
+            status: 'error',
+            message: '频道不存在'
+          }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+          });
+        }
+        
+        // 2. 删除频道数据
+        await env.YOYO_USER_DB.delete(`channel:${streamId}`);
+        
+        // 3. 从频道索引移除
+        const channelIndexData = await env.YOYO_USER_DB.get('system:channel_index');
+        if (channelIndexData) {
+          const index = JSON.parse(channelIndexData);
+          index.channelIds = index.channelIds.filter(id => id !== streamId);
+          index.lastUpdated = new Date().toISOString();
+          index.totalChannels = index.channelIds.length;
+          await env.YOYO_USER_DB.put('system:channel_index', JSON.stringify(index));
+          console.log(`频道索引已更新，删除频道: ${streamId}`);
+        }
+        
+        return new Response(JSON.stringify({
+          status: 'success',
+          message: '频道删除成功',
+          data: { id: streamId }
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '删除频道失败: ' + error.message
+        }), {
+          status: 500,
           headers: { 'Content-Type': 'application/json', ...corsHeaders }
         });
       }

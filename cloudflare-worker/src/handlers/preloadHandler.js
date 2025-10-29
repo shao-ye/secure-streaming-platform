@@ -45,16 +45,53 @@ async function getPreloadConfig(env, channelId) {
 
 /**
  * 获取所有频道的预加载配置（批量）
- * 🆕 遍历所有频道配置读取preloadConfig
+ * 🔥 使用频道索引避免list()操作超限
  */
 async function getAllPreloadConfigs(env) {
   try {
-    // 🆕 遍历所有频道配置
-    const listResult = await env.YOYO_USER_DB.list({ prefix: 'channel:' });
+    // 1. 从频道索引读取所有频道ID
+    const channelIndexData = await env.YOYO_USER_DB.get('system:channel_index');
+    let channelIds = [];
     
+    if (channelIndexData) {
+      try {
+        const indexObj = JSON.parse(channelIndexData);
+        channelIds = indexObj.channelIds || [];
+      } catch (e) {
+        console.error('解析频道索引失败:', e);
+      }
+    }
+    
+    // 2. 如果索引为空，尝试降级方案（list操作，仅首次）
+    if (channelIds.length === 0) {
+      console.warn('频道索引为空，尝试使用list降级方案');
+      try {
+        const listResult = await env.YOYO_USER_DB.list({ prefix: 'channel:' });
+        channelIds = listResult.keys.map(key => key.name.replace('channel:', ''));
+        
+        // 自动重建索引
+        if (channelIds.length > 0) {
+          await env.YOYO_USER_DB.put('system:channel_index', JSON.stringify({
+            channelIds,
+            lastUpdated: new Date().toISOString(),
+            totalChannels: channelIds.length
+          }));
+          console.log(`频道索引已自动重建，包含${channelIds.length}个频道`);
+        }
+      } catch (listError) {
+        console.error('List操作失败:', listError);
+        return {
+          status: 'success',
+          data: [],
+          message: '频道索引为空且list操作失败，请手动重建频道索引'
+        };
+      }
+    }
+    
+    // 3. 根据索引逐个读取频道配置
     const configs = [];
-    for (const key of listResult.keys) {
-      const channelData = await env.YOYO_USER_DB.get(key.name, { type: 'json' });
+    for (const channelId of channelIds) {
+      const channelData = await env.YOYO_USER_DB.get(`channel:${channelId}`, { type: 'json' });
       if (channelData?.preloadConfig?.enabled) {
         configs.push({
           channelId: channelData.id,
@@ -62,6 +99,8 @@ async function getAllPreloadConfigs(env) {
         });
       }
     }
+    
+    console.log(`getAllPreloadConfigs: Found ${configs.length} enabled configs from ${channelIds.length} channels`);
     
     return {
       status: 'success',
