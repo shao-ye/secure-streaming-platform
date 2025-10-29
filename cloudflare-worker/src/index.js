@@ -1008,12 +1008,39 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (path === '/api/admin/traffic/stats' && method === 'GET') {
+      // 生成模拟的月度流量数据
+      const currentDate = new Date();
+      const monthlyData = [];
+      
+      for (let i = 5; i >= 0; i--) {
+        const date = new Date(currentDate);
+        date.setMonth(date.getMonth() - i);
+        const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        
+        monthlyData.push({
+          month: month,
+          bandwidth: (50 + Math.random() * 100).toFixed(2),
+          requests: Math.floor(5000 + Math.random() * 10000),
+          cost: (2.5 + Math.random() * 5).toFixed(2)
+        });
+      }
+      
+      const totalBandwidth = monthlyData.reduce((sum, m) => sum + parseFloat(m.bandwidth), 0);
+      const totalRequests = monthlyData.reduce((sum, m) => sum + m.requests, 0);
+      const totalCost = monthlyData.reduce((sum, m) => sum + parseFloat(m.cost), 0);
+      
       return new Response(JSON.stringify({
         status: 'success',
         data: {
-          totalStreams: Object.keys(CHANNELS).length,
-          activeUsers: 1,
-          activeStreams: 0
+          traffic: {
+            summary: {
+              totalBandwidth: totalBandwidth.toFixed(2),
+              totalRequests: totalRequests,
+              totalCost: totalCost.toFixed(2),
+              avgMonthlyBandwidth: (totalBandwidth / monthlyData.length).toFixed(2)
+            },
+            monthly: monthlyData
+          }
         }
       }), {
         status: 200,
@@ -1084,17 +1111,52 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (path === '/api/admin/login/logs' && method === 'GET') {
+      // 从URL参数获取分页信息
+      const url = new URL(request.url);
+      const limit = parseInt(url.searchParams.get('limit') || '20');
+      const offset = parseInt(url.searchParams.get('offset') || '0');
+      
+      // 生成模拟的登录日志数据（最近7天）
+      const logs = [];
+      const now = new Date();
+      const userAgents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'
+      ];
+      const ips = ['127.0.0.1', '192.168.1.100', '10.0.0.50'];
+      const locations = ['本地', '中国 - 北京', '中国 - 上海', '中国 - 广州'];
+      
+      // 生成最近7天的登录记录
+      for (let i = 0; i < 15; i++) {
+        const timestamp = new Date(now.getTime() - i * 3600000 * 4); // 每4小时一条记录
+        const isSuccess = Math.random() > 0.1; // 90%成功率
+        
+        logs.push({
+          id: `log_${timestamp.getTime()}_${Math.random().toString(36).substr(2, 9)}`,
+          timestamp: timestamp.toISOString(),
+          username: 'admin',
+          ip: ips[Math.floor(Math.random() * ips.length)],
+          location: locations[Math.floor(Math.random() * locations.length)],
+          userAgent: userAgents[Math.floor(Math.random() * userAgents.length)],
+          status: isSuccess ? 'success' : 'failed',
+          success: isSuccess,
+          details: {
+            source: 'Mock',
+            reason: isSuccess ? null : '密码错误'
+          }
+        });
+      }
+      
+      // 应用分页
+      const paginatedLogs = logs.slice(offset, offset + limit);
+      
       return new Response(JSON.stringify({
         status: 'success',
         data: {
-          logs: [
-            {
-              timestamp: new Date().toISOString(),
-              username: 'admin',
-              ip: '127.0.0.1',
-              success: true
-            }
-          ]
+          logs: paginatedLogs,
+          total: logs.length,
+          source: 'Mock'
         }
       }), {
         status: 200,
