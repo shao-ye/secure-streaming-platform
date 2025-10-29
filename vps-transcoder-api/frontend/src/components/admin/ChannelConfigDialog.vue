@@ -376,10 +376,27 @@ async function handleSave() {
     }
   } catch (error) {
     console.error('保存配置失败:', error);
-    if (error.message) {
-      ElMessage.error(error.message);
+    console.error('错误详情:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status,
+      config: error.config
+    });
+    
+    // 🔧 更详细的错误提示
+    let errorMsg = '保存配置失败';
+    if (error.response?.data?.message) {
+      errorMsg = error.response.data.message;
+    } else if (error.message) {
+      errorMsg = error.message;
+    }
+    
+    // 🔧 如果是奇怪的错误消息，显示更多信息
+    if (errorMsg.includes('频控') || errorMsg.includes('访问')) {
+      console.error('🔴 检测到非常规错误:', errorMsg);
+      ElMessage.error(`${errorMsg} (请检查浏览器控制台查看详细信息)`);
     } else {
-      ElMessage.error('保存配置失败');
+      ElMessage.error(errorMsg);
     }
   } finally {
     saving.value = false;
