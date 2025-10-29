@@ -192,6 +192,51 @@ class RecordScheduler {
   }
   
   /**
+   * 获取系统设置（包含分段配置）
+   * @returns {Object} 系统设置
+   */
+  async fetchSystemSettings() {
+    try {
+      const apiKey = process.env.VPS_API_KEY;
+      
+      const response = await fetch(`${this.workersApiUrl}/api/admin/cleanup/config`, {
+        headers: {
+          'X-API-Key': apiKey
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch system settings: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.status === 'success' && result.data) {
+        logger.debug('Fetched system settings', {
+          segmentEnabled: result.data.segmentEnabled,
+          segmentDuration: result.data.segmentDuration
+        });
+        
+        return {
+          segmentEnabled: result.data.segmentEnabled || false,
+          segmentDuration: result.data.segmentDuration || 60
+        };
+      }
+      
+      return {
+        segmentEnabled: false,
+        segmentDuration: 60
+      };
+    } catch (error) {
+      logger.error('Failed to fetch system settings', { error: error.message });
+      return {
+        segmentEnabled: false,
+        segmentDuration: 60
+      };
+    }
+  }
+  
+  /**
    * 启动录制
    * @param {Object} config - 录制配置
    */
@@ -202,7 +247,23 @@ class RecordScheduler {
         channelName: config.channelName
       });
       
-      await this.streamManager.enableRecording(config.channelId, config);
+      // 🆕 获取系统设置（分段配置）
+      const systemSettings = await this.fetchSystemSettings();
+      
+      // 🆕 合并配置
+      const fullConfig = {
+        ...config,
+        segmentEnabled: systemSettings.segmentEnabled,
+        segmentDuration: systemSettings.segmentDuration
+      };
+      
+      logger.info('Recording config prepared', {
+        channelId: config.channelId,
+        segmentEnabled: fullConfig.segmentEnabled,
+        segmentDuration: fullConfig.segmentDuration
+      });
+      
+      await this.streamManager.enableRecording(config.channelId, fullConfig);
       
       logger.info('Recording started successfully', { channelId: config.channelId });
     } catch (error) {
