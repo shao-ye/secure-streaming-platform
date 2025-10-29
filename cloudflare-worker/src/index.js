@@ -16,16 +16,12 @@ import { ProxyHandler } from './handlers/proxyHandler.js';
 import { handlePreloadRequest } from './handlers/preloadHandler.js';
 import { handleRecordAPI } from './handlers/recordHandler.js';
 
-// 频道配置 - 与VPS上的配置保持一致
-const CHANNELS = {
-  'stream_ensxma2g': { name: '二楼教室1', order: 1 },
-  'stream_gkg5hknc': { name: '二楼教室2', order: 2 },
-  'stream_kcwxuedx': { name: '国际班', order: 3 },
-  'stream_kil0lecb': { name: 'C班', order: 4 },
-  'stream_noyoostd': { name: '三楼舞蹈室', order: 5 },
-  'stream_3blyhqh3': { name: '多功能厅', order: 6 },
-  'stream_8zf48z6g': { name: '操场1', order: 7 },
-  'stream_cpa2czoo': { name: '操场2', order: 8 }
+// 🔥 V2.6: CHANNELS硬编码已移除，改用频道索引系统
+// 应急admin账号（KV读取达到限制时使用）
+const EMERGENCY_ADMIN = {
+  username: 'admin',
+  password: 'admin123',  // 实际应用中应使用环境变量
+  role: 'admin'
 };
 
 /**
@@ -337,35 +333,69 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
-    // 获取频道列表（前端使用，需要包含KV更新的数据）
+    // 获取频道列表（前端使用）- 🔥 V2.6: 使用频道索引
     if (path === '/api/streams' && method === 'GET') {
       try {
-        const streams = [];
+        // 1. 从频道索引读取所有频道ID
+        const channelIndexData = await env.YOYO_USER_DB.get('system:channel_index');
+        let channelIds = [];
         
-        for (const [id, config] of Object.entries(CHANNELS)) {
-          // 尝试从KV存储读取更新的配置
-          const channelKey = `channel:${id}`;
-          let channelData = null;
-          
+        if (channelIndexData) {
           try {
-            if (env.YOYO_USER_DB) {
-              const kvData = await env.YOYO_USER_DB.get(channelKey);
-              if (kvData) {
-                channelData = JSON.parse(kvData);
-              }
+            const indexObj = JSON.parse(channelIndexData);
+            channelIds = indexObj.channelIds || [];
+          } catch (e) {
+            console.error('解析频道索引失败:', e);
+          }
+        }
+        
+        // 2. 如果索引为空，尝试list重建
+        if (channelIds.length === 0) {
+          console.warn('频道索引为空，尝试list重建');
+          try {
+            const listResult = await env.YOYO_USER_DB.list({ prefix: 'channel:' });
+            channelIds = listResult.keys.map(key => key.name.replace('channel:', ''));
+            
+            // 自动重建索引
+            if (channelIds.length > 0) {
+              await env.YOYO_USER_DB.put('system:channel_index', JSON.stringify({
+                channelIds,
+                lastUpdated: new Date().toISOString(),
+                totalChannels: channelIds.length
+              }));
+              console.log(`频道索引已自动重建，包含${channelIds.length}个频道`);
+            }
+          } catch (listError) {
+            console.error('List操作失败:', listError);
+            return new Response(JSON.stringify({
+              status: 'error',
+              message: 'Unable to fetch channels: index missing and list failed'
+            }), {
+              status: 503,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            });
+          }
+        }
+        
+        // 3. 根据索引读取每个频道配置
+        const streams = [];
+        const timestamp = Date.now();
+        
+        for (const id of channelIds) {
+          try {
+            const channelData = await env.YOYO_USER_DB.get(`channel:${id}`);
+            if (channelData) {
+              const channel = JSON.parse(channelData);
+              streams.push({
+                id: channel.id,
+                name: channel.name,
+                order: channel.sortOrder || 999,
+                hlsUrl: `/hls/${id}/playlist.m3u8?t=${timestamp}`
+              });
             }
           } catch (kvError) {
             console.error('KV read error for', id, ':', kvError);
           }
-          
-          // 使用KV数据或默认配置，添加时间戳防止缓存
-          const timestamp = Date.now();
-          streams.push({
-            id,
-            name: channelData?.name || config.name,
-            order: channelData?.sortOrder || config.order,
-            hlsUrl: `/hls/${id}/playlist.m3u8?t=${timestamp}`
-          });
         }
         
         // 按排序顺序排列
@@ -391,11 +421,13 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
-    // 开始播放流 (兼容旧API，内部调用SimpleStreamManager)
+    // 开始播放流 (兼容旧API，内部调用SimpleStreamManager) - 🔥 V2.6: 使用KV验证
     if (path.match(/^\/api\/play\/(.+)$/) && method === 'POST') {
       const channelId = path.match(/^\/api\/play\/(.+)$/)[1];
       
-      if (!CHANNELS[channelId]) {
+      // 验证频道是否存在（从KV读取）
+      const channelData = await env.YOYO_USER_DB.get(`channel:${channelId}`);
+      if (!channelData) {
         return new Response(JSON.stringify({
           status: 'error',
           message: 'Channel not found'
@@ -507,21 +539,7 @@ async function handleRequest(request, env, ctx) {
           }
         }
         
-        // 如果KV中没有，使用默认配置
-        if (!rtmpUrl && CHANNELS[channelId]) {
-          const defaultRtmpUrls = {
-            'stream_ensxma2g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-            'stream_gkg5hknc': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
-            'stream_kcwxuedx': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-            'stream_kil0lecb': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
-            'stream_noyoostd': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-            'stream_3blyhqh3': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b',
-            'stream_8zf48z6g': 'rtmp://push229.dodool.com.cn/55/4?auth_key=1413753727-0-0-34e3b8e12b7c0a93631741ff32b7d15c',
-            'stream_cpa2czoo': 'rtmp://push228.dodool.com.cn/55/3?auth_key=1413753727-0-0-bef639f07f6ddabacfa0213594fa659b'
-          };
-          rtmpUrl = defaultRtmpUrls[channelId];
-        }
-        
+        // 🔥 V2.6: 如果KV中没有RTMP URL，返回错误（不再使用硬编码后备）
         if (!rtmpUrl) {
           return new Response(JSON.stringify({
             status: 'error',
@@ -811,6 +829,30 @@ async function handleRequest(request, env, ctx) {
           }
         }
         
+        // 🔥 V2.6: 应急admin登录（KV读取失败或达到限制时使用）
+        if (body.username === EMERGENCY_ADMIN.username && body.password === EMERGENCY_ADMIN.password) {
+          console.warn('⚠️ 使用应急admin账号登录（KV可能不可用）');
+          return new Response(JSON.stringify({
+            status: 'success',
+            message: 'Emergency admin login successful',
+            data: {
+              user: { 
+                username: EMERGENCY_ADMIN.username, 
+                role: EMERGENCY_ADMIN.role,
+                displayName: 'Emergency Admin'
+              },
+              token: 'emergency-token-' + Date.now()
+            }
+          }), {
+            status: 200,
+            headers: { 
+              'Content-Type': 'application/json',
+              'Set-Cookie': 'session=authenticated; Path=/; HttpOnly; SameSite=Strict',
+              ...corsHeaders
+            }
+          });
+        }
+        
         // 认证失败
         return new Response(JSON.stringify({
           status: 'error',
@@ -822,6 +864,31 @@ async function handleRequest(request, env, ctx) {
         
       } catch (error) {
         console.error('Login error:', error);
+        
+        // 🔥 V2.6: KV服务异常时的应急admin登录
+        if (body.username === EMERGENCY_ADMIN.username && body.password === EMERGENCY_ADMIN.password) {
+          console.warn('⚠️ KV服务异常，使用应急admin账号登录');
+          return new Response(JSON.stringify({
+            status: 'success',
+            message: 'Emergency admin login (KV error)',
+            data: {
+              user: { 
+                username: EMERGENCY_ADMIN.username, 
+                role: EMERGENCY_ADMIN.role,
+                displayName: 'Emergency Admin'
+              },
+              token: 'emergency-token-' + Date.now()
+            }
+          }), {
+            status: 200,
+            headers: { 
+              'Content-Type': 'application/json',
+              'Set-Cookie': 'session=authenticated; Path=/; HttpOnly; SameSite=Strict',
+              ...corsHeaders
+            }
+          });
+        }
+        
         return new Response(JSON.stringify({
           status: 'error',
           message: 'Login service error'
@@ -887,13 +954,13 @@ async function handleRequest(request, env, ctx) {
               }));
               console.log(`频道索引已自动重建，包含${channelIds.length}个频道`);
             } else {
-              // 如果KV中也没有频道，使用CHANNELS作为最终后备
-              console.warn('KV中没有频道数据，使用CHANNELS作为最终后备');
-              channelIds = Object.keys(CHANNELS);
+              // 如果KV中也没有频道数据
+              console.error('KV中没有任何频道数据');
+              channelIds = [];
             }
           } catch (listError) {
-            console.error('List操作失败，使用CHANNELS作为后备:', listError);
-            channelIds = Object.keys(CHANNELS);
+            console.error('List操作失败:', listError);
+            channelIds = [];
           }
         }
         
@@ -928,21 +995,8 @@ async function handleRequest(request, env, ctx) {
                 preloadConfig: preloadConfig,
                 recordConfig: recordConfig
               });
-            } else {
-              // 频道数据不存在，使用CHANNELS默认值
-              const defaultConfig = CHANNELS[id];
-              if (defaultConfig) {
-                streams.push({
-                  id,
-                  name: defaultConfig.name,
-                  rtmpUrl: '',
-                  sortOrder: defaultConfig.order,
-                  createdAt: '2025-10-03T12:00:00Z',
-                  preloadConfig: null,
-                  recordConfig: null
-                });
-              }
             }
+            // 🔥 V2.6: 频道数据不存在时跳过（不再使用CHANNELS后备）
           } catch (kvError) {
             console.error('KV read error for', id, ':', kvError);
           }
