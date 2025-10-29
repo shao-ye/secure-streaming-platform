@@ -2,7 +2,11 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 const logger = require('../utils/logger');
+
+const execAsync = promisify(exec);
 
 // VPS实际使用PM2管理日志
 const PM2_LOG_DIR = '/var/log/transcoder';
@@ -10,21 +14,20 @@ const WINSTON_LOG_DIR = '/var/log/vps-transcoder';
 const MAX_LINES = 100; // 默认返回最近100行
 
 /**
- * 读取日志文件的最后N行
+ * 使用tail命令读取日志文件的最后N行（避免读取大文件）
  * @param {string} filePath - 日志文件路径
  * @param {number} lines - 读取的行数
  * @returns {Promise<Array>} 日志行数组
  */
 async function readLastLines(filePath, lines = MAX_LINES) {
   try {
-    const content = await fs.readFile(filePath, 'utf8');
-    const allLines = content.split('\n').filter(line => line.trim());
-    return allLines.slice(-lines);
+    // 使用tail命令高效读取大文件的最后几行
+    const { stdout } = await execAsync(`tail -n ${lines} "${filePath}" 2>/dev/null || echo ""`);
+    const allLines = stdout.split('\n').filter(line => line.trim());
+    return allLines;
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      return [];
-    }
-    throw error;
+    logger.warn(`读取日志文件失败: ${filePath}`, error.message);
+    return [];
   }
 }
 
