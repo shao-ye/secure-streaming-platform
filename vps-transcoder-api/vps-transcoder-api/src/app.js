@@ -201,6 +201,15 @@ try {
   logger.error('代理管理API路由加载失败:', error.message);
 }
 
+// 日志管理API路由
+try {
+  const logsRoutes = require('./routes/logs');
+  app.use('/api/logs', logsRoutes);
+  logger.info('✅ 日志管理API路由已加载');
+} catch (error) {
+  logger.error('日志管理API路由加载失败:', error.message);
+}
+
 // 部署管理API路由
 try {
   const deploymentRoutes = require('./routes/deployment');

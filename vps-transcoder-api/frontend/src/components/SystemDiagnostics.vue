@@ -662,27 +662,18 @@ const runDiagnostics = async () => {
 const refreshLogs = async () => {
   loading.logs = true
   try {
-    // 模拟日志数据，实际应该从后端获取
-    logs.value = [
-      {
-        timestamp: new Date().toISOString(),
-        level: 'info',
-        message: '系统启动完成'
-      },
-      {
-        timestamp: new Date(Date.now() - 60000).toISOString(),
-        level: 'warn',
-        message: '缓存命中率较低'
-      },
-      {
-        timestamp: new Date(Date.now() - 120000).toISOString(),
-        level: 'error',
-        message: 'VPS连接超时'
-      }
-    ]
+    // 从VPS获取真实的日志数据
+    const response = await axios.get('/api/admin/logs/recent?lines=50')
+    if (response.data.status === 'success') {
+      logs.value = response.data.data.logs || []
+      debugLog('成功加载VPS日志:', logs.value.length + '条')
+    } else {
+      throw new Error(response.data.message || '获取日志失败')
+    }
   } catch (error) {
-    errorLog('获取日志失败:', error)
-    ElMessage.error('获取日志失败')
+    errorLog('获取VPS日志失败:', error)
+    ElMessage.error('获取日志失败: ' + (error.response?.data?.message || error.message))
+    logs.value = [] // 清空日志
   } finally {
     loading.logs = false
   }
@@ -691,7 +682,7 @@ const refreshLogs = async () => {
 const clearLogs = async () => {
   try {
     await ElMessageBox.confirm(
-      '确定要清理所有日志吗？',
+      '确定要清理VPS上的所有日志文件吗？此操作不可恢复！',
       '确认清理日志',
       {
         confirmButtonText: '确定',
@@ -700,11 +691,19 @@ const clearLogs = async () => {
       }
     )
 
-    logs.value = []
-    ElMessage.success('日志清理成功')
+    // 调用VPS API清空日志文件
+    const response = await axios.delete('/api/admin/logs/clear')
+    if (response.data.status === 'success') {
+      logs.value = []
+      ElMessage.success('日志清理成功')
+      debugLog('VPS日志已清空:', response.data.data)
+    } else {
+      throw new Error(response.data.message || '清理日志失败')
+    }
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('清理日志失败')
+      errorLog('清理VPS日志失败:', error)
+      ElMessage.error('清理日志失败: ' + (error.response?.data?.message || error.message))
     }
   }
 }

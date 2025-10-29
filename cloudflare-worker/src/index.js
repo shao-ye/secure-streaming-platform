@@ -1312,6 +1312,62 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
+    // VPS日志API代理
+    if (path.startsWith('/api/admin/logs/') && method === 'GET') {
+      const logType = path.split('/').pop(); // recent, combined, error
+      const vpsUrl = `${env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz'}/api/logs/${logType}${url.search}`;
+      
+      try {
+        const vpsResponse = await fetch(vpsUrl, {
+          headers: {
+            'X-API-Key': env.VPS_API_KEY
+          }
+        });
+        
+        const data = await vpsResponse.json();
+        return new Response(JSON.stringify(data), {
+          status: vpsResponse.status,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '获取VPS日志失败: ' + error.message
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
+    // 清空VPS日志API代理
+    if (path === '/api/admin/logs/clear' && method === 'DELETE') {
+      const vpsUrl = `${env.VPS_API_URL || 'https://yoyo-vps.5202021.xyz'}/api/logs/clear`;
+      
+      try {
+        const vpsResponse = await fetch(vpsUrl, {
+          method: 'DELETE',
+          headers: {
+            'X-API-Key': env.VPS_API_KEY
+          }
+        });
+        
+        const data = await vpsResponse.json();
+        return new Response(JSON.stringify(data), {
+          status: vpsResponse.status,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '清空VPS日志失败: ' + error.message
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
     // 用户管理API端点 - 从 KV 存储读取真实用户数据
     if (path === '/api/users' && method === 'GET') {
       try {
