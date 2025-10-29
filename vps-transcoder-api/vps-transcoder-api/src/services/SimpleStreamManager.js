@@ -755,14 +755,31 @@ class SimpleStreamManager {
     try {
       logger.info('Enabling recording', { channelId, recordConfig });
       
+      // 检查是否已经在录制中
+      const existing = this.activeStreams.get(channelId);
+      if (existing && existing.isRecording) {
+        logger.info('Recording already active for channel', { 
+          channelId,
+          recordingPath: existing.recordingPath 
+        });
+        
+        // 更新配置但不重启进程
+        this.recordingConfigs.set(channelId, recordConfig);
+        this.recordingChannels.add(channelId);
+        
+        return {
+          status: 'success',
+          message: 'Recording already active',
+          data: { channelId, isRecording: true, alreadyActive: true }
+        };
+      }
+      
       // 保存录制配置
       this.recordingConfigs.set(channelId, recordConfig);
       this.recordingChannels.add(channelId);
       
-      // 检查现有进程
-      const existing = this.activeStreams.get(channelId);
       if (existing) {
-        // 已有进程，需要重启以添加录制输出
+        // 已有进程但未录制，需要重启以添加录制输出
         logger.info('Restarting stream with recording', { channelId });
         await this.stopFFmpegProcess(channelId);
         await this.startStreamWithRecording(channelId, existing.rtmpUrl, recordConfig);

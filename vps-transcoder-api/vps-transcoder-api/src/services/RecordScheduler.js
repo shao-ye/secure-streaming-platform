@@ -310,11 +310,25 @@ class RecordScheduler {
       // 4. 为启用的频道设置新任务
       for (const config of configs) {
         try {
-          // 如果当前时间在录制时段内，立即开始录制
-          if (await this.shouldRecordNow(config)) {
+          // 检查频道是否已经在录制中
+          const isAlreadyRecording = recordingStatus.channels.some(
+            ch => ch.channelId === config.channelId && ch.isRecording
+          );
+          
+          // 只有在未录制且应该录制时才启动录制
+          if (!isAlreadyRecording && await this.shouldRecordNow(config)) {
+            logger.info('Starting recording for new config', { 
+              channelId: config.channelId,
+              reason: 'in time range and not recording'
+            });
             await this.startRecording(config);
+          } else if (isAlreadyRecording) {
+            logger.info('Skipping recording start (already recording)', { 
+              channelId: config.channelId 
+            });
           }
-          // 设置定时任务
+          
+          // 设置定时任务（无论是否在录制，都要设置定时任务）
           this.scheduleChannel(config);
         } catch (error) {
           logger.error('Failed to reload config', { 
