@@ -66,9 +66,13 @@ export const useStreamsStore = defineStore('streams', () => {
         const routingMode = data.routingMode || 'direct+direct'
         const [frontendPath, backendPath] = routingMode.split('+')
         
+        // 🆕 生成用户会话ID（用于统计活跃用户数）
+        const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        
         currentStream.value = {
           id: streamId,
           channelId: streamId, // 使用channelId替代sessionId
+          sessionId: sessionId, // 🆕 用户会话ID
           hlsUrl: hlsUrl,
           channelName: data.channelName || `频道 ${streamId}`,
           totalViewers: data.totalViewers || 0,
@@ -149,8 +153,12 @@ export const useStreamsStore = defineStore('streams', () => {
     try {
       lastHeartbeatTime = Date.now()
       
+      // 🆕 获取当前会话ID
+      const sessionId = currentStream.value?.sessionId
+      
       await axios.post('/api/simple-stream/heartbeat', {
-        channelId: channelId
+        channelId: channelId,
+        sessionId: sessionId  // 🆕 传递会话ID（可选）
       })
       console.log(`💓 心跳发送成功: ${channelId}`)
     } catch (error) {

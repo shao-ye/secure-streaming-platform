@@ -90,10 +90,11 @@ router.post('/start-watching', async (req, res) => {
 /**
  * 频道心跳 - 简化心跳机制
  * POST /api/simple-stream/heartbeat
+ * Body: { channelId: string, sessionId?: string }
  */
 router.post('/heartbeat', (req, res) => {
   try {
-    const { channelId } = req.body;
+    const { channelId, sessionId } = req.body;
     
     if (!channelId) {
       return res.status(400).json({
@@ -102,7 +103,13 @@ router.post('/heartbeat', (req, res) => {
       });
     }
     
+    // 🔵 保持现有逻辑：更新频道心跳（用于清理FFmpeg）
     streamManager.handleHeartbeat(channelId);
+    
+    // 🆕 可选：跟踪用户会话（用于统计活跃用户数）
+    if (sessionId) {
+      streamManager.trackUserSession(channelId, sessionId);
+    }
     
     res.json({
       status: 'success',

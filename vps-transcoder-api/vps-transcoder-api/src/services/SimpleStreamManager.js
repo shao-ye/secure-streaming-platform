@@ -25,6 +25,9 @@ class SimpleStreamManager {
     // 频道心跳时间 Map<channelId, lastHeartbeatTime>
     this.channelHeartbeats = new Map();
 
+    // 🆕 用户会话跟踪 Map<sessionId, { channelId, timestamp }>
+    this.userSessions = new Map();
+
     // 🆕 预加载频道集合 Set<channelId>
     this.preloadChannels = new Set();
 
@@ -173,12 +176,50 @@ class SimpleStreamManager {
   }
 
   /**
+   * 🆕 跟踪用户会话（可选，用于统计活跃用户数）
+   * @param {string} channelId - 频道ID
+   * @param {string} sessionId - 会话ID
+   */
+  trackUserSession(channelId, sessionId) {
+    if (sessionId) {
+      this.userSessions.set(sessionId, {
+        channelId: channelId,
+        timestamp: Date.now()
+      });
+      logger.debug('User session tracked', { channelId, sessionId });
+    }
+  }
+
+  /**
    * 定期清理超时的频道
    */
   startCleanupTimer() {
     setInterval(() => {
       this.cleanupIdleChannels();
+      this.cleanupStaleSessions(); // 🆕 同时清理过期会话
     }, this.CLEANUP_INTERVAL);
+  }
+
+  /**
+   * 🆕 清理过期的用户会话
+   */
+  cleanupStaleSessions() {
+    const now = Date.now();
+    let cleanedCount = 0;
+    
+    for (const [sessionId, session] of this.userSessions.entries()) {
+      if (now - session.timestamp > this.HEARTBEAT_TIMEOUT) {
+        this.userSessions.delete(sessionId);
+        cleanedCount++;
+      }
+    }
+    
+    if (cleanedCount > 0) {
+      logger.info('Cleaned stale user sessions', { 
+        cleanedCount, 
+        remainingSessions: this.userSessions.size 
+      });
+    }
   }
 
   /**
@@ -531,8 +572,9 @@ class SimpleStreamManager {
    */
   getSystemStatus() {
     return {
-      activeStreams: this.activeStreams.size,
-      totalSessions: this.channelHeartbeats.size
+      activeStreams: this.activeStreams.size,      // FFmpeg转码进程数
+      totalSessions: this.userSessions.size,        // 🆕 真实用户会话数
+      activeChannels: this.channelHeartbeats.size   // 🆕 活跃频道数（向后兼容）
     };
   }
 

@@ -52,7 +52,7 @@
 
                 <el-card class="status-card">
                   <div class="status-item">
-                    <div class="status-value">{{ streamsStore.currentStream ? 1 : 0 }}</div>
+                    <div class="status-value">{{ systemStats.totalSessions }}</div>
                     <div class="status-label">活跃播放</div>
                   </div>
                 </el-card>
@@ -78,12 +78,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back, SwitchButton } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useStreamsStore } from '../stores/streams'
+import axios from '../utils/axios'
 import StreamManager from '../components/StreamManager.vue'
 import UserManager from '../components/UserManager.vue'
 import SystemDiagnostics from '../components/SystemDiagnostics.vue'
@@ -96,6 +97,15 @@ const streamsStore = useStreamsStore()
 
 const activeTab = ref('streams')
 const loadedTabs = ref(new Set(['streams'])) // 默认加载频道管理标签页
+
+// 🆕 系统状态数据
+const systemStats = ref({
+  totalSessions: 0,     // 活跃用户数
+  activeStreams: 0,     // 活跃转码数
+  activeChannels: 0     // 活跃频道数
+})
+
+let statusRefreshTimer = null
 
 const handleTabChange = (tabName) => {
   // 当切换到新标签页时，将其添加到已加载的标签页集合中
@@ -123,6 +133,31 @@ const handleLogout = async () => {
   }
 }
 
+// 🆕 刷新系统状态
+const refreshSystemStats = async () => {
+  try {
+    const response = await axios.get('/api/admin/system/status')
+    if (response.data.status === 'success') {
+      const data = response.data.data
+      systemStats.value = {
+        totalSessions: data.sessions?.total || 0,
+        activeStreams: data.streams?.active || 0,
+        activeChannels: data.streams?.active || 0
+      }
+    }
+  } catch (error) {
+    console.error('获取系统状态失败:', error)
+  }
+}
+
+// 🆕 启动定时刷新
+const startStatusRefresh = () => {
+  refreshSystemStats()
+  statusRefreshTimer = setInterval(() => {
+    refreshSystemStats()
+  }, 30000) // 每30秒刷新
+}
+
 onMounted(() => {
   // 检查管理员权限
   if (!userStore.isAdmin) {
@@ -132,6 +167,13 @@ onMounted(() => {
   }
 
   streamsStore.fetchAdminStreams()
+  startStatusRefresh() // 🆕 启动状态刷新
+})
+
+onUnmounted(() => {
+  if (statusRefreshTimer) {
+    clearInterval(statusRefreshTimer)
+  }
 })
 </script>
 
