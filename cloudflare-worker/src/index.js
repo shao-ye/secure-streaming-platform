@@ -1629,28 +1629,6 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
-    // 预加载配置API
-    if (path.match(/^\/api\/preload\/config\/(.+)$/) && (method === 'GET' || method === 'PUT' || method === 'DELETE')) {
-      const response = await handlePreloadRequest(request, env);
-      const responseData = await response.json();
-      
-      return new Response(JSON.stringify(responseData), {
-        status: response.status,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
-    }
-
-    // 录制配置API
-    if (path.match(/^\/api\/record\/config\/(.+)$/) && (method === 'GET' || method === 'PUT' || method === 'DELETE')) {
-      const response = await handleRecordAPI(request, env);
-      const responseData = await response.json();
-      
-      return new Response(JSON.stringify(responseData), {
-        status: response.status,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
-    }
-
     // 404处理
     return new Response(JSON.stringify({
       status: 'error',
