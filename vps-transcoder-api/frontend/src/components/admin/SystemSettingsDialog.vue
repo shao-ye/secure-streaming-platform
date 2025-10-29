@@ -33,6 +33,33 @@
         <el-tag type="info">每天 01:00 (北京时间)</el-tag>
       </el-form-item>
 
+      <el-divider content-position="left">录制分段配置</el-divider>
+      
+      <el-form-item label="启用录制分段">
+        <el-switch v-model="form.segmentEnabled" />
+        <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+          启用后按设置时长自动分段，避免单文件过大
+        </div>
+      </el-form-item>
+      
+      <el-form-item label="分段时长" v-if="form.segmentEnabled">
+        <el-input-number 
+          v-model="form.segmentDuration" 
+          :min="10" 
+          :max="240"
+          style="width: 150px"
+        />
+        <span style="margin-left: 10px;">分钟</span>
+        <div style="margin-top: 5px; color: #909399; font-size: 12px;">
+          录制时长达到设置值时自动切换到新文件（范围：10-240分钟）
+        </div>
+        <div style="margin-top: 10px;">
+          <el-button size="small" @click="form.segmentDuration = 30">30分钟</el-button>
+          <el-button size="small" @click="form.segmentDuration = 60">1小时</el-button>
+          <el-button size="small" @click="form.segmentDuration = 120">2小时</el-button>
+        </div>
+      </el-form-item>
+
       <el-divider />
 
       <el-form-item>
@@ -78,7 +105,9 @@ const formRef = ref(null)
 
 const form = reactive({
   enabled: true,
-  retentionDays: 2
+  retentionDays: 2,
+  segmentEnabled: false,  // 🆕 录制分段开关
+  segmentDuration: 60     // 🆕 分段时长（分钟）
 })
 
 // 监听外部变化
@@ -116,7 +145,9 @@ const handleSave = async () => {
   try {
     const response = await axios.put('/api/admin/cleanup/config', {
       enabled: form.enabled,
-      retentionDays: form.retentionDays
+      retentionDays: form.retentionDays,
+      segmentEnabled: form.segmentEnabled,    // 🆕
+      segmentDuration: form.segmentDuration   // 🆕
     })
     
     if (response.data && response.data.status === 'success') {

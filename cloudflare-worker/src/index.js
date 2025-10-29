@@ -256,6 +256,14 @@ async function handleRequest(request, env, ctx) {
           retentionDays: 2
         };
         
+        // 🆕 向后兼容：添加分段配置默认值
+        if (config.segmentEnabled === undefined) {
+          config.segmentEnabled = false;
+        }
+        if (config.segmentDuration === undefined) {
+          config.segmentDuration = 60;
+        }
+        
         return new Response(JSON.stringify({
           status: 'success',
           data: config
@@ -279,9 +287,36 @@ async function handleRequest(request, env, ctx) {
       try {
         const body = await request.json();
         
+        // 🆕 验证分段配置
+        if (body.segmentEnabled !== undefined && typeof body.segmentEnabled !== 'boolean') {
+          return new Response(JSON.stringify({
+            status: 'error',
+            message: 'segmentEnabled must be a boolean'
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        
+        if (body.segmentDuration !== undefined) {
+          const duration = Number(body.segmentDuration);
+          if (isNaN(duration) || duration < 10 || duration > 240) {
+            return new Response(JSON.stringify({
+              status: 'error',
+              message: 'segmentDuration must be between 10 and 240 minutes'
+            }), {
+              status: 400,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+          }
+        }
+        
         const config = {
           enabled: body.enabled === true,
-          retentionDays: Math.max(1, parseInt(body.retentionDays) || 2)
+          retentionDays: Math.max(1, parseInt(body.retentionDays) || 2),
+          segmentEnabled: body.segmentEnabled ?? false,      // 🆕
+          segmentDuration: body.segmentDuration ?? 60,       // 🆕
+          updatedAt: new Date().toISOString()
         };
         
         await env.YOYO_USER_DB.put('system:cleanup:config', JSON.stringify(config));
