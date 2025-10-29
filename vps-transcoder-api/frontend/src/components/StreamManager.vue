@@ -416,8 +416,8 @@ const handleEdit = async () => {
     if (result.success) {
       ElMessage.success('频道更新成功')
       editDialogVisible.value = false
-      // 刷新频道列表
-      await streamsStore.fetchAdminStreams()
+      // 🔥 V2.6修复：移除重复刷新调用（updateStream内部已刷新）
+      // await streamsStore.fetchAdminStreams()
     } else {
       ElMessage.error(result.message || '更新失败')
       console.error('🔧 更新失败:', result)
