@@ -1,8 +1,17 @@
 <template>
   <div class="system-diagnostics">
+    <!-- 系统运行提示 -->
+    <el-alert
+      title="系统运行正常"
+      type="success"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 15px;"
+    />
+    
     <!-- 系统状态概览 -->
     <el-row :gutter="20" class="status-overview" style="margin-bottom: 15px;">
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
+      <el-col :xs="12" :sm="12" :md="8" :lg="8">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
@@ -18,7 +27,7 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
+      <el-col :xs="12" :sm="12" :md="8" :lg="8">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
@@ -34,7 +43,39 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
+      <el-col :xs="12" :sm="12" :md="8" :lg="8">
+        <el-card class="status-card" shadow="hover">
+          <div class="status-item">
+            <div class="status-icon">
+              <el-icon size="32" color="#409eff">
+                <List />
+              </el-icon>
+            </div>
+            <div class="status-info">
+              <div class="status-value">{{ systemStatus.streams?.configured || 0 }}</div>
+              <div class="status-label">频道总数</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="12" :sm="12" :md="8" :lg="8">
+        <el-card class="status-card" shadow="hover">
+          <div class="status-item">
+            <div class="status-icon">
+              <el-icon size="32" :color="systemStatus.sessions?.total > 0 ? '#67c23a' : '#909399'">
+                <User />
+              </el-icon>
+            </div>
+            <div class="status-info">
+              <div class="status-value">{{ systemStatus.sessions?.total || 0 }}</div>
+              <div class="status-label">活跃播放</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="12" :sm="12" :md="8" :lg="8">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
@@ -50,7 +91,7 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
+      <el-col :xs="12" :sm="12" :md="8" :lg="8">
         <el-card class="status-card" shadow="hover">
           <div class="status-item">
             <div class="status-icon">
@@ -419,7 +460,9 @@ import {
   Delete,
   Download,
   VideoCamera,
-  VideoCameraFilled
+  VideoCameraFilled,
+  List,
+  User
 } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
 import { debugLog, errorLog, infoLog } from '../utils/config'

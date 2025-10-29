@@ -27,39 +27,6 @@
             <UserManager v-if="loadedTabs.has('users')" />
           </el-tab-pane>
 
-          <el-tab-pane label="系统状态" name="system">
-            <div v-if="loadedTabs.has('system')" class="system-status">
-              <el-alert
-                title="系统运行正常"
-                type="success"
-                :closable="false"
-                show-icon
-              />
-              <div class="status-cards">
-                <el-card class="status-card">
-                  <div class="status-item">
-                    <div class="status-value">{{ streamsStore.streams.length }}</div>
-                    <div class="status-label">频道总数</div>
-                  </div>
-                </el-card>
-
-                <el-card class="status-card">
-                  <div class="status-item">
-                    <div class="status-value">1</div>
-                    <div class="status-label">在线用户</div>
-                  </div>
-                </el-card>
-
-                <el-card class="status-card">
-                  <div class="status-item">
-                    <div class="status-value">{{ systemStats.totalSessions }}</div>
-                    <div class="status-label">活跃播放</div>
-                  </div>
-                </el-card>
-              </div>
-            </div>
-          </el-tab-pane>
-
           <el-tab-pane label="系统诊断" name="diagnostics">
             <SystemDiagnostics v-if="loadedTabs.has('diagnostics')" />
           </el-tab-pane>
@@ -78,13 +45,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back, SwitchButton } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useStreamsStore } from '../stores/streams'
-import axios from '../utils/axios'
 import StreamManager from '../components/StreamManager.vue'
 import UserManager from '../components/UserManager.vue'
 import SystemDiagnostics from '../components/SystemDiagnostics.vue'
@@ -97,15 +63,6 @@ const streamsStore = useStreamsStore()
 
 const activeTab = ref('streams')
 const loadedTabs = ref(new Set(['streams'])) // 默认加载频道管理标签页
-
-// 🆕 系统状态数据
-const systemStats = ref({
-  totalSessions: 0,     // 活跃用户数
-  activeStreams: 0,     // 活跃转码数
-  activeChannels: 0     // 活跃频道数
-})
-
-let statusRefreshTimer = null
 
 const handleTabChange = (tabName) => {
   // 当切换到新标签页时，将其添加到已加载的标签页集合中
@@ -133,32 +90,6 @@ const handleLogout = async () => {
   }
 }
 
-// 🆕 刷新系统状态
-const refreshSystemStats = async () => {
-  try {
-    const response = await axios.get('/api/admin/system/status')
-    if (response.data.status === 'success') {
-      const data = response.data.data
-      systemStats.value = {
-        totalSessions: data.sessions.total || 0,  // 活跃用户会话数
-        activeStreams: data.streams.active || 0,  // 活跃转码进程数
-        activeChannels: data.streams.active || 0  // 活跃频道数
-      }
-      console.log('📊 系统状态已更新:', systemStats.value)
-    }
-  } catch (error) {
-    console.error('获取系统状态失败:', error)
-  }
-}
-
-// 🆕 启动定时刷新
-const startStatusRefresh = () => {
-  refreshSystemStats()
-  statusRefreshTimer = setInterval(() => {
-    refreshSystemStats()
-  }, 30000) // 每30秒刷新
-}
-
 onMounted(() => {
   // 检查管理员权限
   if (!userStore.isAdmin) {
@@ -168,13 +99,6 @@ onMounted(() => {
   }
 
   streamsStore.fetchAdminStreams()
-  startStatusRefresh() // 🆕 启动状态刷新
-})
-
-onUnmounted(() => {
-  if (statusRefreshTimer) {
-    clearInterval(statusRefreshTimer)
-  }
 })
 </script>
 
@@ -225,44 +149,6 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.system-status {
-  padding: 20px 0;
-}
-
-.status-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 20px;
-  margin-top: 20px;
-}
-
-.status-card {
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.status-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.status-item {
-  padding: 20px;
-}
-
-.status-value {
-  font-size: 36px;
-  font-weight: bold;
-  color: #409eff;
-  margin-bottom: 8px;
-}
-
-.status-label {
-  font-size: 14px;
-  color: #666;
-}
-
 @media (max-width: 768px) {
   .header {
     padding: 0 15px;
@@ -290,11 +176,6 @@ onUnmounted(() => {
 
   .el-main {
     padding: 10px;
-  }
-
-  .status-cards {
-    grid-template-columns: 1fr;
-    gap: 15px;
   }
 
   .admin-tabs {
