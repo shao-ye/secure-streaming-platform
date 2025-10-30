@@ -945,28 +945,30 @@ class SimpleStreamManager {
     
     // 🆕 根据配置决定录制方式
     if (recordConfig && recordConfig.segmentEnabled) {
-      // 分段录制
+      // 分段录制 - 使用fragmented MP4防止分段文件损坏
       const segmentSeconds = (recordConfig.segmentDuration || 60) * 60;
       ffmpegArgs.push(
         '-f', 'segment',
         '-segment_time', segmentSeconds.toString(),
         '-segment_format', 'mp4',
+        '-segment_format_options', 'movflags=+frag_keyframe+empty_moov+default_base_moof',
         '-reset_timestamps', '1',
         '-y',
         recordingPath
       );
-      logger.info('Using segment recording', { 
+      logger.info('Using segment recording with fragmented MP4', { 
         segmentDuration: recordConfig.segmentDuration,
         segmentSeconds 
       });
     } else {
-      // 单文件录制
+      // 单文件录制 - 使用fragmented MP4防止文件损坏
       ffmpegArgs.push(
         '-f', 'mp4',
+        '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
         '-y',
         recordingPath
       );
-      logger.info('Using single file recording');
+      logger.info('Using single file recording with fragmented MP4');
     }
 
     logger.info('Starting FFmpeg with recording', {
