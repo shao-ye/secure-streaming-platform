@@ -200,7 +200,11 @@ try {
   RecordingRecoveryService = require('./services/RecordingRecoveryService');
   logger.info('📦 RecordingRecoveryService模块加载成功');
 } catch (error) {
-  logger.error('RecordingRecoveryService模块加载失败:', error.message);
+  logger.error('❌ RecordingRecoveryService模块加载失败', { 
+    error: error.message,
+    stack: error.stack,
+    code: error.code
+  });
 }
 
 // 代理管理API路由
