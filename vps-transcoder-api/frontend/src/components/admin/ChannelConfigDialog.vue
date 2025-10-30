@@ -167,7 +167,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:modelValue', 'saved']);
+const emit = defineEmits(['update:modelValue', 'saved', 'configUpdated']);
 
 const visible = computed({
   get: () => props.modelValue,
@@ -355,6 +355,13 @@ async function handleSave() {
       // 注意：由于Cloudflare KV是最终一致性存储，配置可能需要几秒钟才能全球生效
       // 但API返回成功就表示数据已保存，VPS调度器会自动重载
       ElMessage.success('频道配置已保存');
+      
+      // 🔥 新增：传递更新后的配置数据，避免KV最终一致性问题
+      emit('configUpdated', {
+        channelId: props.channelId,
+        preloadConfig: preloadData,
+        recordConfig: recordData
+      });
       
       emit('saved');
       handleClose();

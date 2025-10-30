@@ -270,6 +270,7 @@
       :channel-id="currentChannel.id"
       :channel-name="currentChannel.name"
       @saved="handlePreloadSaved"
+      @config-updated="handleConfigUpdated"
     />
 
     <!-- 🆕 系统设置对话框（视频清理配置） -->
@@ -604,6 +605,39 @@ const handlePreloadSaved = async () => {
   // 刷新频道列表以更新预加载和录制状态显示
   await streamsStore.fetchAdminStreams()
   // 提示消息已经在ChannelConfigDialog中显示，这里不重复显示
+}
+
+// 🔥 新增：直接更新本地配置状态，避免KV最终一致性导致的延迟
+const handleConfigUpdated = (configData) => {
+  console.log('🔥 收到配置更新事件:', configData)
+  
+  // 直接更新本地 streams 中对应频道的配置
+  const stream = streamsStore.streams.find(s => s.id === configData.channelId)
+  if (stream) {
+    console.log('📝 更新前状态:', {
+      preloadConfig: stream.preloadConfig,
+      recordConfig: stream.recordConfig
+    })
+    
+    // 🔧 直接更新配置，立即反映在列表中
+    stream.preloadConfig = { ...configData.preloadConfig }
+    stream.recordConfig = { ...configData.recordConfig }
+    
+    console.log('✅ 更新后状态:', {
+      preloadConfig: stream.preloadConfig,
+      recordConfig: stream.recordConfig
+    })
+    
+    ElMessage.success('列表状态已更新')
+  } else {
+    console.warn('⚠️ 未找到对应频道:', configData.channelId)
+  }
+  
+  // 🔄 延迟2秒后再从API刷新，确保KV数据已同步
+  setTimeout(async () => {
+    console.log('🔄 延迟刷新列表以同步KV数据')
+    await streamsStore.fetchAdminStreams()
+  }, 2000)
 }
 
 onMounted(() => {
