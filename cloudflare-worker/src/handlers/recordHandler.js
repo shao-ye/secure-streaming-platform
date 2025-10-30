@@ -130,11 +130,18 @@ async function updateRecordConfig(env, ctx, channelId, data, username) {
     
     await env.YOYO_USER_DB.put(channelKey, JSON.stringify(channelData));
     
-    // 🔧 同步通知VPS重载调度，确保立即生效
-    // ✅ 无死锁风险：配置已保存到KV，VPS可以立即读取最新配置
+    // 🔧 同步通知VPS重载调度，直接传递最新配置
+    // ✅ 避免KV最终一致性问题：不让VPS重新读取KV，而是直接传递刚保存的配置
     let vpsNotifyResult = null;
     try {
-      vpsNotifyResult = await notifyVpsReload(env, channelId);
+      // 构造完整配置对象传递给VPS
+      const fullConfig = {
+        channelId: channelData.id,
+        channelName: channelData.name,
+        rtmpUrl: channelData.rtmpUrl,
+        ...channelData.recordConfig
+      };
+      vpsNotifyResult = await notifyVpsReload(env, channelId, fullConfig);
       console.log('✅ VPS录制调度通知成功', { channelId, result: vpsNotifyResult });
     } catch (error) {
       console.error('⚠️ VPS录制调度通知失败（配置已保存）', { 
@@ -166,24 +173,30 @@ async function updateRecordConfig(env, ctx, channelId, data, username) {
 
 /**
  * 通知VPS重新加载录制调度
+ * @param {Object} config - 可选：直接传递最新配置，避免KV延迟
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function notifyVpsReload(env, channelId) {
+async function notifyVpsReload(env, channelId, config = null) {
   try {
     console.log('🔔 正在通知VPS重载录制调度...', { 
       url: env.VPS_API_URL, 
       channelId,
+      hasConfig: !!config,
+      configEnabled: config?.enabled,
       hasApiKey: !!env.VPS_API_KEY
     });
     
-    // 🔧 修复：使用正确的路由前缀 /api/simple-stream/record/reload-schedule
+    // 🔧 修复：直接传递配置，避免VPS重新读取KV导致的延迟问题
     const response = await fetch(`${env.VPS_API_URL}/api/simple-stream/record/reload-schedule`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': env.VPS_API_KEY
       },
-      body: JSON.stringify({ channelId })
+      body: JSON.stringify({ 
+        channelId,
+        config  // 🆕 直接传递配置对象
+      })
     });
     
     if (!response.ok) {

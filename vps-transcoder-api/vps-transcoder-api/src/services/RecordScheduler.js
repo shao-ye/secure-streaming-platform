@@ -415,6 +415,98 @@ class RecordScheduler {
   }
   
   /**
+   * 使用直接传递的配置重载单个频道的录制调度
+   * @param {string} channelId - 频道ID
+   * @param {Object} config - 完整的录制配置对象
+   */
+  async reloadScheduleWithConfig(channelId, config) {
+    try {
+      logger.info('Reloading schedule with direct config', { 
+        channelId, 
+        enabled: config.enabled,
+        startTime: config.startTime,
+        endTime: config.endTime
+      });
+      
+      // 1. 检查该频道当前的录制状态
+      const recordingStatus = this.streamManager.getRecordingStatus();
+      const isCurrentlyRecording = recordingStatus.channels.some(
+        ch => ch.channelId === channelId && ch.isRecording
+      );
+      
+      // 2. 停止该频道现有的定时任务
+      this.unscheduleChannel(channelId);
+      
+      // 3. 根据新配置处理
+      if (config.enabled) {
+        // 3.1 配置启用录制
+        logger.info('Config enabled, checking if should start recording now', { 
+          channelId,
+          isCurrentlyRecording 
+        });
+        
+        // 只有在未录制且应该录制时才启动
+        if (!isCurrentlyRecording && await this.shouldRecordNow(config)) {
+          logger.info('Starting recording immediately', { 
+            channelId,
+            reason: 'in time range and config enabled'
+          });
+          await this.startRecording(config);
+        } else if (isCurrentlyRecording) {
+          logger.info('Already recording, keeping current state', { channelId });
+        } else {
+          logger.info('Not in recording time range, scheduling only', { channelId });
+        }
+        
+        // 设置新的定时任务
+        this.scheduleChannel(config);
+        
+      } else {
+        // 3.2 配置禁用录制
+        logger.info('Config disabled, stopping recording if active', { 
+          channelId,
+          isCurrentlyRecording 
+        });
+        
+        if (isCurrentlyRecording) {
+          try {
+            await this.streamManager.disableRecording(channelId);
+            logger.info('Recording stopped for disabled config', { channelId });
+          } catch (error) {
+            logger.error('Failed to stop recording', { 
+              channelId, 
+              error: error.message 
+            });
+          }
+        }
+        
+        // 不设置定时任务（因为已禁用）
+      }
+      
+      logger.info('Schedule reloaded successfully with direct config', {
+        channelId,
+        enabled: config.enabled,
+        hasScheduledTask: this.cronTasks.has(channelId),
+        isRecording: this.streamManager.getRecordingStatus().channels
+          .some(ch => ch.channelId === channelId && ch.isRecording)
+      });
+      
+      return {
+        status: 'success',
+        channelId,
+        enabled: config.enabled
+      };
+    } catch (error) {
+      logger.error('Failed to reload schedule with config', { 
+        channelId, 
+        error: error.message,
+        stack: error.stack
+      });
+      throw error;
+    }
+  }
+  
+  /**
    * 获取调度器状态
    */
   getStatus() {

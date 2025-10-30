@@ -326,17 +326,34 @@ router.post('/preload/reload-schedule', async (req, res) => {
 /**
  * 重新加载录制调度器（配置变更时调用）
  * POST /api/record/reload-schedule
+ * Body: { channelId, config } - config为可选，直接传递避免KV读取延迟
  */
 router.post('/record/reload-schedule', async (req, res) => {
   try {
-    logger.info('Reloading record scheduler...');
+    const { channelId, config } = req.body;
     
-    await recordScheduler.reloadSchedule();
+    logger.info('Reloading record scheduler...', { 
+      channelId, 
+      hasDirectConfig: !!config,
+      configEnabled: config?.enabled 
+    });
+    
+    // 🔧 修复：支持直接传递配置，避免KV最终一致性问题
+    if (config) {
+      // 使用Workers直接传递的配置（最新的、准确的）
+      await recordScheduler.reloadScheduleWithConfig(channelId, config);
+    } else {
+      // 兼容旧方式：从Workers API重新读取所有配置
+      await recordScheduler.reloadSchedule();
+    }
     
     res.json({
       status: 'success',
       message: 'Record schedule reloaded successfully',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      debug: {
+        usedDirectConfig: !!config
+      }
     });
   } catch (error) {
     logger.error('Failed to reload record schedule', { error: error.message });
