@@ -1,8 +1,8 @@
-# YOYO流媒体平台架构文档 V2.6
+# YOYO流媒体平台架构文档 V2.7
 
 > **精简架构文档** - 专注于核心架构设计和关键技术实现  
-> **更新时间**: 2025-10-29  
-> **文档版本**: V2.6 - 新增频道/用户索引系统，解决KV list操作限制
+> **更新时间**: 2025-10-30  
+> **文档版本**: V2.7 - 新增录制分段功能，支持长时间录制自动切分
 
 ---
 
@@ -734,7 +734,165 @@ generateRecordingPath(channelId, channelName, recordConfig) {
 - ✅ 信息完整：包含日期和时间段
 - ✅ UTF-8支持：现代系统原生支持中文文件名
 
-### 5.5 KV存储结构
+### 5.5 录制分段功能
+
+**版本**: V2.5 (2025-10-30)  
+**文档**: `doc/RECORDING_SEGMENTATION_IMPLEMENTATION.md`  
+**状态**: ✅ 已部署
+
+#### 核心概念
+
+1. **分段是可选的** - 通过系统设置全局控制，默认关闭
+2. **两步法实现** - 录制时用临时名，停止后重命名为正式名
+3. **文件命名延续现有规范** - `{名称}_{ID}_{日期}_{开始}_to_{结束}.mp4`
+4. **不影响观看** - HLS和MP4并行输出，互不干扰
+
+#### FFmpeg分段参数
+
+**单文件模式**（默认）:
+```javascript
+// 完整录制时段输出为单个MP4文件
+ffmpegArgs.push(
+  '-c:v', 'copy',
+  '-an',                    // 禁用音频（避免编码兼容性问题）
+  '-f', 'mp4',
+  '-y',
+  recordingPath
+);
+```
+
+**分段模式**（启用时）:
+```javascript
+// 按时间分段，自动切分多个MP4文件
+const segmentSeconds = recordConfig.segmentDuration * 60;  // 转为秒
+const tempFilename = `${channelName}_${channelId}_${dateStr}_temp_%03d.mp4`;
+
+ffmpegArgs.push(
+  '-c:v', 'copy',
+  '-an',
+  '-f', 'segment',                      // 使用segment muxer
+  '-segment_time', segmentSeconds,      // 分段时长（秒）
+  '-segment_format', 'mp4',             // 输出格式
+  '-reset_timestamps', '1',             // 每段重置时间戳
+  '-y',
+  tempFilename                          // 使用%03d模式命名
+);
+```
+
+#### 临时文件命名
+
+**录制时使用临时名**（包含`_temp_`标记）:
+```
+二楼教室1_stream_ensxma2g_20251030_temp_000.mp4
+二楼教室1_stream_ensxma2g_20251030_temp_001.mp4
+二楼教室1_stream_ensxma2g_20251030_temp_002.mp4
+```
+
+**重命名为正式名**（包含实际时间段）:
+```
+二楼教室1_stream_ensxma2g_20251030_074000_to_074500.mp4
+二楼教室1_stream_ensxma2g_20251030_074500_to_075000.mp4
+二楼教室1_stream_ensxma2g_20251030_075000_to_075230.mp4
+```
+
+#### 重命名逻辑
+
+```javascript
+async renameSegmentFiles(channelId, recordConfig) {
+  // 等待2秒确保FFmpeg完成文件写入
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  const outputDir = path.join(recordConfig.storagePath, channelId, dateStr);
+  const tempFiles = fs.readdirSync(outputDir)
+    .filter(f => f.includes('_temp_') && f.endsWith('.mp4'))
+    .sort();
+  
+  const sessionStart = new Date(recordConfig.sessionStartTime);
+  const segmentDurationMs = recordConfig.segmentDuration * 60 * 1000;
+  
+  for (let i = 0; i < tempFiles.length; i++) {
+    const startTime = new Date(sessionStart.getTime() + i * segmentDurationMs);
+    const endTime = (i === tempFiles.length - 1) 
+      ? new Date()  // 最后一段使用实际停止时间
+      : new Date(startTime.getTime() + segmentDurationMs);
+    
+    const startTimeStr = moment(startTime).format('HHmmss');
+    const endTimeStr = moment(endTime).format('HHmmss');
+    
+    const finalFilename = `${recordConfig.channelName}_${channelId}_${dateStr}_${startTimeStr}_to_${endTimeStr}.mp4`;
+    const finalPath = path.join(outputDir, finalFilename);
+    
+    fs.renameSync(tempPath, finalPath);
+    logger.info(`Renamed segment: ${tempFiles[i]} → ${finalFilename}`);
+  }
+}
+```
+
+**触发时机**: 在`disableRecording`方法中，停止录制前执行重命名
+
+#### 系统配置管理
+
+**KV存储**（`system:cleanup_config`键）:
+```json
+{
+  "enabled": true,
+  "retentionDays": 2,
+  "segmentEnabled": false,    // 🆕 分段开关（全局）
+  "segmentDuration": 60,      // 🆕 分段时长（分钟）
+  "updatedAt": "2025-10-30T02:00:00Z"
+}
+```
+
+**RecordScheduler集成**:
+```javascript
+async startRecording(config) {
+  // 获取系统设置
+  const systemSettings = await this.fetchSystemSettings();
+  
+  // 合并到录制配置
+  const fullConfig = {
+    ...config,
+    segmentEnabled: systemSettings.segmentEnabled,
+    segmentDuration: systemSettings.segmentDuration,
+    sessionStartTime: Date.now()  // 记录录制开始时间
+  };
+  
+  await this.streamManager.enableRecording(config.channelId, fullConfig);
+}
+```
+
+**前端SystemSettingsDialog**:
+```vue
+<el-divider content-position="left">录制分段配置</el-divider>
+
+<el-form-item label="启用录制分段">
+  <el-switch v-model="form.segmentEnabled" />
+  <div class="form-tip">
+    启用后，长时间录制将自动分割为多个文件，便于管理和查看
+  </div>
+</el-form-item>
+
+<el-form-item label="分段时长" v-if="form.segmentEnabled">
+  <el-input-number v-model="form.segmentDuration" :min="10" :max="240" />
+  <span style="margin-left: 10px;">分钟</span>
+  <div style="margin-top: 10px;">
+    <el-button size="small" @click="form.segmentDuration = 30">30分钟</el-button>
+    <el-button size="small" @click="form.segmentDuration = 60">1小时</el-button>
+    <el-button size="small" @click="form.segmentDuration = 120">2小时</el-button>
+  </div>
+</el-form-item>
+```
+
+#### 优势与特性
+
+- ✅ **灵活控制**: 全局开关，可随时启用/禁用分段
+- ✅ **自动分割**: FFmpeg自动按时长切分，无需手动干预
+- ✅ **精确时间**: 文件名包含实际录制时间段
+- ✅ **最后一段**: 自动处理最后一段的实际结束时间
+- ✅ **零影响**: 不影响HLS观看和单文件模式
+- ✅ **易管理**: 分段文件便于后续查看和传输
+
+### 5.6 KV存储结构
 
 **整合到频道配置** (recordConfig字段):
 
@@ -767,7 +925,7 @@ generateRecordingPath(channelId, channelName, recordConfig) {
 - recordConfig不存储channelName，从顶层name获取（避免数据冗余）
 - storagePath可配置，支持FileBrowser路径映射
 
-### 5.6 API端点
+### 5.7 API端点
 
 **Workers API**:
 - `GET /api/record/config/:channelId` - 获取频道录制配置
@@ -778,7 +936,7 @@ generateRecordingPath(channelId, channelName, recordConfig) {
 - `POST /api/record/reload-schedule` - 重新加载录制调度
 - `GET /api/record/status` - 获取录制状态
 
-### 5.7 前端管理界面
+### 5.8 前端管理界面
 
 **ChannelConfigDialog** (统一配置对话框):
 
@@ -1563,6 +1721,29 @@ A: 使用一键部署脚本（见"部署架构"章节）
 
 ## 📝 版本历史
 
+### V2.7 (2025-10-30) ⭐ 当前版本
+**录制分段功能上线 - 支持长时间录制自动切分**
+
+**核心功能**:
+- ✅ **录制分段**: 按时长自动切分MP4文件（可配置10-240分钟）
+- ✅ **全局开关**: 系统设置中统一控制，默认关闭
+- ✅ **两步命名**: 录制时用临时名（_temp_），停止后重命名为正式名
+- ✅ **精确时间**: 文件名包含实际录制时间段（开始_to_结束）
+- ✅ **智能重命名**: 自动处理最后一段的实际结束时间
+- ✅ **零影响**: 不影响HLS观看和单文件模式
+
+**技术实现**:
+- FFmpeg segment muxer：自动按时长切分
+- RecordScheduler集成：从系统配置获取分段参数
+- SimpleStreamManager：实现重命名逻辑
+- SystemSettingsDialog：前端分段配置界面
+
+**文件示例**:
+```
+录制中：二楼教室1_stream_xxx_20251030_temp_000.mp4
+停止后：二楼教室1_stream_xxx_20251030_103000_to_104000.mp4
+```
+
 ### V2.6 (2025-10-29)
 **频道/用户索引系统上线 - 解决KV list操作限制**
 
@@ -1680,5 +1861,5 @@ A: 使用一键部署脚本（见"部署架构"章节）
 ---
 
 **文档维护者**: AI Assistant  
-**最后更新**: 2025-10-28 23:10 (UTC+8)  
-**文档状态**: ✅ V2.5 - 频道定时录制与视频清理系统上线
+**最后更新**: 2025-10-30 10:40 (UTC+8)  
+**文档状态**: ✅ V2.7 - 录制分段功能上线，支持长时间录制自动切分
