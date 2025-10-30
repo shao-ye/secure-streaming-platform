@@ -108,7 +108,7 @@ async function getAllRecordConfigs(env) {
 /**
  * 更新频道的录制配置
  */
-async function updateRecordConfig(env, channelId, data, username) {
+async function updateRecordConfig(env, ctx, channelId, data, username) {
   try {
     const channelKey = `channel:${channelId}`;
     let channelData = await env.YOYO_USER_DB.get(channelKey, { type: 'json' });
@@ -130,16 +130,30 @@ async function updateRecordConfig(env, channelId, data, username) {
     
     await env.YOYO_USER_DB.put(channelKey, JSON.stringify(channelData));
     
-    // 🔧 异步通知VPS重载调度（不等待响应，避免死锁）
-    // 使用 event.waitUntil 或直接fire-and-forget
-    notifyVpsReload(env, channelId).catch(err => {
-      console.error('VPS reload notification failed (non-blocking):', err.message);
-    });
+    // 🔧 同步通知VPS重载调度，确保立即生效
+    // ✅ 无死锁风险：配置已保存到KV，VPS可以立即读取最新配置
+    let vpsNotifyResult = null;
+    try {
+      vpsNotifyResult = await notifyVpsReload(env, channelId);
+      console.log('✅ VPS录制调度通知成功', { channelId, result: vpsNotifyResult });
+    } catch (error) {
+      console.error('⚠️ VPS录制调度通知失败（配置已保存）', { 
+        channelId, 
+        error: error.message,
+        stack: error.stack
+      });
+      vpsNotifyResult = { error: error.message };
+      // 即使通知失败，配置也已保存，VPS定时重载会生效
+    }
     
     return {
       status: 'success',
       message: 'Record config updated successfully',
-      data: channelData.recordConfig
+      data: channelData.recordConfig,
+      debug: {
+        vpsNotified: vpsNotifyResult?.success || false,
+        vpsError: vpsNotifyResult?.error || null
+      }
     };
   } catch (error) {
     console.error('Failed to update record config:', error);
@@ -152,9 +166,16 @@ async function updateRecordConfig(env, channelId, data, username) {
 
 /**
  * 通知VPS重新加载录制调度
+ * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function notifyVpsReload(env, channelId) {
   try {
+    console.log('🔔 正在通知VPS重载录制调度...', { 
+      url: env.VPS_API_URL, 
+      channelId,
+      hasApiKey: !!env.VPS_API_KEY
+    });
+    
     // 🔧 修复：使用正确的路由前缀 /api/simple-stream/record/reload-schedule
     const response = await fetch(`${env.VPS_API_URL}/api/simple-stream/record/reload-schedule`, {
       method: 'POST',
@@ -167,13 +188,16 @@ async function notifyVpsReload(env, channelId) {
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.warn('Failed to notify VPS reload:', response.statusText, errorText);
-    } else {
-      console.log('✅ VPS录制调度已成功重载', { channelId });
+      console.error('VPS响应失败:', { status: response.status, statusText: response.statusText, errorText });
+      throw new Error(`VPS returned ${response.status}: ${errorText}`);
     }
+    
+    const result = await response.json();
+    console.log('✅ VPS录制调度已成功重载', { channelId, result });
+    return { success: true };
   } catch (error) {
-    console.error('Failed to notify VPS:', error);
-    // 不抛出错误，避免影响配置保存
+    console.error('通知VPS失败:', { error: error.message, stack: error.stack });
+    throw error;  // 抛出错误，让调用者处理
   }
 }
 
@@ -181,7 +205,7 @@ async function notifyVpsReload(env, channelId) {
  * 录制配置API处理器
  * 参考preloadHandler的实现模式
  */
-async function handleRecordAPI(request, env) {
+async function handleRecordAPI(request, env, ctx) {
   const url = new URL(request.url);
   const pathname = url.pathname;
   const method = request.method;
@@ -228,7 +252,7 @@ async function handleRecordAPI(request, env) {
     if (method === 'PUT' && pathname.match(/^\/api\/record\/config\/[\w-]+$/)) {
       const channelId = pathname.split('/').pop();
       const data = await request.json();
-      const result = await updateRecordConfig(env, channelId, data, username);
+      const result = await updateRecordConfig(env, ctx, channelId, data, username);
       return new Response(JSON.stringify(result), {
         headers: { 'Content-Type': 'application/json' }
       });

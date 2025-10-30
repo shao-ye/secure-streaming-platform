@@ -121,10 +121,8 @@ try {
 }
 
 // 使用新的简化流管理API（向后兼容）
-let streamManager = null;
 try {
-  const { router: simpleStreamRoutes, preloadScheduler, streamManager: sm } = require('./routes/simple-stream');
-  streamManager = sm;
+  const { router: simpleStreamRoutes, preloadScheduler } = require('./routes/simple-stream');
   app.use('/api/simple-stream', simpleStreamRoutes);
   
   // 🆕 将workdayChecker注册到app，供其他路由访问
@@ -192,15 +190,6 @@ try {
   logger.info('✅ 视频清理API端点已注册');
 } catch (error) {
   logger.error('视频清理服务加载失败:', error.message);
-}
-
-// 🆕 录制文件恢复服务 - 在app启动后初始化
-let RecordingRecoveryService = null;
-try {
-  RecordingRecoveryService = require('./services/RecordingRecoveryService');
-  logger.info('📦 RecordingRecoveryService模块加载成功');
-} catch (error) {
-  logger.error('RecordingRecoveryService模块加载失败:', error.message);
 }
 
 // 代理管理API路由
@@ -310,33 +299,6 @@ if (require.main === module) {
         logger.info(`📊 Environment: ${NODE_ENV}`);
         logger.info(`📁 HLS Output Directory: ${hlsDir}`);
         logger.info(`🔐 API Security: ${process.env.ENABLE_IP_WHITELIST === 'true' ? 'Enabled' : 'Disabled'}`);
-        
-        // 🆕 服务启动后初始化Recovery Service
-        if (RecordingRecoveryService && streamManager) {
-          try {
-            // 使用默认配置（或从环境变量读取）
-            const systemConfig = {
-              recoveryScanHours: parseInt(process.env.RECOVERY_SCAN_HOURS) || 48
-            };
-            
-            const recoveryService = new RecordingRecoveryService(streamManager, systemConfig);
-            recoveryService.startup();
-            
-            logger.info('✅ 录制文件恢复服务已启动', {
-              scanRecentHours: systemConfig.recoveryScanHours,
-              recordingsPath: process.env.RECORDINGS_PATH || '/srv/filebrowser/yoyo-k'
-            });
-          } catch (error) {
-            logger.error('录制文件恢复服务启动失败:', error.message, error.stack);
-          }
-        } else {
-          if (!RecordingRecoveryService) {
-            logger.warn('⚠️ RecordingRecoveryService模块未加载');
-          }
-          if (!streamManager) {
-            logger.warn('⚠️ StreamManager未初始化，跳过录制文件恢复服务');
-          }
-        }
     });
 }
 

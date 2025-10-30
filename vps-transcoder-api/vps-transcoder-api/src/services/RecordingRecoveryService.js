@@ -40,15 +40,27 @@ class RecordingRecoveryService {
   // ==================== 启动入口 ====================
   
   async startup() {
-    if (!this.config.enabled || this.isRunning) return;
+    if (!this.config.enabled) {
+      logger.warn('⚠️ Recovery service disabled');
+      return;
+    }
+    if (this.isRunning) {
+      logger.warn('⚠️ Recovery service already running');
+      return;
+    }
+    
+    logger.info('🕒 Recovery service scheduled', { 
+      delayStart: this.config.delayStart,
+      scanRecentHours: this.config.scanRecentHours,
+      recordingsPath: this.config.recordingsPath
+    });
     
     setTimeout(() => {
-      this.runRecovery().catch(err => 
-        logger.error('Recovery failed', { error: err.message })
-      );
+      logger.info('🚀 Starting recovery service...');
+      this.runRecovery().catch(err => {
+        logger.error('Recovery failed', { error: err.message, stack: err.stack });
+      });
     }, this.config.delayStart);
-    
-    logger.info('Recovery service scheduled', { delayStart: this.config.delayStart });
   }
 
   // ==================== 主执行流程 ====================
@@ -59,10 +71,13 @@ class RecordingRecoveryService {
     logger.info('🔧 Starting recording file recovery...');
 
     try {
+      logger.info('🔍 Step 1: Finding files needing recovery...');
       const filesToFix = await this.findFilesNeedingRecovery();
       
+      logger.info(`📊 Found ${filesToFix.length} file(s) needing recovery`);
+      
       if (filesToFix.length === 0) {
-        logger.info('No files need recovery');
+        logger.info('✅ No files need recovery');
         return;
       }
 
@@ -137,6 +152,7 @@ class RecordingRecoveryService {
             
             // 识别temp文件
             if (fileName.includes('_temp_')) {
+              logger.info(`📦 Found temp file: ${fileName}`);
               files.push({ path: filePath, type: 'temp', channel });
             } else if (channel.recordConfig) {
               // 识别错误结束时间文件（仅当有录制配置时）
@@ -160,6 +176,9 @@ class RecordingRecoveryService {
   async getRecordingChannels() {
     const channels = [];
     
+    logger.info('🔍 Checking streamManager.recordingConfigs...');
+    logger.info(`recordingConfigs size: ${this.streamManager.recordingConfigs.size}`);
+    
     // 方式1：从streamManager获取（如果有配置）
     for (const [channelId, config] of this.streamManager.recordingConfigs.entries()) {
       channels.push({
@@ -170,10 +189,23 @@ class RecordingRecoveryService {
       });
     }
     
+    if (channels.length > 0) {
+      logger.info(`✅ Found ${channels.length} channels from streamManager`);
+    }
+    
     // 方式2：直接扫描录制目录（兜底方案）
-    if (channels.length === 0 && fs.existsSync(this.config.recordingsPath)) {
+    if (channels.length === 0) {
+      logger.info(`📁 Scanning directory: ${this.config.recordingsPath}`);
+      
+      if (!fs.existsSync(this.config.recordingsPath)) {
+        logger.warn(`⚠️ Directory not found: ${this.config.recordingsPath}`);
+        return channels;
+      }
+      
       const dirs = fs.readdirSync(this.config.recordingsPath)
         .filter(d => d.startsWith('stream_'));
+      
+      logger.info(`📊 Found ${dirs.length} stream directories: ${dirs.join(', ')}`);
       
       for (const channelId of dirs) {
         channels.push({
@@ -184,7 +216,7 @@ class RecordingRecoveryService {
         });
       }
       
-      logger.info(`Found ${dirs.length} channels from directory scan`);
+      logger.info(`✅ Found ${dirs.length} channels from directory scan`);
     }
     
     return channels;
@@ -227,13 +259,20 @@ class RecordingRecoveryService {
 
   async renameTempFile(file) {
     try {
+      logger.info(`🔧 Renaming temp file: ${path.basename(file.path)}`);
+      
       // 匹配新格式：频道名_频道ID_日期_时间_temp_XXX.mp4
       const match = path.basename(file.path).match(/(.+)_(.+)_(\d{8})_(\d{6})_temp_(\d{3})\.mp4$/);
       if (!match) {
+        logger.info('Trying old format match...');
         // 兼容旧格式：频道名_频道ID_日期_temp_XXX.mp4
         const oldMatch = path.basename(file.path).match(/(.+)_(.+)_(\d{8})_temp_(\d{3})\.mp4$/);
-        if (!oldMatch) return;
+        if (!oldMatch) {
+          logger.warn(`⚠️ File name does not match any pattern: ${path.basename(file.path)}`);
+          return;
+        }
         
+        logger.info('✅ Matched old format');
         const [, channelName, channelId, date] = oldMatch;
         const duration = await this.getVideoDuration(file.path);
         const stat = fs.statSync(file.path);
@@ -245,11 +284,14 @@ class RecordingRecoveryService {
         
         if (!fs.existsSync(newPath)) {
           fs.renameSync(file.path, newPath);
-          logger.info('Temp file renamed (old format)', { from: path.basename(file.path), to: newFileName });
+          logger.info('✅ Temp file renamed (old format)', { from: path.basename(file.path), to: newFileName });
+        } else {
+          logger.warn(`⚠️ Target file already exists: ${newFileName}`);
         }
         return;
       }
       
+      logger.info('✅ Matched new format');
       // 新格式处理：使用文件名中的开始时间
       const [, channelName, channelId, date, startTime] = match;
       const duration = await this.getVideoDuration(file.path);
@@ -260,12 +302,16 @@ class RecordingRecoveryService {
       const newFileName = `${channelName}_${channelId}_${date}_${startTime}_to_${this.formatTime(fileEndTime)}.mp4`;
       const newPath = path.join(path.dirname(file.path), newFileName);
       
+      logger.info(`🎯 Target name: ${newFileName}`);
+      
       if (!fs.existsSync(newPath)) {
         fs.renameSync(file.path, newPath);
-        logger.info('Temp file renamed', { from: path.basename(file.path), to: newFileName });
+        logger.info('✅ Temp file renamed', { from: path.basename(file.path), to: newFileName });
+      } else {
+        logger.warn(`⚠️ Target file already exists: ${newFileName}`);
       }
     } catch (error) {
-      logger.error('Rename temp failed', { file: file.path, error: error.message });
+      logger.error('❌ Rename temp failed', { file: file.path, error: error.message, stack: error.stack });
     }
   }
 
