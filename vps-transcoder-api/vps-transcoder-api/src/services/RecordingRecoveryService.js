@@ -49,15 +49,16 @@ class RecordingRecoveryService {
       return;
     }
     
-    logger.info('🕒 Recovery service scheduled', { 
+    logger.info('🕒 Recovery service scheduled with smart size detection', { 
       delayStart: this.config.delayStart,
+      checkInterval: 30000,  // 30秒后检查大小
       scanRecentHours: this.config.scanRecentHours,
       recordingsPath: this.config.recordingsPath
     });
     
     setTimeout(() => {
       logger.info('🚀 Starting recovery service...');
-      this.runRecovery().catch(err => {
+      this.runRecoveryWithSizeCheck().catch(err => {
         logger.error('Recovery failed', { error: err.message, stack: err.stack });
       });
     }, this.config.delayStart);
@@ -65,13 +66,112 @@ class RecordingRecoveryService {
 
   // ==================== 主执行流程 ====================
   
+  /**
+   * 🔥 新逻辑：基于文件大小增长检测
+   * 1. 扫描temp文件并记录初始大小
+   * 2. 等待30秒
+   * 3. 再次检查大小，未增长的文件进行修复
+   */
+  async runRecoveryWithSizeCheck() {
+    this.isRunning = true;
+    const startTime = Date.now();
+    logger.info('🔧 Starting recording file recovery with size check...');
+
+    try {
+      // Step 1: 找到所有temp文件并记录初始大小
+      logger.info('🔍 Step 1: Scanning temp files and recording sizes...');
+      const tempFiles = await this.findTempFiles();
+      
+      if (tempFiles.length === 0) {
+        logger.info('✅ No temp files found');
+        return;
+      }
+
+      logger.info(`📊 Found ${tempFiles.length} temp file(s), recording initial sizes...`);
+      const fileSizes = new Map();
+      for (const file of tempFiles) {
+        try {
+          const stat = fs.statSync(file.path);
+          fileSizes.set(file.path, stat.size);
+          logger.info(`📏 Initial size: ${file.path.split('/').pop()} = ${stat.size} bytes`);
+        } catch (error) {
+          logger.error('Failed to get file size', { file: file.path, error: error.message });
+        }
+      }
+
+      // Step 2: 等待30秒
+      logger.info('⏳ Waiting 30 seconds to check if files are still growing...');
+      await new Promise(resolve => setTimeout(resolve, 30000));
+
+      // Step 3: 检查文件大小是否增长
+      logger.info('🔍 Step 2: Checking if file sizes changed...');
+      const filesToFix = [];
+      for (const file of tempFiles) {
+        try {
+          const stat = fs.statSync(file.path);
+          const initialSize = fileSizes.get(file.path);
+          const currentSize = stat.size;
+          
+          if (currentSize === initialSize) {
+            logger.info(`✅ File stopped growing: ${file.path.split('/').pop()} (${currentSize} bytes)`);
+            filesToFix.push(file);
+          } else {
+            logger.info(`⏭️ File still growing: ${file.path.split('/').pop()} (${initialSize} → ${currentSize} bytes, +${currentSize - initialSize})`);
+          }
+        } catch (error) {
+          logger.error('Failed to check file size', { file: file.path, error: error.message });
+        }
+      }
+
+      if (filesToFix.length === 0) {
+        logger.info('✅ All temp files are still being recorded');
+        return;
+      }
+
+      // Step 4: 修复停止增长的文件
+      logger.info(`🔧 Step 3: Fixing ${filesToFix.length} stopped file(s)...`);
+      let renamed = 0, repaired = 0, failed = 0;
+
+      for (const file of filesToFix) {
+        await new Promise(resolve => setImmediate(resolve));
+        
+        try {
+          const isPlayable = await this.checkFilePlayable(file.path);
+          if (!isPlayable) {
+            await this.repairFileFormat(file.path);
+            repaired++;
+          }
+          await this.fixFileName(file);
+          renamed++;
+        } catch (error) {
+          logger.error('Processing failed', { file: file.path, error: error.message });
+          failed++;
+        }
+      }
+
+      logger.info('Recovery completed', {
+        duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
+        scanned: tempFiles.length,
+        fixed: filesToFix.length,
+        renamed,
+        repaired,
+        failed
+      });
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  /**
+   * 旧方法：保留用于手动触发API（不等待30秒）
+   */
   async runRecovery() {
     this.isRunning = true;
     const startTime = Date.now();
-    logger.info('🔧 Starting recording file recovery...');
+    logger.info('🔧 Starting recording file recovery (immediate mode)...');
 
     try {
-      logger.info('🔍 Step 1: Finding files needing recovery...');
+      logger.info('🔍 Finding files needing recovery...');
       const filesToFix = await this.findFilesNeedingRecovery();
       
       logger.info(`📊 Found ${filesToFix.length} file(s) needing recovery`);
@@ -81,7 +181,6 @@ class RecordingRecoveryService {
         return;
       }
 
-      logger.info(`Found ${filesToFix.length} files to process`);
       let renamed = 0, repaired = 0, failed = 0;
 
       for (const file of filesToFix) {
@@ -115,6 +214,60 @@ class RecordingRecoveryService {
 
   // ==================== 文件扫描逻辑 ====================
   
+  /**
+   * 🔥 新方法：只扫描temp文件，不做判断
+   */
+  async findTempFiles() {
+    const files = [];
+    const cutoffTime = Date.now() - this.config.scanRecentHours * 60 * 60 * 1000;
+
+    try {
+      const channels = await this.getRecordingChannels();
+      
+      for (const channel of channels) {
+        const channelDir = path.join(channel.storagePath, channel.id);
+        if (!fs.existsSync(channelDir)) continue;
+
+        // 扫描最近3个日期目录
+        const dates = fs.readdirSync(channelDir)
+          .filter(d => /^\d{8}$/.test(d))
+          .sort()
+          .slice(-3);
+
+        for (const date of dates) {
+          const dateDir = path.join(channelDir, date);
+          if (!fs.existsSync(dateDir)) continue;
+
+          const dateFiles = fs.readdirSync(dateDir)
+            .filter(f => f.endsWith('.mp4') && f.includes('_temp_'))
+            .map(f => path.join(dateDir, f))
+            .filter(f => {
+              try {
+                return fs.statSync(f).mtimeMs > cutoffTime;
+              } catch {
+                return false;
+              }
+            });
+
+          for (const filePath of dateFiles) {
+            files.push({ 
+              path: filePath, 
+              type: 'temp', 
+              channel 
+            });
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Error finding temp files', { error: error.message });
+    }
+    
+    return files;
+  }
+  
+  /**
+   * 旧方法：基于时间和状态判断（用于手动触发API）
+   */
   async findFilesNeedingRecovery() {
     const files = [];
     const cutoffTime = Date.now() - this.config.scanRecentHours * 60 * 60 * 1000;
