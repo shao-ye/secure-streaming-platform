@@ -817,6 +817,9 @@ class SimpleStreamManager {
       const existing = this.activeStreams.get(channelId);
       const oldRecordingPath = existing?.recordingPath;
       
+      // 🐛 修复：先获取配置，再删除（重命名需要用到配置）
+      const recordConfig = this.recordingConfigs.get(channelId);
+      
       // 移除录制标记
       this.recordingChannels.delete(channelId);
       this.recordingConfigs.delete(channelId);
@@ -826,7 +829,6 @@ class SimpleStreamManager {
         const isPreload = this.preloadChannels.has(channelId);
         
         // 🆕 录制结束前重命名分段文件
-        const recordConfig = this.recordingConfigs.get(channelId);
         if (recordConfig && recordConfig.segmentEnabled) {
           await this.renameSegmentFiles(channelId, recordConfig);
         } else if (oldRecordingPath) {
@@ -934,9 +936,10 @@ class SimpleStreamManager {
       '-y',
       outputFile,
       
-      // MP4录制输出（复制编码）🆕支持分段
+      // MP4录制输出（复制视频，不录制音频）🆕支持分段
+      // 🔧 修复：使用-an而不是-c:a copy，因为某些RTMP源的音频编码（如pcm_mulaw）不被MP4支持
       '-c:v', 'copy',
-      '-c:a', 'copy'
+      '-an'  // 不录制音频，避免音频编码兼容性问题
     ];
     
     // 🆕 根据配置决定录制方式
