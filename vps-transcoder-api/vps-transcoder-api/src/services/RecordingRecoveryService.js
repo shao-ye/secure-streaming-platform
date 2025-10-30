@@ -536,21 +536,29 @@ class RecordingRecoveryService {
     const tempPath = filePath + '.repair.mp4';
     
     return new Promise((resolve, reject) => {
+      // 🔥 修复：保持 fragmented MP4 格式，避免破坏分段文件结构
+      // fragmented MP4 使用 empty_moov + moof，不能用 faststart
       const ffmpeg = spawn('ffmpeg', [
         '-i', filePath,
         '-c', 'copy',
-        '-movflags', 'faststart',
+        '-movflags', '+frag_keyframe+empty_moov+default_base_moof',  // 保持 fragmented MP4 格式
         '-y',
         tempPath
       ]);
 
+      let stderr = '';
+      ffmpeg.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
       ffmpeg.on('close', (code) => {
         if (code === 0 && fs.existsSync(tempPath)) {
           fs.renameSync(tempPath, filePath);
-          logger.info('File format repaired', { filePath });
+          logger.info('✅ File format repaired (fragmented MP4)', { filePath });
           resolve();
         } else {
           if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          logger.error('❌ Repair failed', { filePath, code, stderr: stderr.slice(-500) });
           reject(new Error('Repair failed'));
         }
       });
