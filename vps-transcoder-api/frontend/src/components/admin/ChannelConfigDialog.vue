@@ -30,6 +30,8 @@
           value-format="HH:mm"
           placeholder="选择开始时间"
           :disabled="!form.preloadConfig.enabled"
+          :clearable="false"
+          :editable="false"
         />
       </el-form-item>
       
@@ -40,6 +42,8 @@
           value-format="HH:mm"
           placeholder="选择结束时间"
           :disabled="!form.preloadConfig.enabled"
+          :clearable="false"
+          :editable="false"
         />
       </el-form-item>
       
@@ -83,6 +87,8 @@
           value-format="HH:mm"
           placeholder="选择开始时间"
           :disabled="!form.recordConfig.enabled"
+          :clearable="false"
+          :editable="false"
         />
       </el-form-item>
       
@@ -93,6 +99,8 @@
           value-format="HH:mm"
           placeholder="选择结束时间"
           :disabled="!form.recordConfig.enabled"
+          :clearable="false"
+          :editable="false"
         />
       </el-form-item>
       
