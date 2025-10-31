@@ -15,6 +15,7 @@ import {
 import { ProxyHandler } from './handlers/proxyHandler.js';
 import { handlePreloadRequest } from './handlers/preloadHandler.js';
 import { handleRecordAPI } from './handlers/recordHandler.js';
+import { handleChannelConfigAPI } from './handlers/channelConfigHandler.js';
 
 // 🔥 V2.6: CHANNELS硬编码已移除，改用频道索引系统
 // 应急admin账号（KV读取达到限制时使用）
@@ -218,7 +219,21 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
-    // 🆕 预加载配置API路由
+    // 🔥 统一频道配置API路由（优先匹配，避免被旧路由拦截）
+    if (path.startsWith('/api/channel/') && path.includes('/config')) {
+      const response = await handleChannelConfigAPI(request, env, ctx);
+      // 添加CORS头
+      const newHeaders = new Headers(response.headers);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        newHeaders.set(key, value);
+      });
+      return new Response(response.body, {
+        status: response.status,
+        headers: newHeaders
+      });
+    }
+
+    // 🆕 预加载配置API路由（兼容旧版本，建议使用统一配置API）
     if (path.startsWith('/api/preload/')) {
       const response = await handlePreloadRequest(request, env);
       // 添加CORS头
@@ -232,7 +247,7 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
-    // 🆕 录制配置API路由
+    // 🆕 录制配置API路由（兼容旧版本，建议使用统一配置API）
     if (path.startsWith('/api/record/')) {
       const response = await handleRecordAPI(request, env, ctx);
       // 添加CORS头

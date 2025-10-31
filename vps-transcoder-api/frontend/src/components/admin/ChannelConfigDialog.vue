@@ -314,40 +314,35 @@ async function handleSave() {
       preloadEnabled: form.value.preloadConfig.enabled
     });
     
-    // 并行保存预加载和录制配置
-    const promises = [];
-    
-    // 🔧 串行发送请求，避免并发写入冲突
-    // KV的最终一致性 + 并发写入 = 后面的请求会覆盖前面的请求
-    const preloadData = {
-      enabled: form.value.preloadConfig.enabled,
-      startTime: form.value.preloadConfig.startTime,
-      endTime: form.value.preloadConfig.endTime,
-      workdaysOnly: form.value.preloadConfig.workdaysOnly
+    // 🔥 一次性提交完整配置，避免分开提交导致的竞争条件
+    const configData = {
+      preloadConfig: {
+        enabled: form.value.preloadConfig.enabled,
+        startTime: form.value.preloadConfig.startTime,
+        endTime: form.value.preloadConfig.endTime,
+        workdaysOnly: form.value.preloadConfig.workdaysOnly
+      },
+      recordConfig: {
+        enabled: form.value.recordConfig.enabled,
+        startTime: form.value.recordConfig.startTime,
+        endTime: form.value.recordConfig.endTime,
+        workdaysOnly: form.value.recordConfig.workdaysOnly,
+        storagePath: form.value.recordConfig.storagePath
+      }
     };
-    console.log('📤 预加载配置:', preloadData);
     
-    const recordData = {
-      enabled: form.value.recordConfig.enabled,
-      startTime: form.value.recordConfig.startTime,
-      endTime: form.value.recordConfig.endTime,
-      workdaysOnly: form.value.recordConfig.workdaysOnly,
-      storagePath: form.value.recordConfig.storagePath
-    };
-    console.log('📤 录制配置:', recordData);
+    console.log('📤 提交配置:', configData);
     
-    // 🔥 改为串行执行，确保第二个请求在第一个完成后执行
-    const results = [];
-    results.push(await axios.put(`/api/preload/config/${props.channelId}`, preloadData));
-    results.push(await axios.put(`/api/record/config/${props.channelId}`, recordData));
+    // 一次性保存完整配置
+    const response = await axios.put(`/api/channel/${props.channelId}/config`, configData);
     
-    console.log('📥 保存结果:', results.map(r => ({
-      status: r.data.status,
-      message: r.data.message
-    })));
+    console.log('📥 保存结果:', {
+      status: response.data.status,
+      message: response.data.message
+    });
     
-    // 检查所有结果
-    const allSuccess = results.every(res => res.data.status === 'success');
+    // 检查结果
+    const allSuccess = response.data.status === 'success';
     
     if (allSuccess) {
       console.log('✅ 所有配置保存成功');
@@ -362,8 +357,8 @@ async function handleSave() {
       // 🔥 新增：传递更新后的配置数据，避免KV最终一致性问题
       emit('configUpdated', {
         channelId: props.channelId,
-        preloadConfig: preloadData,
-        recordConfig: recordData
+        preloadConfig: configData.preloadConfig,
+        recordConfig: configData.recordConfig
       });
       
       emit('saved');
