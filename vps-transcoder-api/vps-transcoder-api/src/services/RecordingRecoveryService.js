@@ -465,14 +465,30 @@ class RecordingRecoveryService {
       }
       
       logger.info('✅ Matched new format');
-      // 新格式处理：使用文件名中的开始时间
+      // 新格式处理：使用文件名中的开始时间 + 视频时长计算结束时间
       const [, channelName, channelId, date, startTime] = match;
       const duration = await this.getVideoDuration(file.path);
-      const stat = fs.statSync(file.path);
-      const fileEndTime = new Date(stat.mtimeMs);
       
-      // 使用文件名中的开始时间（更准确）
-      const newFileName = `${channelName}_${channelId}_${date}_${startTime}_to_${this.formatTime(fileEndTime)}.mp4`;
+      // 🔥 修复：计算实际视频结束时间 = 开始时间 + 时长
+      // startTime 格式: "091207" (09:12:07)
+      const startHour = parseInt(startTime.substr(0, 2));
+      const startMin = parseInt(startTime.substr(2, 2));
+      const startSec = parseInt(startTime.substr(4, 2));
+      
+      // 构造开始时间的 Date 对象（使用当天日期）
+      const year = parseInt(date.substr(0, 4));
+      const month = parseInt(date.substr(4, 2)) - 1;
+      const day = parseInt(date.substr(6, 2));
+      const startDate = new Date(year, month, day, startHour, startMin, startSec);
+      
+      // 计算结束时间 = 开始时间 + 视频时长
+      const endDate = new Date(startDate.getTime() + duration * 1000);
+      const endTime = this.formatTime(endDate);
+      
+      logger.info(`🎯 Calculated end time: ${startTime} + ${Math.round(duration)}s = ${endTime}`);
+      
+      // 使用计算出的结束时间
+      const newFileName = `${channelName}_${channelId}_${date}_${startTime}_to_${endTime}.mp4`;
       const newPath = path.join(path.dirname(file.path), newFileName);
       
       logger.info(`🎯 Target name: ${newFileName}`);
