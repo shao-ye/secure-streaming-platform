@@ -315,10 +315,10 @@ async function handleRequest(request, env, ctx) {
         
         if (body.segmentDuration !== undefined) {
           const duration = Number(body.segmentDuration);
-          if (isNaN(duration) || duration < 10 || duration > 240) {
+          if (isNaN(duration) || duration < 3 || duration > 240) {
             return new Response(JSON.stringify({
               status: 'error',
-              message: 'segmentDuration must be between 10 and 240 minutes'
+              message: 'segmentDuration must be between 3 and 240 minutes'
             }), {
               status: 400,
               headers: { ...corsHeaders, 'Content-Type': 'application/json' }
