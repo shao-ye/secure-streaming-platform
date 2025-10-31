@@ -128,19 +128,21 @@ class RecordingRecoveryService {
         return;
       }
 
-      // Step 4: 修复停止增长的文件
-      logger.info(`🔧 Step 3: Fixing ${filesToFix.length} stopped file(s)...`);
-      let renamed = 0, repaired = 0, failed = 0;
+      // Step 4: 重命名停止增长的文件（不修复格式，避免破坏数据）
+      logger.info(`🔧 Step 3: Renaming ${filesToFix.length} stopped file(s)...`);
+      let renamed = 0, failed = 0;
 
       for (const file of filesToFix) {
         await new Promise(resolve => setImmediate(resolve));
         
         try {
-          const isPlayable = await this.checkFilePlayable(file.path);
-          if (!isPlayable) {
-            await this.repairFileFormat(file.path);
-            repaired++;
-          }
+          // 🔥 关键修复：只重命名，不修复格式
+          // 
+          // 原因：
+          // 1. 原始temp文件是Fragmented MP4，虽然不是标准格式但**可以播放**
+          // 2. 重新编码会导致文件变短（FFmpeg遇到损坏部分就停止）
+          // 3. 用户反馈：修复前可以播放，修复后反而只能播放2秒
+          // 4. 结论：保留原始数据，只修复文件名
           await this.fixFileName(file);
           renamed++;
         } catch (error) {
@@ -154,7 +156,6 @@ class RecordingRecoveryService {
         scanned: tempFiles.length,
         fixed: filesToFix.length,
         renamed,
-        repaired,
         failed
       });
     } finally {
@@ -181,17 +182,15 @@ class RecordingRecoveryService {
         return;
       }
 
-      let renamed = 0, repaired = 0, failed = 0;
+      let renamed = 0, failed = 0;
 
       for (const file of filesToFix) {
         await new Promise(resolve => setImmediate(resolve));
         
         try {
-          const isPlayable = await this.checkFilePlayable(file.path);
-          if (!isPlayable) {
-            await this.repairFileFormat(file.path);
-            repaired++;
-          }
+          // 🔥 关键修复：只重命名，不修复格式
+          // 原因：原始temp文件虽然不是标准格式，但可以播放
+          // 重新编码反而会破坏数据（FFmpeg遇到损坏部分就停止）
           await this.fixFileName(file);
           renamed++;
         } catch (error) {
@@ -204,7 +203,6 @@ class RecordingRecoveryService {
         duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
         total: filesToFix.length,
         renamed,
-        repaired,
         failed
       });
     } finally {
