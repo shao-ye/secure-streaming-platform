@@ -317,6 +317,8 @@ async function handleSave() {
     // 并行保存预加载和录制配置
     const promises = [];
     
+    // 🔧 串行发送请求，避免并发写入冲突
+    // KV的最终一致性 + 并发写入 = 后面的请求会覆盖前面的请求
     const preloadData = {
       enabled: form.value.preloadConfig.enabled,
       startTime: form.value.preloadConfig.startTime,
@@ -324,7 +326,6 @@ async function handleSave() {
       workdaysOnly: form.value.preloadConfig.workdaysOnly
     };
     console.log('📤 预加载配置:', preloadData);
-    promises.push(axios.put(`/api/preload/config/${props.channelId}`, preloadData));
     
     const recordData = {
       enabled: form.value.recordConfig.enabled,
@@ -334,9 +335,11 @@ async function handleSave() {
       storagePath: form.value.recordConfig.storagePath
     };
     console.log('📤 录制配置:', recordData);
-    promises.push(axios.put(`/api/record/config/${props.channelId}`, recordData));
     
-    const results = await Promise.all(promises);
+    // 🔥 改为串行执行，确保第二个请求在第一个完成后执行
+    const results = [];
+    results.push(await axios.put(`/api/preload/config/${props.channelId}`, preloadData));
+    results.push(await axios.put(`/api/record/config/${props.channelId}`, recordData));
     
     console.log('📥 保存结果:', results.map(r => ({
       status: r.data.status,
