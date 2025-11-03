@@ -110,6 +110,109 @@ function isAuthenticated(request) {
 }
 
 /**
+ * 🆕 带缓存的HLS分片处理（免费流共享方案）
+ * 使用Workers Cache API实现多用户流共享，节省VPS带宽
+ */
+async function handleCachedSegment(request, env, ctx, channelId, file, url, corsHeaders) {
+  // 1. 构建缓存Key（使用完整URL）
+  const cacheUrl = new URL(request.url);
+  const cacheKey = new Request(cacheUrl.toString(), {
+    method: 'GET',
+    headers: request.headers
+  });
+  
+  // 2. 获取Cloudflare Cache实例（完全免费）
+  const cache = caches.default;
+  
+  // 3. 检查缓存
+  let cachedResponse = await cache.match(cacheKey);
+  
+  if (cachedResponse) {
+    console.log(`✅ Cache HIT: ${file}`);
+    
+    // 添加缓存命中标记
+    const headers = new Headers(cachedResponse.headers);
+    headers.set('X-Cache', 'HIT');
+    headers.set('X-Cache-Age', Math.floor((Date.now() - new Date(cachedResponse.headers.get('Date')).getTime()) / 1000));
+    
+    // 确保CORS头存在
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      headers.set(key, value);
+    });
+    
+    return new Response(cachedResponse.body, {
+      status: cachedResponse.status,
+      statusText: cachedResponse.statusText,
+      headers: headers
+    });
+  }
+  
+  // 4. 缓存未命中，从VPS拉取
+  console.log(`❌ Cache MISS: ${file}, fetching from VPS...`);
+  
+  const vpsUrl = `${env.VPS_API_URL}/hls/${channelId}/${file}`;
+  
+  try {
+    const vpsResponse = await fetch(vpsUrl + url.search, {
+      method: 'GET',
+      headers: {
+        'X-API-Key': env.VPS_API_KEY,
+        'User-Agent': request.headers.get('User-Agent') || 'Cloudflare-Worker-Proxy'
+      }
+    });
+    
+    if (!vpsResponse.ok) {
+      console.error(`VPS returned error: ${vpsResponse.status}`);
+      return new Response(`VPS error: ${vpsResponse.status}`, {
+        status: vpsResponse.status,
+        headers: corsHeaders
+      });
+    }
+    
+    console.log(`📡 VPS RESPONSE (ts): ${vpsResponse.status}`);
+    
+    // 5. 构建响应头
+    const responseHeaders = new Headers(vpsResponse.headers);
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      responseHeaders.set(key, value);
+    });
+    
+    // 设置缓存控制（3秒，适合HLS分片）
+    responseHeaders.set('Cache-Control', 'public, max-age=3, s-maxage=3');
+    responseHeaders.set('X-Cache', 'MISS');
+    responseHeaders.set('X-Proxied-By', 'Workers-Tunnel-Proxy');
+    responseHeaders.set('X-Proxy-Channel', channelId);
+    responseHeaders.set('Access-Control-Expose-Headers', 'X-Cache, X-Proxied-By, X-Proxy-Channel, X-Cache-Age');
+    
+    // 6. 创建可缓存的响应
+    const response = new Response(vpsResponse.body, {
+      status: vpsResponse.status,
+      statusText: vpsResponse.statusText,
+      headers: responseHeaders
+    });
+    
+    // 7. 异步写入缓存（不阻塞响应）
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    
+    console.log(`💾 Caching: ${file}`);
+    
+    return response;
+    
+  } catch (error) {
+    console.error('❌ Failed to fetch from VPS:', error);
+    return new Response(JSON.stringify({
+      error: 'Failed to fetch segment from VPS',
+      message: error.message,
+      channelId: channelId,
+      file: file
+    }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders }
+    });
+  }
+}
+
+/**
  * 路由处理器
  */
 async function handleRequest(request, env, ctx) {
@@ -136,17 +239,21 @@ async function handleRequest(request, env, ctx) {
         });
       }
       
-      // HLS代理路由
+      // HLS代理路由（带免费缓存层）
       if (path.match(/^\/tunnel-proxy\/hls\/(.+?)\/(.+)$/) && method === 'GET') {
         const [, channelId, file] = path.match(/^\/tunnel-proxy\/hls\/(.+?)\/(.+)$/);
         
         console.log('🎯 HLS PROXY REQUEST:', { path, channelId, file });
         
-        // 构建VPS的真实HLS URL
+        // ✅ 分片文件启用缓存，播放列表实时透传
+        if (file.endsWith('.ts')) {
+          return handleCachedSegment(request, env, ctx, channelId, file, url, corsHeaders);
+        }
+        
+        // m3u8播放列表不缓存，直接透传
         const vpsHlsUrl = `${env.VPS_API_URL}/hls/${channelId}/${file}`;
         
         try {
-          // 转发请求到VPS，保持原始查询参数
           const vpsResponse = await fetch(vpsHlsUrl + url.search, {
             method: 'GET',
             headers: {
@@ -155,18 +262,17 @@ async function handleRequest(request, env, ctx) {
             }
           });
           
-          console.log('🔄 VPS RESPONSE:', vpsResponse.status);
+          console.log('🔄 VPS RESPONSE (m3u8):', vpsResponse.status);
           
-          // 复制VPS响应头并添加CORS头
           const newHeaders = new Headers(vpsResponse.headers);
           Object.entries(corsHeaders).forEach(([key, value]) => {
             newHeaders.set(key, value);
           });
           
-          // 添加代理标识头（按DUAL_DIMENSION_ROUTING_ARCHITECTURE.md标准）
-          newHeaders.set('X-Proxied-By', 'Workers-Tunnel-Proxy');  // 设计文档标准字段
+          newHeaders.set('X-Proxied-By', 'Workers-Tunnel-Proxy');
           newHeaders.set('X-Proxy-Channel', channelId);
-          newHeaders.set('Access-Control-Expose-Headers', 'X-Proxied-By, X-Proxy-Channel');
+          newHeaders.set('X-Cache', 'BYPASS');  // m3u8不缓存
+          newHeaders.set('Access-Control-Expose-Headers', 'X-Proxied-By, X-Proxy-Channel, X-Cache');
           
           return new Response(vpsResponse.body, {
             status: vpsResponse.status,
@@ -179,8 +285,7 @@ async function handleRequest(request, env, ctx) {
             error: 'Proxy request failed',
             message: error.message,
             channelId: channelId,
-            file: file,
-            vpsUrl: vpsHlsUrl
+            file: file
           }), {
             status: 502,
             headers: { 'Content-Type': 'application/json', ...corsHeaders }
