@@ -6,7 +6,7 @@
 import axios from 'axios'
 
 // API基础配置
-const API_BASE_URL = process.env.VUE_APP_API_BASE_URL || 'https://yoyoapi.5202021.xyz'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const API_TIMEOUT = 30000 // 30秒超时
 
 // 创建axios实例

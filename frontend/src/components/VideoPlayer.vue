@@ -634,14 +634,20 @@ const detectConnectionModeFromUrl = (url, previousMode = null) => {
   
   debugLog('URL推断连接模式:', url)
   
+  // 从环境变量读取域名配置
+  const TUNNEL_DOMAIN = import.meta.env.VITE_TUNNEL_HLS_DOMAIN
+  const VPS_DOMAIN = import.meta.env.VITE_VPS_DIRECT_DOMAIN
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+  const API_DOMAIN = API_BASE_URL.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+  
   // 根据URL域名判断连接模式
-  if (url.includes('tunnel-hls.yoyo-vps.5202021.xyz')) {
+  if (TUNNEL_DOMAIN && url.includes(TUNNEL_DOMAIN)) {
     return { 
       type: 'tunnel', 
       reason: '隧道优化端点',
       description: '使用Cloudflare Tunnel加速'
     }
-  } else if (url.includes('yoyoapi.5202021.xyz')) {
+  } else if (API_DOMAIN && url.includes(API_DOMAIN)) {
     // 检查是否是代理路径
     if (url.includes('/tunnel-proxy/')) {
       return { 
@@ -657,7 +663,7 @@ const detectConnectionModeFromUrl = (url, previousMode = null) => {
         description: '通过Workers直接连接VPS'
       }
     }
-  } else if (url.includes('yoyo-vps.5202021.xyz')) {
+  } else if (VPS_DOMAIN && url.includes(VPS_DOMAIN)) {
     // 如果之前是代理模式，现在变成直连，说明是故障切换
     if (previousMode === 'proxy' || previousMode === 'tunnel') {
       return { 

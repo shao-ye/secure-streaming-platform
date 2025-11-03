@@ -3,13 +3,8 @@ import { ElMessage } from 'element-plus'
 import { config, debugLog, errorLog, warnLog } from './config'
 import router from '../router'
 
-// 确保在生产环境中使用正确的API URL
+// 获取API基础URL（从config读取，config已从环境变量读取）
 const getApiBaseURL = () => {
-  // 在生产环境中强制使用正确的API URL
-  if (window.location.hostname === 'yoyo.5202021.xyz') {
-    return 'https://yoyoapi.5202021.xyz'
-  }
-  // 开发环境使用配置文件中的URL
   return config.api.baseURL
 }
 

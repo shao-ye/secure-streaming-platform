@@ -3,7 +3,7 @@ import { tunnelMonitor } from '../utils/tunnel-monitor'
 
 export class APIService {
   constructor() {
-    this.baseURL = 'https://yoyoapi.5202021.xyz' // 通过隧道优化
+    this.baseURL = import.meta.env.VITE_API_BASE_URL
   }
   
   async request(endpoint, options = {}) {
