@@ -1,0 +1,51 @@
+name = "yoyo-streaming-simple"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[env.production]
+name = "yoyo-streaming-worker-production"
+route = { pattern = "yoyoapi.5202021.xyz/*", zone_name = "5202021.xyz" }
+
+[env.production.vars]
+ENVIRONMENT = "production"
+VERSION = "2.0.0"
+
+# 域名配置
+FRONTEND_DOMAIN = "https://yoyo.5202021.xyz"
+PAGES_DOMAIN = "https://secure-streaming-platform.pages.dev"
+WORKER_DOMAIN = "https://yoyoapi.5202021.xyz"
+
+# VPS配置（非敏感）
+VPS_API_URL = "https://yoyo-vps.5202021.xyz"
+
+# 隧道域名配置
+TUNNEL_API_DOMAIN = "tunnel-api.yoyo-vps.5202021.xyz"
+TUNNEL_HLS_DOMAIN = "tunnel-hls.yoyo-vps.5202021.xyz"
+TUNNEL_HEALTH_DOMAIN = "tunnel-health.yoyo-vps.5202021.xyz"
+
+# 应急Admin配置（非敏感）
+EMERGENCY_ADMIN_USERNAME = "admin"
+
+# 注意：以下敏感信息必须在 Cloudflare Dashboard 中配置为 Secret：
+# - VPS_API_KEY (Secret)
+# - EMERGENCY_ADMIN_PASSWORD (Secret)
+
+[[env.production.kv_namespaces]]
+binding = "YOYO_USER_DB"
+id = "edafbcf1042147f9b52f0fc4b5c37543"
+
+[[env.production.r2_buckets]]
+binding = "PROXY_TEST_HISTORY"
+bucket_name = "proxy-test-history"
+
+[[env.production.r2_buckets]]
+binding = "LOGIN_LOGS"
+bucket_name = "yoyo-login-logs"
+
+[env.development]
+name = "yoyo-streaming-simple-dev"
+
+[env.development.vars]
+ENVIRONMENT = "development"
+VERSION = "2.0.0"
