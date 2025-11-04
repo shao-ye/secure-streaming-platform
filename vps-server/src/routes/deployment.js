@@ -6,6 +6,7 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const router = express.Router();
 const logger = require('../utils/logger');
+const config = require('../../config');
 
 /**
  * 部署API路由
@@ -17,7 +18,8 @@ const CONFIG = {
   GIT_DIR: '/tmp/github/secure-streaming-platform/vps-transcoder-api',
   APP_DIR: '/opt/yoyo-transcoder',
   SCRIPTS_DIR: '/opt/yoyo-transcoder/scripts',
-  LOGS_DIR: '/opt/yoyo-transcoder/logs'
+  LOGS_DIR: '/opt/yoyo-transcoder/logs',
+  PORT: config.port  // 从统一配置读取端口
 };
 
 /**
@@ -359,7 +361,7 @@ router.post('/pm2/restart', async (req, res) => {
     results.push({ step: 'pm2_list_after', ...pm2ListAfter });
     
     // 5. 检查服务健康状态
-    const healthCheck = await executeCommand('curl -s http://localhost:3000/health || echo "health_check_failed"');
+    const healthCheck = await executeCommand(`curl -s http://localhost:${CONFIG.PORT}/health || echo "health_check_failed"`);
     results.push({ step: 'health_check', ...healthCheck });
     
     res.json({
@@ -454,8 +456,8 @@ router.post('/deploy/complete', async (req, res) => {
     
     // 步骤5: 验证部署结果
     try {
-      const healthCheck = await executeCommand('curl -s http://localhost:3000/health');
-      const proxyStatus = await executeCommand('curl -s http://localhost:3000/api/proxy/status');
+      const healthCheck = await executeCommand(`curl -s http://localhost:${CONFIG.PORT}/health`);
+      const proxyStatus = await executeCommand(`curl -s http://localhost:${CONFIG.PORT}/api/proxy/status`);
       
       deploymentSteps.push({ 
         step: 'verification', 
@@ -510,11 +512,11 @@ router.get('/status', async (req, res) => {
     results.push({ category: 'pm2', ...pm2Status });
     
     // 服务健康状态
-    const healthCheck = await executeCommand('curl -s http://localhost:3000/health');
+    const healthCheck = await executeCommand(`curl -s http://localhost:${CONFIG.PORT}/health`);
     results.push({ category: 'health', ...healthCheck });
     
     // 代理服务状态
-    const proxyStatus = await executeCommand('curl -s http://localhost:3000/api/proxy/status');
+    const proxyStatus = await executeCommand(`curl -s http://localhost:${CONFIG.PORT}/api/proxy/status`);
     results.push({ category: 'proxy', ...proxyStatus });
     
     // 磁盘空间

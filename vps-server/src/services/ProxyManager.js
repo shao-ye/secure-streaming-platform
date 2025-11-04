@@ -889,10 +889,11 @@ class ProxyManager {
       throw new Error('不支持的测试网站ID');
     }
     
-    // 根据ID获取实际URL
+    // 根据ID获取实际URL，支持环境变量自定义
+    const config = require('../../config');
     const testUrlMap = {
-      'baidu': 'https://www.baidu.com',
-      'google': 'https://www.google.com'
+      'baidu': config.getOptionalValue(config.proxyTestBaidu, 'https://www.baidu.com'),
+      'google': config.getOptionalValue(config.proxyTestGoogle, 'https://www.google.com')
     };
     const testUrl = testUrlMap[testUrlId];
     

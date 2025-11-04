@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const logger = require('../utils/logger');
+const config = require('../../config');
 
 /**
  * 工作日检测服务
@@ -13,8 +14,8 @@ const logger = require('../utils/logger');
  */
 class WorkdayChecker {
   constructor() {
-    // Timor API配置
-    this.apiUrl = 'https://timor.tech/api/holiday/info';  // 🆕 修正为info端点
+    // 从统一配置读取第三方API地址，支持自定义
+    this.apiUrl = config.getOptionalValue(config.holidayApiUrl, 'https://timor.tech/api/holiday/info');
     
     // 内存缓存 Map<'YYYY-MM-DD', {isWorkday: boolean, cachedAt: timestamp}>
     this.cache = new Map();
@@ -24,6 +25,10 @@ class WorkdayChecker {
     
     // 缓存有效期（24小时）
     this.cacheExpiry = 24 * 60 * 60 * 1000;
+    
+    logger.info('📅 WorkdayChecker initialized', {
+      apiUrl: this.apiUrl
+    });
   }
 
   /**

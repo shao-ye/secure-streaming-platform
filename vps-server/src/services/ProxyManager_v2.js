@@ -671,10 +671,11 @@ class ProxyManager {
         };
       }
       
-      // 生成测试网站URL
+      // 生成测试网站URL，支持环境变量自定义
+      const config = require('../../config');
       const testUrls = {
-        'baidu': 'https://www.baidu.com',
-        'google': 'https://www.google.com'
+        'baidu': config.getOptionalValue(config.proxyTestBaidu, 'https://www.baidu.com'),
+        'google': config.getOptionalValue(config.proxyTestGoogle, 'https://www.google.com')
       };
       const testUrl = testUrls[testUrlId] || testUrls['baidu'];
       

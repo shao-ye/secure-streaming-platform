@@ -5,12 +5,18 @@
  */
 
 const logger = require('../utils/logger');
+const config = require('../../config');
 
 class ChannelRouter {
   constructor() {
     this.channelSources = new Map();
     this.userPreferences = new Map(); // 用户手动选择的通道
     this.channelHealthStatus = new Map(); // 通道健康状态
+    
+    // 从统一配置读取域名，无默认值
+    this.proxyDomain = config.workersApiUrl;
+    this.tunnelDomain = config.tunnelBaseUrl;
+    this.vpsBaseDomain = config.vpsBaseUrl;
     
     // 通道优先级配置
     this.channelPriority = {
@@ -19,6 +25,12 @@ class ChannelRouter {
       tunnelOptimized: 2,   // 隧道优化通道
       directConnection: 3   // 直连通道
     };
+    
+    logger.info('📡 ChannelRouter initialized', {
+      proxyDomain: this.proxyDomain,
+      tunnelDomain: this.tunnelDomain,
+      vpsBaseDomain: this.vpsBaseDomain
+    });
   }
 
   /**
@@ -60,21 +72,21 @@ class ChannelRouter {
         {
           type: 'proxy_optimized',
           priority: 1,
-          url: `https://yoyoapi.5202021.xyz/hls/${channelId}/playlist.m3u8`,
+          url: `${this.proxyDomain}/hls/${channelId}/playlist.m3u8`,
           healthCheck: () => this.checkProxyHealth(),
           fallbackReason: null
         },
         {
           type: 'tunnel_optimized',
           priority: 2,
-          url: `https://tunnel-hls.yoyo-vps.5202021.xyz/hls/${channelId}/playlist.m3u8`,
+          url: `${this.tunnelDomain}/hls/${channelId}/playlist.m3u8`,
           healthCheck: () => this.checkTunnelHealth(),
           fallbackReason: null
         },
         {
           type: 'direct_connection',
           priority: 3,
-          url: `https://yoyo-vps.5202021.xyz/hls/${channelId}/playlist.m3u8`,
+          url: `${this.vpsBaseDomain}/hls/${channelId}/playlist.m3u8`,
           healthCheck: () => this.checkDirectHealth(),
           fallbackReason: null
         }
@@ -204,7 +216,7 @@ class ChannelRouter {
   async checkProxyHealth() {
     try {
       // 实际实现应该检查代理服务器状态
-      const response = await fetch('https://yoyoapi.5202021.xyz/health', {
+      const response = await fetch(`${this.proxyDomain}/health`, {
         timeout: 5000
       });
       
@@ -230,7 +242,7 @@ class ChannelRouter {
   async checkTunnelHealth() {
     try {
       // 实际实现应该检查隧道状态
-      const response = await fetch('https://tunnel-hls.yoyo-vps.5202021.xyz/health', {
+      const response = await fetch(`${this.tunnelDomain}/health`, {
         timeout: 5000
       });
       
@@ -256,7 +268,7 @@ class ChannelRouter {
   async checkDirectHealth() {
     try {
       // 实际实现应该检查VPS直连状态
-      const response = await fetch('https://yoyo-vps.5202021.xyz/health', {
+      const response = await fetch(`${this.vpsBaseDomain}/health`, {
         timeout: 5000
       });
       

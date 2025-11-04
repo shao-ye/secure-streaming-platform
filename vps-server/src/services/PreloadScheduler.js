@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const moment = require('moment-timezone');
 const logger = require('../utils/logger');
 const WorkdayChecker = require('./WorkdayChecker');  // 🆕 引入工作日检测器
+const config = require('../../config');
 
 /**
  * 预加载调度器 - 精确定时任务版本
@@ -24,9 +25,13 @@ class PreloadScheduler {
     // 🆕 初始化工作日检测器
     this.workdayChecker = new WorkdayChecker();
     
-    // Workers API配置
-    this.workersApiUrl = process.env.WORKERS_API_URL || 'https://yoyoapi.5202021.xyz';
-    this.workersApiKey = process.env.WORKERS_API_KEY || '';
+    // 从统一配置读取Workers API配置，无默认值
+    this.workersApiUrl = config.workersApiUrl;
+    this.workersApiKey = config.workersApiKey;
+    
+    logger.info('⏰ PreloadScheduler initialized', {
+      workersApiUrl: this.workersApiUrl
+    });
   }
 
   /**

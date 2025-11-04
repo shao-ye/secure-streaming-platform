@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const moment = require('moment-timezone');
 const logger = require('../utils/logger');
 const WorkdayChecker = require('./WorkdayChecker');
+const config = require('../../config');
 
 /**
  * 录制调度器 - 管理频道定时录制
@@ -17,10 +18,12 @@ class RecordScheduler {
     this.streamManager = streamManager;
     this.cronTasks = new Map();  // Map<channelId, {startTask, stopTask}>
     this.workdayChecker = new WorkdayChecker();
-    this.workersApiUrl = process.env.WORKERS_API_URL || 'https://yoyoapi.5202021.xyz';
+    
+    // 从统一配置读取Workers API配置，无默认值
+    this.workersApiUrl = config.workersApiUrl;
     this.isRunning = false;
     
-    logger.info('RecordScheduler initialized', {
+    logger.info('📼 RecordScheduler initialized', {
       workersApiUrl: this.workersApiUrl
     });
   }

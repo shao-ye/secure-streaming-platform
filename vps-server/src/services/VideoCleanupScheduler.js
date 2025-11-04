@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const logger = require('../utils/logger');
+const config = require('../../config');
 
 /**
  * 视频文件定时清理调度器
@@ -16,9 +17,15 @@ const logger = require('../utils/logger');
 class VideoCleanupScheduler {
   constructor() {
     this.cronTask = null;
-    this.workersApiUrl = process.env.WORKERS_API_URL || 'https://yoyoapi.5202021.xyz';
-    this.workersApiKey = process.env.WORKERS_API_KEY;
+    
+    // 从统一配置读取Workers API配置，无默认值
+    this.workersApiUrl = config.workersApiUrl;
+    this.workersApiKey = config.workersApiKey;
     this.isRunning = false;
+    
+    logger.info('🧹 VideoCleanupScheduler initialized', {
+      workersApiUrl: this.workersApiUrl
+    });
   }
   
   /**

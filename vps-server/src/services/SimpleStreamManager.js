@@ -3,6 +3,7 @@ const { promisify } = require('util');
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
+const config = require('../../config');
 
 const execAsync = promisify(exec);
 
@@ -39,6 +40,10 @@ class SimpleStreamManager {
     // FFmpeg配置
     this.ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
     this.hlsOutputDir = process.env.HLS_OUTPUT_DIR || '/var/www/hls';
+    
+    // 从统一配置读取域名，无默认值
+    this.vpsBaseDomain = config.vpsBaseUrl;
+    this.workersApiUrl = config.workersApiUrl;
 
     // 时间配置
     this.HEARTBEAT_TIMEOUT = 60000; // 60秒心跳超时
@@ -46,6 +51,12 @@ class SimpleStreamManager {
 
     // 初始化
     this.initialize();
+    
+    logger.info('🎬 SimpleStreamManager initialized', {
+      vpsBaseDomain: this.vpsBaseDomain,
+      workersApiUrl: this.workersApiUrl,
+      hlsOutputDir: this.hlsOutputDir
+    });
   }
 
   /**
@@ -143,7 +154,7 @@ class SimpleStreamManager {
     const processInfo = {
       channelId: channelId,
       rtmpUrl: rtmpUrl,
-      hlsUrl: `https://yoyo-vps.5202021.xyz/hls/${channelId}/playlist.m3u8`,
+      hlsUrl: `${this.vpsBaseDomain}/hls/${channelId}/playlist.m3u8`,
       startTime: Date.now(),
       process: null
     };
@@ -725,10 +736,9 @@ class SimpleStreamManager {
    */
   async fetchChannelRtmpUrl(channelId) {
     try {
-      const workersApiUrl = process.env.WORKERS_API_URL || 'https://yoyoapi.5202021.xyz';
       const apiKey = process.env.VPS_API_KEY;
       
-      const response = await fetch(`${workersApiUrl}/api/channels/${channelId}`, {
+      const response = await fetch(`${this.workersApiUrl}/api/channels/${channelId}`, {
         headers: {
           'X-API-Key': apiKey
         }
@@ -871,7 +881,7 @@ class SimpleStreamManager {
     const processInfo = {
       channelId: channelId,
       rtmpUrl: rtmpUrl,
-      hlsUrl: `https://yoyo-vps.5202021.xyz/hls/${channelId}/playlist.m3u8`,
+      hlsUrl: `${this.vpsBaseDomain}/hls/${channelId}/playlist.m3u8`,
       startTime: Date.now(),
       process: null,
       isRecording: true,

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const ProxyManager = require('../services/ProxyManager');
 const logger = require('../utils/logger');
+const config = require('../../config');
 
 // 创建代理管理器实例
 const proxyManager = new ProxyManager();
@@ -199,7 +200,7 @@ router.post('/test', async (req, res) => {
       });
     }
     
-    const finalTestUrl = testUrl || 'https://www.baidu.com';
+    const finalTestUrl = testUrl || config.getOptionalValue(config.proxyTestDefault, 'https://www.baidu.com');
     
     logger.info('收到代理测试请求:', {
       proxyId,
