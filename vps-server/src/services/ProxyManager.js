@@ -4,6 +4,7 @@ const path = require('path');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 const logger = require('../utils/logger');
+const config = require('../../config');
 
 /**
  * 代理管理服务
@@ -13,10 +14,15 @@ class ProxyManager {
   constructor() {
     this.activeProxy = null;
     this.v2rayProcess = null;
-    this.proxyPort = 1080;
+    // 从统一配置读取SOCKS5端口，默认1080
+    this.proxyPort = config.getOptionalValue(config.socks5Port, 1080);
     this.configPath = '/opt/yoyo-transcoder/config/v2ray.json';
     this.logPath = '/opt/yoyo-transcoder/logs/v2ray.log';
     this.simulatedMode = false; // 模拟模式标志
+    
+    logger.info('🔌 ProxyManager initialized', {
+      proxyPort: this.proxyPort
+    });
     this.connectionStatus = 'disconnected'; // 连接状态
     this.statistics = {}; // 统计信息
     

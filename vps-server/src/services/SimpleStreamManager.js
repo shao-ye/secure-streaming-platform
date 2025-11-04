@@ -44,6 +44,9 @@ class SimpleStreamManager {
     // 从统一配置读取域名，无默认值
     this.vpsBaseDomain = config.vpsBaseUrl;
     this.workersApiUrl = config.workersApiUrl;
+    
+    // 从统一配置读取SOCKS5端口，默认1080
+    this.socks5Port = config.getOptionalValue(config.socks5Port, 1080);
 
     // 时间配置
     this.HEARTBEAT_TIMEOUT = 60000; // 60秒心跳超时
@@ -368,14 +371,15 @@ class SimpleStreamManager {
       
       if (result.trim()) {
         // V2Ray正在运行，设置代理环境变量
-        env.http_proxy = 'socks5://127.0.0.1:1080';
-        env.https_proxy = 'socks5://127.0.0.1:1080';
-        env.HTTP_PROXY = 'socks5://127.0.0.1:1080';
-        env.HTTPS_PROXY = 'socks5://127.0.0.1:1080';
+        const proxyUrl = `socks5://127.0.0.1:${this.socks5Port}`;
+        env.http_proxy = proxyUrl;
+        env.https_proxy = proxyUrl;
+        env.HTTP_PROXY = proxyUrl;
+        env.HTTPS_PROXY = proxyUrl;
         
         logger.info('FFmpeg will use proxy for RTMP connection', { 
           channelId, 
-          proxyPort: '1080',
+          proxyPort: this.socks5Port,
           rtmpUrl 
         });
       } else {
