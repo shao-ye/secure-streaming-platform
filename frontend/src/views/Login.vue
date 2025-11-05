@@ -36,6 +36,12 @@
         </el-form-item>
 
         <el-form-item>
+          <el-checkbox v-model="rememberPassword">
+            记住密码
+          </el-checkbox>
+        </el-form-item>
+
+        <el-form-item>
           <el-button
             type="primary"
             size="large"
@@ -57,7 +63,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
@@ -68,6 +74,7 @@ const userStore = useUserStore()
 
 const loginForm = ref(null)
 const loading = ref(false)
+const rememberPassword = ref(false)
 
 const form = reactive({
   username: '',
@@ -85,6 +92,40 @@ const rules = {
   ]
 }
 
+// 加载保存的登录信息
+const loadSavedCredentials = () => {
+  try {
+    const savedUsername = localStorage.getItem('yoyo_saved_username')
+    const savedPassword = localStorage.getItem('yoyo_saved_password')
+    
+    if (savedUsername && savedPassword) {
+      form.username = savedUsername
+      // 解码密码（简单的base64编码）
+      form.password = atob(savedPassword)
+      rememberPassword.value = true
+    }
+  } catch (error) {
+    console.error('加载保存的登录信息失败:', error)
+  }
+}
+
+// 保存登录信息
+const saveCredentials = () => {
+  try {
+    if (rememberPassword.value) {
+      localStorage.setItem('yoyo_saved_username', form.username)
+      // 简单编码密码（base64）
+      localStorage.setItem('yoyo_saved_password', btoa(form.password))
+    } else {
+      // 清除保存的登录信息
+      localStorage.removeItem('yoyo_saved_username')
+      localStorage.removeItem('yoyo_saved_password')
+    }
+  } catch (error) {
+    console.error('保存登录信息失败:', error)
+  }
+}
+
 const handleLogin = async () => {
   if (!loginForm.value) return
 
@@ -97,6 +138,8 @@ const handleLogin = async () => {
     const result = await userStore.login(form.username, form.password)
 
     if (result.success) {
+      // 登录成功后保存或清除登录信息
+      saveCredentials()
       ElMessage.success('登录成功')
       router.push('/')
     } else {
@@ -108,6 +151,11 @@ const handleLogin = async () => {
     loading.value = false
   }
 }
+
+// 页面加载时读取保存的登录信息
+onMounted(() => {
+  loadSavedCredentials()
+})
 </script>
 
 <style scoped>
@@ -147,6 +195,14 @@ const handleLogin = async () => {
 
 .login-form {
   margin-top: 20px;
+}
+
+.login-form :deep(.el-form-item) {
+  margin-bottom: 20px;
+}
+
+.login-form :deep(.el-checkbox) {
+  user-select: none;
 }
 
 .login-footer {
