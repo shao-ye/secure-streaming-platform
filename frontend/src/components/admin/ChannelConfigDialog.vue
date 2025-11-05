@@ -67,6 +67,22 @@
         style="margin-bottom: 15px"
       />
       
+      <!-- ========== 视频格式配置 ========== -->
+      <el-divider content-position="left">
+        <span style="font-weight: bold;">视频格式</span>
+      </el-divider>
+      
+      <el-form-item label="视频比例">
+        <el-radio-group v-model="form.videoAspectRatio">
+          <el-radio label="original">原始比例</el-radio>
+          <el-radio label="4:3">4:3 标准</el-radio>
+          <el-radio label="16:9">16:9 宽屏</el-radio>
+        </el-radio-group>
+        <div style="margin-top: 8px; font-size: 12px; color: #909399;">
+          原始比例：保持源视频比例 | 4:3/16:9：拉伸到指定比例（观看和录制均生效）
+        </div>
+      </el-form-item>
+      
       <!-- ========== 下半部分：录制配置 ========== -->
       <el-divider content-position="left">
         <span style="font-weight: bold;">录制配置</span>
@@ -190,7 +206,8 @@ const form = ref({
     endTime: '17:25',
     workdaysOnly: false,
     storagePath: '/var/www/recordings'
-  }
+  },
+  videoAspectRatio: 'original'  // 🆕 视频比例配置
 });
 
 const rules = {
@@ -294,6 +311,19 @@ async function loadConfig() {
       
       console.log('✅ form.recordConfig.enabled 最终值:', form.value.recordConfig.enabled);
     }
+    
+    // 🆕 加载视频比例配置
+    try {
+      const timestamp = Date.now();
+      const configResponse = await axios.get(`/api/channel/${props.channelId}/config?t=${timestamp}`);
+      if (configResponse.data.status === 'success') {
+        form.value.videoAspectRatio = configResponse.data.data.videoAspectRatio || 'original';
+        console.log('✅ 视频比例配置加载成功:', form.value.videoAspectRatio);
+      }
+    } catch (error) {
+      console.warn('⚠️ 加载视频比例配置失败，使用默认值:', error.message);
+      form.value.videoAspectRatio = 'original';
+    }
   } catch (error) {
     console.error('❌ 加载配置失败:', error);
     ElMessage.error('加载配置失败');
@@ -328,7 +358,8 @@ async function handleSave() {
         endTime: form.value.recordConfig.endTime,
         workdaysOnly: form.value.recordConfig.workdaysOnly,
         storagePath: form.value.recordConfig.storagePath
-      }
+      },
+      videoAspectRatio: form.value.videoAspectRatio  // 🆕 提交视频比例配置
     };
     
     console.log('📤 提交配置:', configData);
