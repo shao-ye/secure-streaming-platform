@@ -337,11 +337,18 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    */
   async stopFFmpegProcess(channelId) {
+    console.log(`[DEBUG] ========== stopFFmpegProcess START ========== channelId: ${channelId}`);
     const processInfo = this.activeStreams.get(channelId);
-    if (!processInfo || !processInfo.process) return;
+    if (!processInfo || !processInfo.process) {
+      console.log(`[DEBUG] stopFFmpegProcess: No process info, returning early`);
+      return;
+    }
+    
+    console.log(`[DEBUG] stopFFmpegProcess: processInfo.isRecording = ${processInfo.isRecording}`);
     
     // ✅ 如果进程正在录制，清理录制标记
     if (processInfo.isRecording) {
+      console.log(`[DEBUG] stopFFmpegProcess: Cleaning up recording markers`);
       logger.info('Cleaning up recording markers on process stop', { channelId });
       this.recordingChannels.delete(channelId);
       this.recordingConfigs.delete(channelId);
@@ -904,16 +911,27 @@ class SimpleStreamManager {
    */
   async disableRecording(channelId) {
     try {
+      console.log(`[DEBUG] ========== disableRecording START ========== channelId: ${channelId}`);
       logger.info('Disabling recording', { channelId });
       
       const existing = this.activeStreams.get(channelId);
       const oldRecordingPath = existing?.recordingPath;
+      console.log(`[DEBUG] existing:`, existing ? {
+        isRecording: existing.isRecording,
+        recordingPath: existing.recordingPath,
+        channelId: existing.channelId
+      } : null);
       
       // 先获取配置（重命名文件需要）
       const recordConfig = this.recordingConfigs.get(channelId);
+      console.log(`[DEBUG] recordConfig:`, recordConfig ? {
+        channelName: recordConfig.channelName,
+        segmentEnabled: recordConfig.segmentEnabled
+      } : null);
       
       // 如果没有进程，手动清理标记后返回
       if (!existing) {
+        console.log(`[DEBUG] BRANCH 1: No process found, returning early`);
         logger.info('No process found, cleaning up markers if any', { channelId });
         this.recordingChannels.delete(channelId);
         this.recordingConfigs.delete(channelId);
@@ -926,6 +944,7 @@ class SimpleStreamManager {
       
       // 如果进程不在录制，手动清理标记后返回
       if (!existing.isRecording) {
+        console.log(`[DEBUG] BRANCH 2: Process exists but isRecording=false, returning early`);
         logger.info('Process not recording, cleaning up markers if any', { channelId });
         this.recordingChannels.delete(channelId);
         this.recordingConfigs.delete(channelId);
@@ -937,6 +956,7 @@ class SimpleStreamManager {
       }
       
       // 进程正在录制，先重命名文件
+      console.log(`[DEBUG] BRANCH 3: Process is recording, will rename files`);
       logger.info('Process is recording, renaming files before stop', { channelId });
       if (recordConfig && recordConfig.segmentEnabled) {
         // 分段模式：只重命名最后一个分段
