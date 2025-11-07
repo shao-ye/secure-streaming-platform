@@ -961,79 +961,13 @@ const toggleRotation = () => {
     // 旋转到90度
     videoRotation.value = 90
 
-    // 多次延迟计算，确保视频尺寸已加载
-    const tryComputeScale = (delay, attempt) => {
-      setTimeout(() => {
-        if (!containerRef.value || !videoRef.value) return
-        
-        const container = containerRef.value.getBoundingClientRect()
-        const video = videoRef.value
-        
-        // 使用video元素的实际渲染尺寸（clientWidth/Height）
-        // 因为video使用width:100%, height:100%，所以会继承容器尺寸
-        let videoW = video.clientWidth || container.width
-        let videoH = video.clientHeight || container.height
-        
-        debugLog(`[VideoPlayer] 旋转自动缩放 尝试${attempt} (${delay}ms):`, {
-          videoClientWidth: video.clientWidth,
-          videoClientHeight: video.clientHeight,
-          videoNaturalWidth: video.videoWidth,
-          videoNaturalHeight: video.videoHeight,
-          containerWidth: container.width,
-          containerHeight: container.height
-        })
-
-        if (container.width && container.height && videoW && videoH) {
-          // 旋转90度后，video的宽高互换
-          // 原始：videoW × videoH
-          // 旋转后包围盒：videoH × videoW
-          // 要覆盖容器，需要：videoH*scale >= container.width 且 videoW*scale >= container.height
-          const scaleForWidth = container.width / videoH
-          const scaleForHeight = container.height / videoW
-          const autoScale = Math.max(scaleForWidth, scaleForHeight)
-          
-          scale.value = autoScale
-          translateX.value = 0
-          translateY.value = 0
-
-          // 超详细日志，帮助用户定位问题
-          console.log('========== 旋转自动缩放详细日志 ==========')
-          console.log(`尝试次数: ${attempt} (延迟${delay}ms)`)
-          console.log(`视频方向: ${isVideoLandscape ? '横向📐' : '竖向📱'} (${videoW}×${videoH})`)
-          console.log(`容器方向: ${isContainerPortrait ? '竖向📱' : '横向📐'} (${container.width}×${container.height})`)
-          console.log(`计算公式:`)
-          console.log(`  scaleForWidth = ${container.width} / ${videoH} = ${scaleForWidth.toFixed(3)}`)
-          console.log(`  scaleForHeight = ${container.height} / ${videoW} = ${scaleForHeight.toFixed(3)}`)
-          console.log(`  autoScale = max(${scaleForWidth.toFixed(3)}, ${scaleForHeight.toFixed(3)}) = ${autoScale.toFixed(3)}`)
-          console.log(`最终结果: ${Math.round(autoScale * 100)}%`)
-          console.log(`旋转后包围盒: ${Math.round(videoH * autoScale)} × ${Math.round(videoW * autoScale)}`)
-          console.log(`是否填满: 宽${Math.round(videoH * autoScale) >= container.width ? '✅' : '❌'} 高${Math.round(videoW * autoScale) >= container.height ? '✅' : '❌'}`)
-          console.log('==========================================')
-          
-          debugLog('[VideoPlayer] ✅ 旋转自动缩放完成:', {
-            attempt,
-            videoW,
-            videoH,
-            videoOrientation: isVideoLandscape ? '横向' : '竖向',
-            containerW: container.width,
-            containerH: container.height,
-            containerOrientation: isContainerPortrait ? '竖向' : '横向',
-            scaleForWidth: scaleForWidth.toFixed(3),
-            scaleForHeight: scaleForHeight.toFixed(3),
-            autoScale: autoScale.toFixed(3),
-            percentage: `${Math.round(autoScale * 100)}%`,
-            rotatedBoxW: Math.round(videoH * autoScale),
-            rotatedBoxH: Math.round(videoW * autoScale)
-          })
-        }
-      }, delay)
-    }
     
-    // 多次尝试：50ms, 200ms, 500ms
+    // 旋转时scale=1，CSS已设置video为100vh×100vw
     nextTick(() => {
-      tryComputeScale(50, 1)
-      tryComputeScale(200, 2)
-      tryComputeScale(500, 3)
+      scale.value = 1
+      translateX.value = 0
+      translateY.value = 0
+      console.log('[VideoPlayer] 旋转90度: scale=1, video尺寸100vh×100vw')
     })
   } else {
     // 恢复到0度
@@ -1718,9 +1652,11 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* 旋转时使用cover模式填充 */
-.video-element[data-rotated="true"] {
+/* 旋转时：宽=视口高，高=视口宽，旋转后互换回来刚好填充 */
+.custom-fullscreen .video-element[data-rotated="true"] {
   object-fit: cover !important;
+  width: 100vh !important;
+  height: 100vw !important;
 }
 
 
