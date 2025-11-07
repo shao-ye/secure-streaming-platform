@@ -249,6 +249,10 @@ const isMouseDragging = ref(false)
 const lastMousePoint = ref({ x: 0, y: 0 })
 // 画面旋转状态（0度或90度）
 const videoRotation = ref(0)
+// 旋转后自动适配标记与定时器
+const autoFitting = ref(false)
+let autoFitClearTimer = null
+let resizeDebounceTimer = null
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -926,14 +930,13 @@ const toggleCustomFullscreen = () => {
     if (screen.orientation && screen.orientation.lock) {
       screen.orientation.lock('landscape').catch(e => {
         debugLog('[VideoPlayer] 屏幕方向锁定失败:', e.message)
-      })
-    }
   } else {
     // 退出自定义全屏
     debugLog('[VideoPlayer] 退出自定义全屏，重置缩放')
     resetZoom()
     // 重置旋转
     videoRotation.value = 0
+    autoFitting.value = false
     // 解除iOS手势拦截
     removeIosGestureBlockers()
     
@@ -941,6 +944,14 @@ const toggleCustomFullscreen = () => {
     if (screen.orientation && screen.orientation.unlock) {
       screen.orientation.unlock()
     }
+    // 监听resize和orientationchange事件，以便在旋转后自动适配
+    window.addEventListener('resize', handleResize)
+    window.addEventListener('orientationchange', handleOrientationChange)
+    // 在旋转后自动适配
+    setTimeout(() => {
+      computeAutoScaleForRotate()
+    }, 100)
+{{ ... }}
   }
 }
 
@@ -951,47 +962,38 @@ const toggleRotation = () => {
     scale.value = 1
     translateX.value = 0
     translateY.value = 0
-    
+
     // 旋转到90度
     videoRotation.value = 90
-    
-    // 延迟计算缩放，确保旋转transform已应用
+
+    // 延迟计算缩放，确保布局稳定
     nextTick(() => {
       setTimeout(() => {
         if (containerRef.value && videoRef.value) {
           const container = containerRef.value.getBoundingClientRect()
-          const video = videoRef.value
-          
-          // 获取视频原始尺寸
-          let videoWidth = video.videoWidth
-          let videoHeight = video.videoHeight
-          
-          // 如果视频尺寸未加载，使用显示尺寸
-          if (!videoWidth || !videoHeight) {
-            videoWidth = video.clientWidth
-            videoHeight = video.clientHeight
+          // 用渲染后的可见尺寸（未受wrapper transform影响）
+          const rect = videoRef.value.getBoundingClientRect()
+
+          let baseW = rect.width
+          let baseH = rect.height
+
+          // 兜底：如果仍不可用，使用clientWidth/Height，再不行按16:9估算
+          if (!baseW || !baseH) {
+            baseW = videoRef.value.clientWidth || 1920
+            baseH = videoRef.value.clientHeight || 1080
           }
-          
-          // 如果仍然获取不到，使用16:9比例估算
-          if (!videoWidth || !videoHeight) {
-            videoWidth = 1920
-            videoHeight = 1080
-            debugLog('[VideoPlayer] 使用默认视频尺寸 16:9')
-          }
-          
-          if (container.width && container.height) {
-            // 计算旋转后需要的缩放比例
-            // 旋转90度后，视频的宽变成高，高变成宽
-            const scaleX = container.width / videoHeight  // 旋转后视频宽度是原高度
-            const scaleY = container.height / videoWidth  // 旋转后视频高度是原宽度
-            
-            // 取较大值以填充满屏幕（可能会裁剪一部分）
-            const autoScale = Math.max(scaleX, scaleY)
+
+          if (container.width && container.height && baseW && baseH) {
+            // scale 先于 rotate，旋转90度后包围盒尺寸变为 (baseH*scale, baseW*scale)
+            const scaleX = container.width / baseH
+            const scaleY = container.height / baseW
+            // 取更大的以覆盖容器（cover），并至少为1，避免错误缩小
+            const autoScale = Math.max(1, Math.max(scaleX, scaleY))
             scale.value = autoScale
-            
-            debugLog('[VideoPlayer] 旋转90度，自动缩放:', {
-              videoWidth,
-              videoHeight,
+
+            debugLog('[VideoPlayer] 旋转90度，自动缩放(基于渲染尺寸):', {
+              baseW,
+              baseH,
               containerWidth: container.width,
               containerHeight: container.height,
               scaleX,
@@ -1001,7 +1003,7 @@ const toggleRotation = () => {
             })
           }
         }
-      }, 50)  // 延迟50ms确保transform已应用
+      }, 50)
     })
   } else {
     // 恢复到0度
@@ -1011,6 +1013,28 @@ const toggleRotation = () => {
   }
   
   debugLog('[VideoPlayer] 切换画面旋转:', videoRotation.value)
+}
+
+// 计算旋转90度时填充整个容器所需的scale（cover方式）
+function computeAutoScaleForRotate() {
+  if (!containerRef.value || !videoRef.value) return
+  const container = containerRef.value.getBoundingClientRect()
+  const rect = videoRef.value.getBoundingClientRect()
+  let baseW = rect.width
+  let baseH = rect.height
+  if (!baseW || !baseH) {
+    baseW = videoRef.value.clientWidth || 1920
+    baseH = videoRef.value.clientHeight || 1080
+  }
+  if (!container.width || !container.height || !baseW || !baseH) return
+  // scale 先于 rotate，旋转90度后的包围盒宽高 = (baseH*scale, baseW*scale)
+  const scaleX = container.width / baseH
+  const scaleY = container.height / baseW
+  const autoScale = Math.max(1, Math.max(scaleX, scaleY))
+  scale.value = autoScale
+  translateX.value = 0
+  translateY.value = 0
+  debugLog('[VideoPlayer] 自动适配重算:', { baseW, baseH, cw: container.width, ch: container.height, scaleX, scaleY, autoScale })
 }
 
 onMounted(() => {
@@ -1182,6 +1206,8 @@ const handleTouchMove = (event) => {
         scaleSensitivity = 1.1
       }
       
+      // 自动适配期间不处理缩放
+      if (autoFitting.value) return
       // 应用敏感度调整
       const adjustedScaleChange = 1 + (scaleChange - 1) * scaleSensitivity
       const oldScale = scale.value
@@ -1229,6 +1255,7 @@ const handleTouchEnd = (event) => {
 
 // 鼠标滚轮缩放支持 - 以视口中心为缩放中心
 const handleWheel = (event) => {
+  if (autoFitting.value) return
   event.preventDefault()
   
   const delta = event.deltaY > 0 ? 0.9 : 1.1
