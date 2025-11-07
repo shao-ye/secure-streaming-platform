@@ -288,7 +288,7 @@ const videoTransformStyle = computed(() => {
     transition: isDragging.value ? 'none' : 'transform 0.3s ease-out'
   }
   
-  // 旋转时，wrapper调整为100vh×100vw并稍微偏上定位
+  // 旋转时，wrapper调整为100vh×100vw并居中（通过translateY调整偏移）
   if (videoRotation.value !== 0) {
     style.width = '100vh'
     style.height = '100vw'
@@ -296,7 +296,7 @@ const videoTransformStyle = computed(() => {
     style.left = '50%'
     style.top = '50%'
     style.marginLeft = '-50vh'  // -width/2，水平居中
-    style.marginTop = 'calc(-50vw - 3vh)'  // -height/2再上移3vh，消除顶部黑边
+    style.marginTop = '-50vw'   // -height/2，垂直居中（通过transform translateY调整偏移）
   }
   
   return style
@@ -1009,18 +1009,32 @@ const toggleRotation = () => {
           displayW = wrapperH * videoAspect
         }
         
-        // 旋转后使用100%，避免过度放大导致内容裁剪
-        // 用户可根据需要手动缩放
+        // 计算旋转后的黑边，并通过translateY调整位置消除顶部黑边
+        // displayW×displayH是video在wrapper中contain模式的实际尺寸
+        // 旋转90度后包围盒变为：displayH × displayW
+        const rotatedHeight = displayW  // 旋转后的高度
+        const containerHeight = container.height
+        
+        // 计算上下黑边总量
+        const totalBlackBar = containerHeight - rotatedHeight
+        
+        // 如果有黑边，上移一半黑边的距离，让顶部黑边消失
+        const offsetY = totalBlackBar > 0 ? -totalBlackBar / 2 : 0
+        
         scale.value = 1.0
         translateX.value = 0
-        translateY.value = 0
+        translateY.value = offsetY
         
-        console.log('[VideoPlayer] 旋转90度: scale=100%')
+        console.log('[VideoPlayer] 旋转90度: 自动计算偏移消除黑边')
         console.log({
           videoSize: `${videoW}×${videoH}`,
           wrapperSize: `${Math.round(wrapperW)}×${Math.round(wrapperH)}`,
           displaySize: `${Math.round(displayW)}×${Math.round(displayH)}`,
-          containerSize: `${Math.round(container.width)}×${Math.round(container.height)}`
+          rotatedBox: `${Math.round(displayH)}×${Math.round(displayW)}`,
+          containerSize: `${Math.round(container.width)}×${Math.round(containerHeight)}`,
+          totalBlackBar: Math.round(totalBlackBar) + 'px',
+          offsetY: Math.round(offsetY) + 'px',
+          scale: '1.0 (100%)'
         })
       }, 100)
     })
