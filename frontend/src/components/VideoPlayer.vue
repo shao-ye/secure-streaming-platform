@@ -334,8 +334,8 @@ const videoTransformStyle = computed(() => {
     style.left = '50%'
     style.top = '50%'
     // 使用transform同时处理旋转、缩放、拖动和居中
-    // translate(-50%, -50%)实现居中，其他变换在此基础上叠加
-    style.transform = `translate(calc(-50% + ${translateX.value}px), calc(-50% + ${translateY.value}px)) scale(${scale.value}) rotate(${videoRotation.value}deg)`
+    // 使用固定像素值-50vh和-50vw来居中（对应width和height）
+    style.transform = `translate(calc(-50vh + ${translateX.value}px), calc(-50vw + ${translateY.value}px)) scale(${scale.value}) rotate(${videoRotation.value}deg)`
   } else {
     // 未旋转时的正常变换
     style.transform = `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`
