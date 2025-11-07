@@ -20,6 +20,10 @@
       @touchstart="handleTouchStart"
       @touchmove="handleTouchMove"
       @touchend="handleTouchEnd"
+      @mousedown="handleMouseDown"
+      @mousemove="handleMouseMove"
+      @mouseup="handleMouseUp"
+      @mouseleave="handleMouseLeave"
       @wheel="handleWheel"
     >
       <!-- 不参与transform的UI层，确保按钮点击优先级 -->
@@ -223,6 +227,9 @@ const touches = ref([])
 const isDragging = ref(false)
 const lastPanPoint = ref({ x: 0, y: 0 })
 const isCustomFullscreen = ref(false)
+// 鼠标拖动状态（PC端）
+const isMouseDragging = ref(false)
+const lastMousePoint = ref({ x: 0, y: 0 })
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -1164,6 +1171,54 @@ const resetZoom = () => {
   scale.value = 1
   translateX.value = 0
   translateY.value = 0
+}
+
+// 鼠标拖动处理（PC端）
+const handleMouseDown = (event) => {
+  // 只在缩放后才允许拖动
+  if (scale.value > 1) {
+    event.preventDefault()
+    isMouseDragging.value = true
+    lastMousePoint.value = {
+      x: event.clientX,
+      y: event.clientY
+    }
+    debugLog('鼠标拖动开始:', { scale: scale.value, x: event.clientX, y: event.clientY })
+  }
+}
+
+const handleMouseMove = (event) => {
+  if (isMouseDragging.value && scale.value > 1) {
+    event.preventDefault()
+    
+    const deltaX = event.clientX - lastMousePoint.value.x
+    const deltaY = event.clientY - lastMousePoint.value.y
+    
+    translateX.value += deltaX
+    translateY.value += deltaY
+    
+    lastMousePoint.value = {
+      x: event.clientX,
+      y: event.clientY
+    }
+    
+    debugLog('鼠标拖动中:', { deltaX, deltaY, translateX: translateX.value, translateY: translateY.value })
+  }
+}
+
+const handleMouseUp = () => {
+  if (isMouseDragging.value) {
+    isMouseDragging.value = false
+    debugLog('鼠标拖动结束')
+  }
+}
+
+const handleMouseLeave = () => {
+  // 鼠标离开容器时也结束拖动
+  if (isMouseDragging.value) {
+    isMouseDragging.value = false
+    debugLog('鼠标离开容器，结束拖动')
+  }
 }
 
 // 处理视频点击事件 - 禁用暂停功能
