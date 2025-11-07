@@ -34,6 +34,7 @@
       <div 
         class="video-wrapper"
         :style="videoTransformStyle"
+        @click="handleWrapperClick"
         @dblclick="handleDoubleClick"
       >
         <video 
@@ -263,6 +264,8 @@ let resizeDebounceTimer = null
 // 控制条显示状态
 const showControls = ref(true)
 let hideControlsTimer = null
+// 单击延迟定时器（用于区分单击和双击）
+let clickTimer = null
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -1447,8 +1450,31 @@ const resetHideControlsTimer = () => {
   }, 3000) // 3秒后自动隐藏
 }
 
+// 处理wrapper点击 - 延迟处理以区分双击
+const handleWrapperClick = (event) => {
+  // 如果不在全屏模式，不处理
+  if (!isCustomFullscreen.value) {
+    return
+  }
+  
+  // 清除之前的单击定时器
+  if (clickTimer) {
+    clearTimeout(clickTimer)
+  }
+  
+  // 延迟200ms处理单击，如果在此期间发生双击，则会被取消
+  clickTimer = setTimeout(() => {
+    toggleControlsVisibility()
+  }, 200)
+}
+
 // 双击缩放 - 以视口中心为缩放中心
 const handleDoubleClick = (event) => {
+  // 取消单击处理
+  if (clickTimer) {
+    clearTimeout(clickTimer)
+    clickTimer = null
+  }
   const oldScale = scale.value
   const newScale = scale.value === 1 ? 2 : 1
   
@@ -1687,6 +1713,14 @@ onUnmounted(() => {
   // 清理HLS实例
   if (hls.value) {
     hls.value.destroy()
+  }
+  
+  // 清理控制条相关定时器
+  if (hideControlsTimer) {
+    clearTimeout(hideControlsTimer)
+  }
+  if (clickTimer) {
+    clearTimeout(clickTimer)
   }
   
   debugLog('所有事件监听器已清理完成')
