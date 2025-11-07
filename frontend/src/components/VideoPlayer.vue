@@ -1009,13 +1009,12 @@ const toggleRotation = () => {
           displayW = wrapperH * videoAspect
         }
         
-        // 旋转后使用100%，避免过度放大导致内容裁剪
-        // 用户可根据需要手动缩放
-        scale.value = 1.0
+        // 旋转后使用105%，配合cover模式消除黑边，同时尽量避免裁剪重要信息
+        scale.value = 1.05
         translateX.value = 0
         translateY.value = 0
         
-        console.log('[VideoPlayer] 旋转90度: scale=100%')
+        console.log('[VideoPlayer] 旋转90度: scale=105% + object-fit:cover')
         console.log({
           videoSize: `${videoW}×${videoH}`,
           wrapperSize: `${Math.round(wrapperW)}×${Math.round(wrapperH)}`,
@@ -1707,9 +1706,9 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* 旋转时：使用contain显示完整画面，避免裁剪 */
+/* 旋转时：使用cover填充满屏，配合适当scale避免过度裁剪 */
 .custom-fullscreen .video-element[data-rotated="true"] {
-  object-fit: contain !important;
+  object-fit: cover !important;
 }
 
 
