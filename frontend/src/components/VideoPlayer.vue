@@ -944,94 +944,13 @@ function preventGesture(e) {
   e.preventDefault()
 }
 
-// 检测浏览器是否支持原生全屏API
-const supportsNativeFullscreen = () => {
-  const deviceInfo = getDeviceInfo()
-  // iOS Safari不支持原生全屏
-  if (deviceInfo.isIOS) {
-    return false
-  }
-  // 检查是否支持全屏API
-  return !!(document.fullscreenEnabled || 
-           document.webkitFullscreenEnabled || 
-           document.mozFullScreenEnabled || 
-           document.msFullscreenEnabled)
-}
-
-// 进入原生全屏
-const enterNativeFullscreen = async () => {
-  if (!containerRef.value) return false
-  
-  try {
-    const element = containerRef.value
-    if (element.requestFullscreen) {
-      await element.requestFullscreen()
-    } else if (element.webkitRequestFullscreen) {
-      await element.webkitRequestFullscreen()
-    } else if (element.mozRequestFullScreen) {
-      await element.mozRequestFullScreen()
-    } else if (element.msRequestFullscreen) {
-      await element.msRequestFullscreen()
-    } else {
-      return false
-    }
-    debugLog('[VideoPlayer] 成功进入原生全屏')
-    return true
-  } catch (error) {
-    debugLog('[VideoPlayer] 进入原生全屏失败:', error)
-    return false
-  }
-}
-
-// 退出原生全屏
-const exitNativeFullscreen = async () => {
-  try {
-    if (document.fullscreenElement || 
-        document.webkitFullscreenElement || 
-        document.mozFullScreenElement || 
-        document.msFullscreenElement) {
-      if (document.exitFullscreen) {
-        await document.exitFullscreen()
-      } else if (document.webkitExitFullscreen) {
-        await document.webkitExitFullscreen()
-      } else if (document.mozCancelFullScreen) {
-        await document.mozCancelFullScreen()
-      } else if (document.msExitFullscreen) {
-        await document.msExitFullscreen()
-      }
-      debugLog('[VideoPlayer] 成功退出原生全屏')
-      return true
-    }
-    return false
-  } catch (error) {
-    debugLog('[VideoPlayer] 退出原生全屏失败:', error)
-    return false
-  }
-}
-
 // 自定义全屏切换函数
-const toggleCustomFullscreen = async () => {
-  const useNativeFullscreen = supportsNativeFullscreen()
+const toggleCustomFullscreen = () => {
+  isCustomFullscreen.value = !isCustomFullscreen.value
   
-  if (!isCustomFullscreen.value) {
-    // 进入全屏
-    debugLog('[VideoPlayer] 进入全屏，模式:', useNativeFullscreen ? '原生' : '自定义')
-    
-    if (useNativeFullscreen) {
-      // 尝试原生全屏
-      const success = await enterNativeFullscreen()
-      if (!success) {
-        // 降级到自定义全屏
-        debugLog('[VideoPlayer] 原生全屏失败，降级到自定义全屏')
-        isCustomFullscreen.value = true
-      } else {
-        isCustomFullscreen.value = true
-      }
-    } else {
-      // 直接使用自定义全屏（iOS等）
-      isCustomFullscreen.value = true
-    }
-    
+  if (isCustomFullscreen.value) {
+    // 进入自定义全屏
+    debugLog('[VideoPlayer] 进入自定义全屏，启用缩放拖动')
     // 显示控制条并启动自动隐藏定时器
     showControls.value = true
     resetHideControlsTimer()
@@ -1045,13 +964,8 @@ const toggleCustomFullscreen = async () => {
       })
     }
   } else {
-    // 退出全屏
-    debugLog('[VideoPlayer] 退出全屏')
-    
-    if (useNativeFullscreen) {
-      await exitNativeFullscreen()
-    }
-    
+    // 退出自定义全屏
+    debugLog('[VideoPlayer] 退出自定义全屏，重置缩放')
     // 清理自动隐藏定时器
     if (hideControlsTimer) {
       clearTimeout(hideControlsTimer)
@@ -1069,8 +983,6 @@ const toggleCustomFullscreen = async () => {
     if (screen.orientation && screen.orientation.unlock) {
       screen.orientation.unlock()
     }
-    
-    isCustomFullscreen.value = false
   }
 }
 
@@ -1242,49 +1154,6 @@ onMounted(() => {
   
   // 设置禁用播放暂停按钮的多层防护机制
   setupPauseDisabling()
-  
-  // 监听原生全屏状态变化（用户按ESC退出）
-  const handleFullscreenChange = () => {
-    const isNativeFullscreen = !!(document.fullscreenElement || 
-                                   document.webkitFullscreenElement || 
-                                   document.mozFullScreenElement || 
-                                   document.msFullscreenElement)
-    
-    debugLog('[VideoPlayer] 原生全屏状态变化:', isNativeFullscreen)
-    
-    // 如果用户按ESC退出了原生全屏，同步状态
-    if (!isNativeFullscreen && isCustomFullscreen.value) {
-      debugLog('[VideoPlayer] 检测到用户退出原生全屏，同步状态')
-      isCustomFullscreen.value = false
-      resetZoom()
-      videoRotation.value = 0
-      showControls.value = true
-      if (hideControlsTimer) {
-        clearTimeout(hideControlsTimer)
-      }
-      removeIosGestureBlockers()
-      if (screen.orientation && screen.orientation.unlock) {
-        screen.orientation.unlock()
-      }
-    }
-  }
-  
-  // 绑定全屏变化事件
-  document.addEventListener('fullscreenchange', handleFullscreenChange)
-  document.addEventListener('webkitfullscreenchange', handleFullscreenChange)
-  document.addEventListener('mozfullscreenchange', handleFullscreenChange)
-  document.addEventListener('MSFullscreenChange', handleFullscreenChange)
-  
-  // 保存清理函数
-  if (!window.videoPlayerCleanupFunctions) {
-    window.videoPlayerCleanupFunctions = []
-  }
-  window.videoPlayerCleanupFunctions.push(() => {
-    document.removeEventListener('fullscreenchange', handleFullscreenChange)
-    document.removeEventListener('webkitfullscreenchange', handleFullscreenChange)
-    document.removeEventListener('mozfullscreenchange', handleFullscreenChange)
-    document.removeEventListener('MSFullscreenChange', handleFullscreenChange)
-  })
 })
 
 // 触摸事件处理 - 双指缩放功能
