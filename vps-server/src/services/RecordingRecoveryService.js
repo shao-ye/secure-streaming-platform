@@ -465,29 +465,46 @@ class RecordingRecoveryService {
       }
       
       logger.info('✅ Matched new format');
-      // 新格式处理：使用文件名中的开始时间 + 视频时长计算结束时间
-      const [, channelName, channelId, date, startTime] = match;
+      // 新格式处理：使用文件修改时间作为结束时间（最可靠）
+      const [, channelName, channelId, date, startTimeFromName] = match;
       const duration = await this.getVideoDuration(file.path);
       
-      // 🔥 修复：计算实际视频结束时间 = 开始时间 + 时长
-      // startTime 格式: "091207" (09:12:07)
-      const startHour = parseInt(startTime.substr(0, 2));
-      const startMin = parseInt(startTime.substr(2, 2));
-      const startSec = parseInt(startTime.substr(4, 2));
+      // 🔥 使用文件修改时间作为结束时间（最可靠的数据源）
+      // 录制时持续写入文件，mtime会不断更新，程序终止后mtime就是实际结束时间
+      const stat = fs.statSync(file.path);
+      const fileEndTime = new Date(stat.mtimeMs);
       
-      // 构造开始时间的 Date 对象（使用当天日期）
+      // 反推开始时间 = 结束时间 - 视频时长
+      const calculatedStartTime = new Date(fileEndTime.getTime() - duration * 1000);
+      
+      // 🔍 解析文件名中的开始时间（用于验证）
       const year = parseInt(date.substr(0, 4));
       const month = parseInt(date.substr(4, 2)) - 1;
       const day = parseInt(date.substr(6, 2));
-      const startDate = new Date(year, month, day, startHour, startMin, startSec);
+      const nameStartHour = parseInt(startTimeFromName.substr(0, 2));
+      const nameStartMin = parseInt(startTimeFromName.substr(2, 2));
+      const nameStartSec = parseInt(startTimeFromName.substr(4, 2));
+      const nameStartTime = new Date(year, month, day, nameStartHour, nameStartMin, nameStartSec);
       
-      // 计算结束时间 = 开始时间 + 视频时长
-      const endDate = new Date(startDate.getTime() + duration * 1000);
-      const endTime = this.formatTime(endDate);
+      // 🚨 对比验证：检测时间差异（发现录制超时或异常）
+      const timeDiff = Math.abs(calculatedStartTime.getTime() - nameStartTime.getTime()) / 1000;
+      if (timeDiff > 60) {
+        logger.warn('⚠️ Start time mismatch detected', {
+          file: path.basename(file.path),
+          nameStartTime: startTimeFromName,
+          calculatedStartTime: this.formatTime(calculatedStartTime),
+          diffSeconds: Math.round(timeDiff),
+          reason: 'Possible recording overtime or file corruption'
+        });
+      }
       
-      logger.info(`🎯 Calculated end time: ${startTime} + ${Math.round(duration)}s = ${endTime}`);
+      // ✅ 使用计算出的时间（基于可靠的mtime）
+      const startTime = this.formatTime(calculatedStartTime);
+      const endTime = this.formatTime(fileEndTime);
       
-      // 使用计算出的结束时间
+      logger.info(`🎯 Calculated times from mtime: ${endTime} - ${Math.round(duration)}s = ${startTime}`);
+      
+      // 使用计算出的时间生成文件名
       const newFileName = `${channelName}_${channelId}_${date}_${startTime}_to_${endTime}.mp4`;
       const newPath = path.join(path.dirname(file.path), newFileName);
       
