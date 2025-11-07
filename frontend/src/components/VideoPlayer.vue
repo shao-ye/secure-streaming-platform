@@ -1009,11 +1009,10 @@ const toggleRotation = () => {
           displayW = wrapperH * videoAspect
         }
         
-        // 旋转后直接使用100%，画面稍微上移以优化视觉效果
+        // 旋转后使用100%，居中显示
         scale.value = 1.0
         translateX.value = 0
-        // 根据容器高度计算合适的上移距离（约5-8%）
-        translateY.value = -container.height * 0.06
+        translateY.value = 0
         
         console.log('[VideoPlayer] 旋转90度')
         console.log({
@@ -1021,8 +1020,7 @@ const toggleRotation = () => {
           wrapperSize: `${Math.round(wrapperW)}×${Math.round(wrapperH)}`,
           displaySize: `${Math.round(displayW)}×${Math.round(displayH)}`,
           containerSize: `${Math.round(container.width)}×${Math.round(container.height)}`,
-          scale: '1.0 (100%)',
-          translateY: Math.round(translateY.value) + 'px'
+          scale: '1.0 (100%)'
         })
       }, 100)
     })
