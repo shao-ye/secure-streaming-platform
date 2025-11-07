@@ -282,11 +282,19 @@ const backendPathText = computed(() => {
 
 // 视频变换样式
 const videoTransformStyle = computed(() => {
-  return {
+  const style = {
     transform: `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`,
     transformOrigin: 'center center',
     transition: isDragging.value ? 'none' : 'transform 0.3s ease-out'
   }
+  
+  // 旋转时，wrapper也要调整为100vh×100vw以匹配video
+  if (videoRotation.value !== 0) {
+    style.width = '100vh'
+    style.height = '100vw'
+  }
+  
+  return style
 })
 
 const initHls = () => {
@@ -1652,11 +1660,9 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* 旋转时：宽=视口高，高=视口宽，旋转后互换回来刚好填充 */
+/* 旋转时：video保持100%继承wrapper，wrapper已通过JS调整为100vh×100vw */
 .custom-fullscreen .video-element[data-rotated="true"] {
   object-fit: cover !important;
-  width: 100vh !important;
-  height: 100vw !important;
 }
 
 
