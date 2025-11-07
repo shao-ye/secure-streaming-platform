@@ -1094,18 +1094,15 @@ const handleTouchMove = (event) => {
       
       // 应用敏感度调整
       const adjustedScaleChange = 1 + (scaleChange - 1) * scaleSensitivity
-      newScale = Math.max(0.5, Math.min(3, scale.value * adjustedScaleChange))
+      const oldScale = scale.value
+      newScale = Math.max(0.5, Math.min(3, oldScale * adjustedScaleChange))
       
-      // 以触摸中心点为缩放中心
-      const containerRect = containerRef.value.getBoundingClientRect()
-      const centerX = currentCenter.x - containerRect.left - containerRect.width / 2
-      const centerY = currentCenter.y - containerRect.top - containerRect.height / 2
-      
-      // 调整平移以保持缩放中心点不变
-      const scaleDiff = newScale - scale.value
-      if (scale.value > 0) {
-        translateX.value -= centerX * scaleDiff / scale.value
-        translateY.value -= centerY * scaleDiff / scale.value
+      // 以视口中心为缩放中心：保持当前视口中心对应的图像内容位置不变
+      // 平移量需要按缩放比例调整
+      if (oldScale > 0) {
+        const scaleRatio = newScale / oldScale
+        translateX.value = translateX.value * scaleRatio
+        translateY.value = translateY.value * scaleRatio
       }
       
       scale.value = newScale
@@ -1140,21 +1137,21 @@ const handleTouchEnd = (event) => {
 
 // 组件卸载时清理事件监听器（合并到下面的onUnmounted中）
 
-// 鼠标滚轮缩放支持
+// 鼠标滚轮缩放支持 - 以视口中心为缩放中心
 const handleWheel = (event) => {
   event.preventDefault()
   
   const delta = event.deltaY > 0 ? 0.9 : 1.1
+  const oldScale = scale.value
   const newScale = Math.max(0.5, Math.min(3, scale.value * delta))
   
-  // 以鼠标位置为缩放中心
-  const containerRect = containerRef.value.getBoundingClientRect()
-  const centerX = event.clientX - containerRect.left - containerRect.width / 2
-  const centerY = event.clientY - containerRect.top - containerRect.height / 2
-  
-  const scaleDiff = newScale - scale.value
-  translateX.value -= centerX * scaleDiff / scale.value
-  translateY.value -= centerY * scaleDiff / scale.value
+  // 以视口中心为缩放中心：保持当前视口中心对应的图像内容位置不变
+  // 平移量需要按缩放比例调整
+  if (oldScale > 0) {
+    const scaleRatio = newScale / oldScale
+    translateX.value = translateX.value * scaleRatio
+    translateY.value = translateY.value * scaleRatio
+  }
   
   scale.value = newScale
   
@@ -1163,7 +1160,12 @@ const handleWheel = (event) => {
     resetZoom()
   }
   
-  debugLog('鼠标滚轮缩放:', { scale: newScale })
+  debugLog('鼠标滚轮缩放:', { 
+    oldScale,
+    newScale,
+    translateX: translateX.value,
+    translateY: translateY.value
+  })
 }
 
 // 重置缩放
@@ -1238,14 +1240,32 @@ const handleVideoClick = (event) => {
   return false
 }
 
-// 双击重置缩放
-const handleDoubleClick = () => {
-  if (scale.value === 1) {
-    scale.value = 2
-  } else {
+// 双击缩放 - 以视口中心为缩放中心
+const handleDoubleClick = (event) => {
+  const oldScale = scale.value
+  const newScale = scale.value === 1 ? 2 : 1
+  
+  if (newScale === 1) {
+    // 重置到1倍时，直接重置平移
     resetZoom()
+  } else {
+    // 放大时，以视口中心为缩放中心：保持当前视口中心对应的图像内容位置不变
+    // 平移量需要按缩放比例调整
+    if (oldScale > 0) {
+      const scaleRatio = newScale / oldScale
+      translateX.value = translateX.value * scaleRatio
+      translateY.value = translateY.value * scaleRatio
+    }
+    
+    scale.value = newScale
   }
-  debugLog('双击缩放:', { scale: scale.value })
+  
+  debugLog('双击缩放:', { 
+    oldScale, 
+    newScale: scale.value,
+    translateX: translateX.value,
+    translateY: translateY.value
+  })
 }
 
 // 设置禁用播放暂停按钮的多层防护机制
