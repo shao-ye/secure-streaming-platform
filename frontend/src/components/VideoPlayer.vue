@@ -102,9 +102,9 @@
       <button 
         v-if="!isCustomFullscreen"
         class="custom-fullscreen-btn"
-        @touchstart.stop.prevent
-        @touchend.stop.prevent
-        @click.stop.prevent="toggleCustomFullscreen"
+        @touchstart.stop
+        @touchend.stop.prevent="toggleCustomFullscreen"
+        @click.stop="toggleCustomFullscreen"
         title="全屏"
       >
         <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor">
@@ -117,9 +117,9 @@
         <button 
           v-if="isCustomFullscreen"
           class="exit-fullscreen-fixed"
-          @touchstart.stop.prevent
-          @touchend.stop.prevent
-          @click.stop.prevent="toggleCustomFullscreen"
+          @touchstart.stop
+          @touchend.stop.prevent="toggleCustomFullscreen"
+          @click.stop="toggleCustomFullscreen"
           title="退出全屏"
         >
           <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor" aria-hidden="true">
