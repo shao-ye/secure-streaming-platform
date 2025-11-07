@@ -417,8 +417,8 @@ onUnmounted(() => {
 /* 侧边栏 */
 .sidebar {
   width: 300px;
-  background: var(--el-bg-color);
-  border-right: 1px solid var(--el-border-color);
+  background: white;
+  border-right: 1px solid #e4e7ed;
   display: flex;
   flex-direction: column;
   transition: all 0.3s ease;
@@ -450,13 +450,12 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: var(--el-bg-color);
 }
 
 /* 桌面端标题区域 */
 .desktop-header {
   padding: 20px;
-  border-bottom: 1px solid var(--el-border-color);
+  border-bottom: 1px solid #e4e7ed;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
 }
@@ -545,8 +544,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px 12px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  background: var(--el-bg-color);
+  border-bottom: 1px solid #f0f0f0;
 }
 
 .section-title {
@@ -554,7 +552,7 @@ onUnmounted(() => {
   align-items: center;
   font-size: 16px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: #303133;
   margin: 0;
 }
 
@@ -571,7 +569,6 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--el-bg-color);
   /* 完全隐藏滚动条 */
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -745,7 +742,42 @@ onUnmounted(() => {
   }
 }
 
-/* 暗色模式支持 - 现在通过CSS变量自动适配 */
+/* 暗色模式支持 */
+@media (prefers-color-scheme: dark) {
+  .responsive-layout {
+    background-color: #1a1a1a;
+  }
+
+  .sidebar {
+    background-color: #2d2d2d;
+    border-right-color: #404040;
+  }
+
+  .sidebar-content {
+    background-color: #2d2d2d;
+  }
+
+  .content-area {
+    background-color: #1a1a1a;
+  }
+
+  .section-header {
+    border-bottom-color: #404040;
+    background-color: #2d2d2d;
+  }
+
+  .section-title {
+    color: #e4e7ed;
+  }
+
+  .stream-list-container {
+    background-color: #2d2d2d;
+  }
+
+  .desktop-header {
+    border-bottom-color: #404040;
+  }
+}
 
 /* 动画和过渡 */
 .sidebar {
