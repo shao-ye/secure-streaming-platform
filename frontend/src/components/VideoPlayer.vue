@@ -94,15 +94,17 @@
       </div>
 
       <!-- 缩放提示 -->
-      <div v-if="scale > 1 || videoRotation !== 0" class="zoom-hint">
-        <div class="zoom-info">
-          <span>缩放: {{ Math.round(scale * 100) }}%</span>
-          <span v-if="videoRotation !== 0">| 旋转: {{ videoRotation }}°</span>
-          <span>| 单指拖拽</span>
-          <span>| 双击重置</span>
-          <span v-if="isCustomFullscreen">| 全屏缩放</span>
+      <transition name="fade">
+        <div v-if="(scale > 1 || videoRotation !== 0) && showControls" class="zoom-hint">
+          <div class="zoom-info">
+            <span>缩放: {{ Math.round(scale * 100) }}%</span>
+            <span v-if="videoRotation !== 0">| 旋转: {{ videoRotation }}°</span>
+            <span>| 单指拖拽</span>
+            <span>| 双击重置</span>
+            <span v-if="isCustomFullscreen">| 全屏缩放</span>
+          </div>
         </div>
-      </div>
+      </transition>
       
       <!-- 自定义全屏按钮 -->
       <button 
@@ -120,34 +122,38 @@
       
       <!-- 视口层固定的退出按钮（始终在最顶层） -->
       <teleport to="body">
-        <button 
-          v-if="isCustomFullscreen"
-          class="exit-fullscreen-fixed"
-          @touchstart.stop
-          @touchend.stop.prevent="toggleCustomFullscreen"
-          @click.stop="toggleCustomFullscreen"
-          title="退出全屏"
-        >
-          <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor" aria-hidden="true">
-            <path d="M563.2 512L844.8 230.4 793.6 179.2 512 460.8 230.4 179.2 179.2 230.4 460.8 512 179.2 793.6 230.4 844.8 512 563.2 793.6 844.8 844.8 793.6z"/>
-          </svg>
-        </button>
+        <transition name="fade">
+          <button 
+            v-if="isCustomFullscreen && showControls"
+            class="exit-fullscreen-fixed"
+            @touchstart.stop
+            @touchend.stop.prevent="toggleCustomFullscreen"
+            @click.stop="toggleCustomFullscreen"
+            title="退出全屏"
+          >
+            <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor" aria-hidden="true">
+              <path d="M563.2 512L844.8 230.4 793.6 179.2 512 460.8 230.4 179.2 179.2 230.4 460.8 512 179.2 793.6 230.4 844.8 512 563.2 793.6 844.8 844.8 793.6z"/>
+            </svg>
+          </button>
+        </transition>
         
         <!-- 画面旋转按钮 -->
-        <button 
-          v-if="isCustomFullscreen"
-          class="rotate-btn-fixed"
-          @touchstart.stop
-          @touchend.stop.prevent="toggleRotation"
-          @click.stop="toggleRotation"
-          :title="videoRotation === 0 ? '旋转90度' : '恢复方向'"
-        >
-          <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor" aria-hidden="true">
-            <path d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372z"/>
-            <path d="M512 140c-205.4 0-372 166.6-372 372s166.6 372 372 372 372-166.6 372-372-166.6-372-372-372zm0 684c-172.3 0-312-139.7-312-312s139.7-312 312-312 312 139.7 312 312-139.7 312-312 312z"/>
-            <path d="M512 354L387 479l48 48 77-77v170h68V450l77 77 48-48z"/>
-          </svg>
-        </button>
+        <transition name="fade">
+          <button 
+            v-if="isCustomFullscreen && showControls"
+            class="rotate-btn-fixed"
+            @touchstart.stop
+            @touchend.stop.prevent="toggleRotation"
+            @click.stop="toggleRotation"
+            :title="videoRotation === 0 ? '旋转90度' : '恢复方向'"
+          >
+            <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor" aria-hidden="true">
+              <path d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372z"/>
+              <path d="M512 140c-205.4 0-372 166.6-372 372s166.6 372 372 372 372-166.6 372-372-166.6-372-372-372zm0 684c-172.3 0-312-139.7-312-312s139.7-312 312-312 312 139.7 312 312-139.7 312-312 312z"/>
+              <path d="M512 354L387 479l48 48 77-77v170h68V450l77 77 48-48z"/>
+            </svg>
+          </button>
+        </transition>
       </teleport>
     </div>
 
@@ -254,6 +260,9 @@ const videoRotation = ref(0)
 const autoFitting = ref(false)
 let autoFitClearTimer = null
 let resizeDebounceTimer = null
+// 控制条显示状态
+const showControls = ref(true)
+let hideControlsTimer = null
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -937,6 +946,9 @@ const toggleCustomFullscreen = () => {
   if (isCustomFullscreen.value) {
     // 进入自定义全屏
     debugLog('[VideoPlayer] 进入自定义全屏，启用缩放拖动')
+    // 显示控制条并启动自动隐藏定时器
+    showControls.value = true
+    resetHideControlsTimer()
     // 绑定iOS手势拦截
     addIosGestureBlockers()
     
@@ -949,6 +961,12 @@ const toggleCustomFullscreen = () => {
   } else {
     // 退出自定义全屏
     debugLog('[VideoPlayer] 退出自定义全屏，重置缩放')
+    // 清理自动隐藏定时器
+    if (hideControlsTimer) {
+      clearTimeout(hideControlsTimer)
+      hideControlsTimer = null
+    }
+    showControls.value = true // 退出全屏时恢复显示
     resetZoom()
     // 重置旋转
     videoRotation.value = 0
@@ -1387,7 +1405,7 @@ const handleMouseLeave = () => {
   }
 }
 
-// 处理视频点击事件 - 禁用暂停功能
+// 处理视频点击事件 - 切换控制条显示
 const handleVideoClick = (event) => {
   // 强制阻止默认的点击暂停行为
   event.preventDefault()
@@ -1399,9 +1417,34 @@ const handleVideoClick = (event) => {
     videoRef.value.play()
   }
   
+  // 在自定义全屏模式下，切换控制条显示
+  if (isCustomFullscreen.value) {
+    toggleControlsVisibility()
+  }
+  
   debugLog('视频点击事件被拦截，已禁用暂停功能')
   
   return false
+}
+
+// 切换控制条显示/隐藏
+const toggleControlsVisibility = () => {
+  showControls.value = !showControls.value
+  
+  // 如果显示了控制条，3秒后自动隐藏
+  if (showControls.value) {
+    resetHideControlsTimer()
+  }
+}
+
+// 重置自动隐藏定时器
+const resetHideControlsTimer = () => {
+  if (hideControlsTimer) {
+    clearTimeout(hideControlsTimer)
+  }
+  hideControlsTimer = setTimeout(() => {
+    showControls.value = false
+  }, 3000) // 3秒后自动隐藏
 }
 
 // 双击缩放 - 以视口中心为缩放中心
@@ -1651,6 +1694,14 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 控制条淡入淡出动画 */
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
+
 .video-player {
   width: 100%;
   height: 100%;
