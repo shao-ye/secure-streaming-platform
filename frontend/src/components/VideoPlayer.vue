@@ -14,6 +14,7 @@
     </div>
 
     <div 
+      :class="{ 'custom-fullscreen': isCustomFullscreen }"
       class="player-container"
       ref="containerRef"
       @touchstart="handleTouchStart"
@@ -33,6 +34,9 @@
           autoplay
           muted
           playsinline
+          webkit-playsinline
+          x5-playsinline
+          x5-video-player-type="h5"
           @loadstart="handleLoadStart"
           @loadeddata="handleLoadedData"
           @canplay="handleCanPlay"
@@ -85,9 +89,33 @@
           <span>缩放: {{ Math.round(scale * 100) }}%</span>
           <span>| 单指拖拽</span>
           <span>| 双击重置</span>
-          <span v-if="isFullscreen">| 全屏缩放</span>
+          <span v-if="isCustomFullscreen">| 全屏缩放</span>
         </div>
       </div>
+      
+      <!-- 自定义全屏按钮 -->
+      <button 
+        v-if="!isCustomFullscreen"
+        class="custom-fullscreen-btn"
+        @click="toggleCustomFullscreen"
+        title="全屏"
+      >
+        <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor">
+          <path d="M290.133333 405.333333V213.333333c0-46.933333 38.4-85.333333 85.333334-85.333333h192v85.333333H375.466667v192H290.133333z m443.733334 0V213.333333h-192V128h192c46.933333 0 85.333333 38.4 85.333333 85.333333v192h-85.333333z m0 213.333334v192c0 46.933333-38.4 85.333333-85.333334 85.333333h-192v-85.333333h192v-192h85.333334z m-443.733334 0v192h192v85.333333H375.466667c-46.933333 0-85.333334-38.4-85.333334-85.333333v-192h85.333334z"/>
+        </svg>
+      </button>
+      
+      <!-- 退出全屏按钮 -->
+      <button 
+        v-if="isCustomFullscreen"
+        class="exit-fullscreen-btn"
+        @click="toggleCustomFullscreen"
+        title="退出全屏"
+      >
+        <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor">
+          <path d="M204.8 716.8m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z M204.8 307.2m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z M819.2 716.8m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z M819.2 307.2m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z"/>
+        </svg>
+      </button>
     </div>
 
     <!-- 状态栏 - 在缩放时向下移动 -->
@@ -183,7 +211,7 @@ const lastTouchCenter = ref({ x: 0, y: 0 })
 const touches = ref([])
 const isDragging = ref(false)
 const lastPanPoint = ref({ x: 0, y: 0 })
-const isFullscreen = ref(false)
+const isCustomFullscreen = ref(false)
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -820,51 +848,29 @@ const getDeviceInfo = () => {
   return { isIOS, isAndroid, isSafari, isChrome, isMobile }
 }
 
-// 全屏状态检测 - 跨平台兼容
-const checkFullscreenState = () => {
-  const wasFullscreen = isFullscreen.value
-  const deviceInfo = getDeviceInfo()
+// 自定义全屏切换函数
+const toggleCustomFullscreen = () => {
+  isCustomFullscreen.value = !isCustomFullscreen.value
   
-  // 标准全屏检测
-  const isDocumentFullscreen = !!(
-    document.fullscreenElement ||
-    document.webkitFullscreenElement ||
-    document.mozFullScreenElement ||
-    document.msFullscreenElement
-  )
-  
-  // iOS Safari 特殊处理
-  const isVideoFullscreen = videoRef.value && (
-    videoRef.value.webkitDisplayingFullscreen ||
-    videoRef.value.displayingFullscreen
-  )
-  
-  // 移动端横屏检测（作为辅助判断）
-  const isLandscapeFullscreen = deviceInfo.isMobile && 
-    window.innerHeight < window.innerWidth && 
-    window.innerHeight < 500 // 避免平板误判
-  
-  // 综合判断全屏状态
-  if (deviceInfo.isIOS) {
-    // iOS: 主要依赖视频元素全屏状态
-    isFullscreen.value = isVideoFullscreen || isDocumentFullscreen
+  if (isCustomFullscreen.value) {
+    // 进入自定义全屏
+    debugLog('[VideoPlayer] 进入自定义全屏，启用缩放拖动')
+    
+    // 尝试锁定屏幕方向为横屏（移动端）
+    if (screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock('landscape').catch(e => {
+        debugLog('[VideoPlayer] 屏幕方向锁定失败:', e.message)
+      })
+    }
   } else {
-    // Android/PC: 主要依赖文档全屏状态
-    isFullscreen.value = isDocumentFullscreen || isLandscapeFullscreen
-  }
-  
-  debugLog('全屏状态检测:', {
-    deviceInfo,
-    isDocumentFullscreen,
-    isVideoFullscreen,
-    isLandscapeFullscreen,
-    finalState: isFullscreen.value,
-    screenSize: `${window.innerWidth}x${window.innerHeight}`
-  })
-  
-  // 退出全屏时重置缩放
-  if (wasFullscreen && !isFullscreen.value) {
+    // 退出自定义全屏
+    debugLog('[VideoPlayer] 退出自定义全屏，重置缩放')
     resetZoom()
+    
+    // 解锁屏幕方向
+    if (screen.orientation && screen.orientation.unlock) {
+      screen.orientation.unlock()
+    }
   }
 }
 
@@ -911,39 +917,7 @@ onMounted(() => {
     }
   })
   
-  // 跨平台全屏状态监听
-  const deviceInfo = getDeviceInfo()
-  
-  // 标准全屏事件监听
-  document.addEventListener('fullscreenchange', checkFullscreenState)
-  document.addEventListener('webkitfullscreenchange', checkFullscreenState)
-  document.addEventListener('mozfullscreenchange', checkFullscreenState)
-  document.addEventListener('MSFullscreenChange', checkFullscreenState)
-  
-  // 移动端特殊处理
-  if (deviceInfo.isMobile) {
-    // 屏幕方向变化监听
-    window.addEventListener('orientationchange', () => {
-      setTimeout(checkFullscreenState, 200) // 增加延迟确保状态稳定
-    })
-    window.addEventListener('resize', () => {
-      setTimeout(checkFullscreenState, 100)
-    })
-    
-    // iOS Safari 视频全屏事件
-    if (deviceInfo.isIOS && videoRef.value) {
-      videoRef.value.addEventListener('webkitbeginfullscreen', checkFullscreenState)
-      videoRef.value.addEventListener('webkitendfullscreen', checkFullscreenState)
-      videoRef.value.addEventListener('webkitfullscreenchange', checkFullscreenState)
-    }
-  }
-  
-  // PC端额外监听
-  if (!deviceInfo.isMobile) {
-    window.addEventListener('resize', checkFullscreenState)
-  }
-  
-  debugLog('事件监听器设置完成:', deviceInfo)
+  debugLog('VideoPlayer组件挂载完成，使用自定义全屏方案')
   
   // 设置禁用播放暂停按钮的多层防护机制
   setupPauseDisabling()
@@ -968,7 +942,7 @@ const handleTouchStart = (event) => {
   
   debugLog('触摸开始:', {
     touchCount: event.touches.length,
-    isFullscreen: isFullscreen.value,
+    isCustomFullscreen: isCustomFullscreen.value,
     scale: scale.value,
     target: event.target.tagName,
     deviceInfo
@@ -988,21 +962,8 @@ const handleTouchStart = (event) => {
     // 单指处理 - 根据平台和状态决定行为
     if (scale.value > 1) {
       // 已缩放状态下允许拖拽
-      if (deviceInfo.isIOS) {
-        // iOS: 在全屏状态下需要特殊处理
-        if (isFullscreen.value) {
-          event.preventDefault()
-          isDragging.value = true
-        } else {
-          // 非全屏状态下正常拖拽
-          event.preventDefault()
-          isDragging.value = true
-        }
-      } else {
-        // Android/PC: 正常拖拽处理
-        event.preventDefault()
-        isDragging.value = true
-      }
+      event.preventDefault()
+      isDragging.value = true
       
       lastPanPoint.value = {
         x: touches.value[0].clientX,
@@ -1010,7 +971,7 @@ const handleTouchStart = (event) => {
       }
       debugLog('单指拖拽开始:', { 
         scale: scale.value, 
-        isFullscreen: isFullscreen.value,
+        isCustomFullscreen: isCustomFullscreen.value,
         platform: deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'PC'
       })
     } else {
@@ -1034,7 +995,7 @@ const handleTouchMove = (event) => {
     
     // 根据平台调整拖拽敏感度
     let sensitivity = 1
-    if (deviceInfo.isIOS && isFullscreen.value) {
+    if (deviceInfo.isIOS && isCustomFullscreen.value) {
       // iOS全屏状态下可能需要调整敏感度
       sensitivity = 1.2
     }
@@ -1052,7 +1013,7 @@ const handleTouchMove = (event) => {
       deltaY: deltaY * sensitivity, 
       translateX: translateX.value, 
       translateY: translateY.value,
-      isFullscreen: isFullscreen.value,
+      isCustomFullscreen: isCustomFullscreen.value,
       scale: scale.value,
       platform: deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'PC',
       sensitivity
@@ -1073,7 +1034,7 @@ const handleTouchMove = (event) => {
       
       if (deviceInfo.isIOS) {
         // iOS: 在全屏状态下调整缩放敏感度
-        scaleSensitivity = isFullscreen.value ? 0.8 : 1
+        scaleSensitivity = isCustomFullscreen.value ? 0.8 : 1
       } else if (deviceInfo.isAndroid) {
         // Android: 标准敏感度
         scaleSensitivity = 1
@@ -1103,7 +1064,7 @@ const handleTouchMove = (event) => {
         scale: newScale, 
         platform: deviceInfo.isIOS ? 'iOS' : deviceInfo.isAndroid ? 'Android' : 'PC',
         scaleSensitivity,
-        isFullscreen: isFullscreen.value
+        isCustomFullscreen: isCustomFullscreen.value
       })
     }
     
@@ -1117,7 +1078,7 @@ const handleTouchEnd = (event) => {
     touchCount: event.touches.length,
     isDragging: isDragging.value,
     scale: scale.value,
-    isFullscreen: isFullscreen.value
+    isCustomFullscreen: isCustomFullscreen.value
   })
   
   touches.value = Array.from(event.touches)
@@ -1390,32 +1351,12 @@ onUnmounted(() => {
     window.videoPlayerCleanupFunctions = []
   }
   
-  const deviceInfo = getDeviceInfo()
-  
-  // 清理标准全屏状态监听器
-  document.removeEventListener('fullscreenchange', checkFullscreenState)
-  document.removeEventListener('webkitfullscreenchange', checkFullscreenState)
-  document.removeEventListener('mozfullscreenchange', checkFullscreenState)
-  document.removeEventListener('MSFullscreenChange', checkFullscreenState)
-  
-  // 清理移动端特殊监听器
-  if (deviceInfo.isMobile) {
-    // 注意：orientationchange 的清理需要使用相同的函数引用
-    // 这里我们清理所有可能的监听器
-    window.removeEventListener('orientationchange', checkFullscreenState)
-    window.removeEventListener('resize', checkFullscreenState)
-    
-    // 清理iOS Safari视频全屏事件
-    if (deviceInfo.isIOS && videoRef.value) {
-      videoRef.value.removeEventListener('webkitbeginfullscreen', checkFullscreenState)
-      videoRef.value.removeEventListener('webkitendfullscreen', checkFullscreenState)
-      videoRef.value.removeEventListener('webkitfullscreenchange', checkFullscreenState)
+  // 退出自定义全屏
+  if (isCustomFullscreen.value) {
+    isCustomFullscreen.value = false
+    if (screen.orientation && screen.orientation.unlock) {
+      screen.orientation.unlock()
     }
-  }
-  
-  // 清理PC端监听器
-  if (!deviceInfo.isMobile) {
-    window.removeEventListener('resize', checkFullscreenState)
   }
   
   // 清理HLS实例
@@ -1479,14 +1420,55 @@ onUnmounted(() => {
   max-height: calc(100vh - 160px);
 }
 
-/* 全屏状态下确保缩放功能正常工作 */
-.player-container:fullscreen,
-.player-container:-webkit-full-screen,
-.player-container:-moz-full-screen,
-.player-container:-ms-fullscreen {
-  max-height: 100vh;
-  width: 100vw;
-  height: 100vh;
+/* ✅ 自定义全屏容器（支持iOS缩放拖动） */
+.custom-fullscreen {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  z-index: 9999 !important;
+  background: #000 !important;
+}
+
+/* 自定义全屏按钮 */
+.custom-fullscreen-btn,
+.exit-fullscreen-btn {
+  position: absolute;
+  bottom: 80px;
+  right: 20px;
+  width: 48px;
+  height: 48px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+
+.custom-fullscreen-btn:hover,
+.exit-fullscreen-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+  transform: scale(1.1);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.custom-fullscreen-btn:active,
+.exit-fullscreen-btn:active {
+  transform: scale(0.95);
+}
+
+.exit-fullscreen-btn {
+  top: 20px;
+  right: 20px;
+  bottom: auto;
 }
 
 /* 移除全屏状态下的触摸行为限制，让视频控件正常工作 */
