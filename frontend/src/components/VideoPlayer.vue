@@ -268,6 +268,8 @@ const showControls = ref(true)
 let hideControlsTimer = null
 // 单击延迟定时器（用于区分单击和双击）
 let clickTimer = null
+// 自动全屏设置
+const autoFullscreenOnRotate = ref(true) // 是否在旋转到横屏时自动全屏
 
 const statusType = computed(() => {
   switch (status.value) {
@@ -1154,6 +1156,11 @@ onMounted(() => {
   
   // 设置禁用播放暂停按钮的多层防护机制
   setupPauseDisabling()
+  
+  // 监听屏幕方向变化，横屏时自动全屏
+  if (autoFullscreenOnRotate.value) {
+    setupOrientationListener()
+  }
 })
 
 // 触摸事件处理 - 双指缩放功能
@@ -1534,6 +1541,72 @@ const handleDoubleClick = (event) => {
     newScale: scale.value,
     translateX: translateX.value,
     translateY: translateY.value
+  })
+}
+
+// 屏幕方向监听 - 横屏时自动全屏
+const setupOrientationListener = () => {
+  const handleOrientationChange = () => {
+    // 使用多种方式检测横屏
+    const isLandscape = 
+      (window.orientation === 90 || window.orientation === -90) || // iOS
+      (screen.orientation && screen.orientation.type.includes('landscape')) || // 标准API
+      (window.innerWidth > window.innerHeight) // 后备方案
+    
+    debugLog('屏幕方向变化:', {
+      isLandscape,
+      orientation: window.orientation,
+      screenOrientation: screen.orientation?.type,
+      dimensions: `${window.innerWidth}x${window.innerHeight}`,
+      isCustomFullscreen: isCustomFullscreen.value
+    })
+    
+    // 横屏且未全屏时，自动进入全屏
+    if (isLandscape && !isCustomFullscreen.value) {
+      debugLog('检测到横屏，自动进入全屏模式')
+      setTimeout(() => {
+        toggleCustomFullscreen()
+      }, 300) // 延迟300ms等待方向切换稳定
+    }
+    // 竖屏且已全屏时，自动退出全屏
+    else if (!isLandscape && isCustomFullscreen.value) {
+      debugLog('检测到竖屏，自动退出全屏模式')
+      setTimeout(() => {
+        toggleCustomFullscreen()
+      }, 300)
+    }
+  }
+  
+  // 监听多种方向变化事件
+  // orientationchange - iOS和部分Android
+  window.addEventListener('orientationchange', handleOrientationChange)
+  
+  // screen.orientation.change - 标准API
+  if (screen.orientation) {
+    screen.orientation.addEventListener('change', handleOrientationChange)
+  }
+  
+  // resize作为后备 - 所有浏览器
+  let resizeTimer = null
+  const handleResize = () => {
+    clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(handleOrientationChange, 300)
+  }
+  window.addEventListener('resize', handleResize)
+  
+  debugLog('屏幕方向监听器已设置')
+  
+  // 保存清理函数
+  if (!window.videoPlayerCleanupFunctions) {
+    window.videoPlayerCleanupFunctions = []
+  }
+  window.videoPlayerCleanupFunctions.push(() => {
+    window.removeEventListener('orientationchange', handleOrientationChange)
+    if (screen.orientation) {
+      screen.orientation.removeEventListener('change', handleOrientationChange)
+    }
+    window.removeEventListener('resize', handleResize)
+    debugLog('屏幕方向监听器已清理')
   })
 }
 
