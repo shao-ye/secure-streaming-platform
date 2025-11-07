@@ -975,12 +975,62 @@ const toggleRotation = () => {
     videoRotation.value = 90
 
     
-    // 旋转时scale=1，CSS已设置video为100vh×100vw
+    // 旋转时计算合适的scale，让画面完整填充
     nextTick(() => {
-      scale.value = 1
-      translateX.value = 0
-      translateY.value = 0
-      console.log('[VideoPlayer] 旋转90度: scale=1, video尺寸100vh×100vw')
+      // 延迟计算，确保DOM已更新
+      setTimeout(() => {
+        if (!containerRef.value || !videoRef.value) return
+        
+        const container = containerRef.value.getBoundingClientRect()
+        const video = videoRef.value
+        const videoW = video.videoWidth || 1920
+        const videoH = video.videoHeight || 1080
+        
+        // wrapper是100vh×100vw，假设视口是430×932，则wrapper是932×430
+        // 视频16:9在932×430的wrapper中，用contain模式：
+        // 实际显示尺寸：932×524（保持16:9）
+        // 旋转90度后包围盒：524×932
+        // 要填充430×932容器，需要scale = 430/524 = 0.82
+        
+        // 计算视频在wrapper中contain模式下的实际尺寸
+        const wrapperW = container.height  // 100vh
+        const wrapperH = container.width   // 100vw
+        const videoAspect = videoW / videoH
+        const wrapperAspect = wrapperW / wrapperH
+        
+        let displayW, displayH
+        if (videoAspect > wrapperAspect) {
+          // 视频更宽，以wrapper宽度为准
+          displayW = wrapperW
+          displayH = wrapperW / videoAspect
+        } else {
+          // 视频更高，以wrapper高度为准
+          displayH = wrapperH
+          displayW = wrapperH * videoAspect
+        }
+        
+        // 旋转后，displayW和displayH互换
+        // 旋转后包围盒：displayH × displayW
+        // 要填充container(container.width × container.height)
+        const scaleX = container.width / displayH
+        const scaleY = container.height / displayW
+        const autoScale = Math.max(scaleX, scaleY)
+        
+        scale.value = autoScale
+        translateX.value = 0
+        translateY.value = 0
+        
+        console.log('[VideoPlayer] 旋转90度: 自动计算scale')
+        console.log({
+          videoSize: `${videoW}×${videoH}`,
+          wrapperSize: `${Math.round(wrapperW)}×${Math.round(wrapperH)}`,
+          displaySize: `${Math.round(displayW)}×${Math.round(displayH)}`,
+          rotatedBox: `${Math.round(displayH)}×${Math.round(displayW)}`,
+          containerSize: `${Math.round(container.width)}×${Math.round(container.height)}`,
+          scale: autoScale.toFixed(3),
+          percentage: `${Math.round(autoScale * 100)}%`
+        })
+      }, 100)
     })
   } else {
     // 恢复到0度
@@ -1665,9 +1715,9 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* 旋转时：video保持100%继承wrapper，wrapper已通过JS调整为100vh×100vw */
+/* 旋转时：使用contain显示完整画面，避免裁剪 */
 .custom-fullscreen .video-element[data-rotated="true"] {
-  object-fit: cover !important;
+  object-fit: contain !important;
 }
 
 
