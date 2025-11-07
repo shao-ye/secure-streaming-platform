@@ -288,15 +288,15 @@ const videoTransformStyle = computed(() => {
     transition: isDragging.value ? 'none' : 'transform 0.3s ease-out'
   }
   
-  // 旋转时，wrapper调整为100vh×100vw并绝对居中
+  // 旋转时，wrapper调整为100vh×100vw并稍微偏上定位
   if (videoRotation.value !== 0) {
     style.width = '100vh'
     style.height = '100vw'
     style.position = 'absolute'
     style.left = '50%'
     style.top = '50%'
-    style.marginLeft = '-50vh'  // -width/2
-    style.marginTop = '-50vw'   // -height/2
+    style.marginLeft = '-50vh'  // -width/2，水平居中
+    style.marginTop = 'calc(-50vw - 3vh)'  // -height/2再上移3vh，消除顶部黑边
   }
   
   return style
@@ -1009,12 +1009,13 @@ const toggleRotation = () => {
           displayW = wrapperH * videoAspect
         }
         
-        // 旋转后使用105%，配合cover模式消除黑边，同时尽量避免裁剪重要信息
-        scale.value = 1.05
+        // 旋转后使用100%，避免过度放大导致内容裁剪
+        // 用户可根据需要手动缩放
+        scale.value = 1.0
         translateX.value = 0
         translateY.value = 0
         
-        console.log('[VideoPlayer] 旋转90度: scale=105% + object-fit:cover')
+        console.log('[VideoPlayer] 旋转90度: scale=100%')
         console.log({
           videoSize: `${videoW}×${videoH}`,
           wrapperSize: `${Math.round(wrapperW)}×${Math.round(wrapperH)}`,
@@ -1706,9 +1707,9 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* 旋转时：使用cover填充满屏，配合适当scale避免过度裁剪 */
+/* 旋转时：使用contain显示完整画面，避免裁剪 */
 .custom-fullscreen .video-element[data-rotated="true"] {
-  object-fit: cover !important;
+  object-fit: contain !important;
 }
 
 
