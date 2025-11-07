@@ -1735,9 +1735,13 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* 旋转时使用cover模式填充满屏 */
+/* 旋转时使用cover模式填充满屏，并移除尺寸限制 */
 .video-element[data-rotated="true"] {
   object-fit: cover !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 100vw !important;
+  min-height: 100vh !important;
 }
 
 
