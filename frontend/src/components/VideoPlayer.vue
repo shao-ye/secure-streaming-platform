@@ -330,12 +330,14 @@ const videoTransformStyle = computed(() => {
   if (videoRotation.value !== 0) {
     style.width = '100vh'
     style.height = '100vw'
-    style.position = 'absolute'
+    style.position = 'relative'  // 相对定位
     style.left = '50%'
     style.top = '50%'
-    // 使用transform同时处理旋转、缩放、拖动和居中
-    // 使用固定像素值-50vh和-50vw来居中（对应width和height）
-    style.transform = `translate(calc(-50vh + ${translateX.value}px), calc(-50vw + ${translateY.value}px)) scale(${scale.value}) rotate(${videoRotation.value}deg)`
+    // 使用margin负值居中（更可靠）
+    style.marginLeft = '-50vh'
+    style.marginTop = '-50vw'
+    // transform只负责缩放、拖动和旋转
+    style.transform = `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`
   } else {
     // 未旋转时的正常变换
     style.transform = `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`
