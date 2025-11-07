@@ -322,7 +322,6 @@ const backendPathText = computed(() => {
 // 视频变换样式
 const videoTransformStyle = computed(() => {
   const style = {
-    transform: `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`,
     transformOrigin: 'center center',
     transition: isDragging.value ? 'none' : 'transform 0.3s ease-out'
   }
@@ -334,8 +333,14 @@ const videoTransformStyle = computed(() => {
     style.position = 'absolute'
     style.left = '50%'
     style.top = '50%'
-    style.marginLeft = '-50vh'  // -width/2，水平居中
-    style.marginTop = '-50vw'   // -height/2，垂直居中
+    // 使用transform的translate来居中wrapper，再叠加其他变换
+    // translate(-50%, -50%)基于wrapper自身尺寸，更准确
+    const centerX = -50 // 百分比
+    const centerY = -50 // 百分比
+    style.transform = `translate(calc(${centerX}% + ${translateX.value}px), calc(${centerY}% + ${translateY.value}px)) scale(${scale.value}) rotate(${videoRotation.value}deg)`
+  } else {
+    // 未旋转时的正常变换
+    style.transform = `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`
   }
   
   return style
