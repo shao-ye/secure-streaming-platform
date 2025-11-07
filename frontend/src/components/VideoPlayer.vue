@@ -322,25 +322,20 @@ const backendPathText = computed(() => {
 // 视频变换样式
 const videoTransformStyle = computed(() => {
   const style = {
+    transform: `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`,
     transformOrigin: 'center center',
     transition: isDragging.value ? 'none' : 'transform 0.3s ease-out'
   }
   
-  // 旋转时，调整尺寸以填充屏幕（宽高互换）
+  // 旋转时，wrapper调整为100vh×100vw并居中
   if (videoRotation.value !== 0) {
     style.width = '100vh'
     style.height = '100vw'
-    style.position = 'relative'  // 相对定位
+    style.position = 'absolute'
     style.left = '50%'
     style.top = '50%'
-    // 使用margin负值居中（更可靠）
-    style.marginLeft = '-50vh'
-    style.marginTop = '-50vw'
-    // transform只负责缩放、拖动和旋转
-    style.transform = `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`
-  } else {
-    // 未旋转时的正常变换
-    style.transform = `translate(${translateX.value}px, ${translateY.value}px) scale(${scale.value}) rotate(${videoRotation.value}deg)`
+    style.marginLeft = '-50vh'  // -width/2，水平居中
+    style.marginTop = '-50vw'   // -height/2，垂直居中
   }
   
   return style
@@ -2017,6 +2012,7 @@ onUnmounted(() => {
   height: 100%;
   /* 保持视频完整显示在16:9容器内 */
   object-fit: contain;
+  object-position: center center;  /* 确保视频内容在元素内居中 */
   background-color: #000;
 }
 
