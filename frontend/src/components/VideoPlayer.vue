@@ -148,23 +148,35 @@
             @click.stop="toggleRotation"
             :title="videoRotation === 0 ? '旋转90度' : '恢复方向'"
           >
-            <!-- 未旋转状态：竖屏手机图标 -->
-            <svg v-if="videoRotation === 0" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <!-- 手机轮廓（竖屏） -->
-              <rect x="7" y="2" width="10" height="20" rx="2" ry="2"></rect>
-              <!-- 顶部听筒 -->
-              <line x1="10" y1="5" x2="14" y2="5"></line>
-              <!-- 旋转箭头 -->
-              <path d="M18 10 L21 10 L21 7 M21 10 A8 8 0 0 1 15 17" stroke-width="1.5"></path>
+            <!-- 未旋转状态：手机+两侧旋转箭头 -->
+            <svg v-if="videoRotation === 0" viewBox="0 0 32 32" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- 中间手机轮廓（竖屏） -->
+              <rect x="13" y="6" width="6" height="20" rx="1" ry="1" stroke-width="2"></rect>
+              <!-- 顶部小圆点 -->
+              <circle cx="16" cy="9" r="0.5" fill="currentColor"></circle>
+              
+              <!-- 左侧旋转箭头（逆时针） -->
+              <path d="M 8 14 A 6 6 0 0 1 10 10" stroke-width="1.8"></path>
+              <path d="M 7 13 L 8 14 L 9 13" stroke-width="1.8" fill="none"></path>
+              
+              <!-- 右侧旋转箭头（顺时针） -->
+              <path d="M 24 18 A 6 6 0 0 1 22 22" stroke-width="1.8"></path>
+              <path d="M 25 19 L 24 18 L 23 19" stroke-width="1.8" fill="none"></path>
             </svg>
-            <!-- 已旋转状态：横屏手机图标 -->
-            <svg v-else viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <!-- 手机轮廓（横屏） -->
-              <rect x="2" y="7" width="20" height="10" rx="2" ry="2"></rect>
-              <!-- 侧面按钮 -->
-              <line x1="19" y1="10" x2="19" y2="14"></line>
-              <!-- 旋转箭头 -->
-              <path d="M14 3 L14 0 L17 0 M14 0 A8 8 0 0 1 7 6" stroke-width="1.5"></path>
+            <!-- 已旋转状态：手机+两侧旋转箭头 -->
+            <svg v-else viewBox="0 0 32 32" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- 中间手机轮廓（横屏） -->
+              <rect x="6" y="13" width="20" height="6" rx="1" ry="1" stroke-width="2"></rect>
+              <!-- 侧面小圆点 -->
+              <circle cx="23" cy="16" r="0.5" fill="currentColor"></circle>
+              
+              <!-- 左侧旋转箭头（逆时针） -->
+              <path d="M 14 8 A 6 6 0 0 0 10 10" stroke-width="1.8"></path>
+              <path d="M 13 7 L 14 8 L 13 9" stroke-width="1.8" fill="none"></path>
+              
+              <!-- 右侧旋转箭头（顺时针） -->
+              <path d="M 18 24 A 6 6 0 0 0 22 22" stroke-width="1.8"></path>
+              <path d="M 19 25 L 18 24 L 19 23" stroke-width="1.8" fill="none"></path>
             </svg>
           </button>
         </transition>
