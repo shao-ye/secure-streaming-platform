@@ -116,6 +116,18 @@
           <path d="M204.8 716.8m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z M204.8 307.2m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z M819.2 716.8m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z M819.2 307.2m-51.2 0a51.2 51.2 0 1 0 102.4 0 51.2 51.2 0 1 0-102.4 0Z"/>
         </svg>
       </button>
+
+      <!-- 退出全屏按钮（左上角，适配iOS安全区） -->
+      <button 
+        v-if="isCustomFullscreen"
+        class="exit-fullscreen-btn exit-left"
+        @click="toggleCustomFullscreen"
+        title="退出全屏"
+      >
+        <svg viewBox="0 0 1024 1024" width="24" height="24" fill="currentColor">
+          <path d="M563.2 512L844.8 230.4 793.6 179.2 512 460.8 230.4 179.2 179.2 230.4 460.8 512 179.2 793.6 230.4 844.8 512 563.2 793.6 844.8 844.8 793.6z"/>
+        </svg>
+      </button>
     </div>
 
     <!-- 状态栏 - 在缩放时向下移动 -->
@@ -1508,6 +1520,15 @@ onUnmounted(() => {
   top: 20px;
   right: 20px;
   bottom: auto;
+}
+
+/* 左上角退出按钮（适配iOS安全区） */
+.exit-fullscreen-btn.exit-left {
+  left: max(12px, env(safe-area-inset-left));
+  top: max(12px, env(safe-area-inset-top));
+  right: auto;
+  bottom: auto;
+  z-index: 101;
 }
 
 /* 移除全屏状态下的触摸行为限制，让视频控件正常工作 */
