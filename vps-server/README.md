@@ -2,6 +2,37 @@
 
 YOYO多用户、多频道安全流媒体Web播放平台 - VPS转码服务
 
+## 🚀 一键安装（推荐）
+
+### **零基础快速部署**
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/YOUR_USERNAME/secure-streaming-platform/main/vps-server/scripts/one-click-install.sh)
+```
+
+**仅需 3-5 分钟自动完成**：
+- ✅ 环境检测和依赖安装
+- ✅ 项目代码部署
+- ✅ 服务配置和启动
+- ✅ 自动生成 API 密钥
+
+📖 **详细文档**: [一键安装指南](../docs/VPS_ONE_CLICK_INSTALL_GUIDE.md)
+
+### **自定义安装**
+
+```bash
+# 指定域名
+VPS_DOMAIN=vps.example.com bash <(curl -Ls ...)
+
+# 自定义端口
+API_PORT=8080 bash <(curl -Ls ...)
+
+# 跳过依赖安装（已有环境）
+SKIP_DEPS=true bash <(curl -Ls ...)
+```
+
+---
+
 ## 项目简介
 
 这是一个基于Node.js + Express + FFmpeg的视频流转码服务，专门用于将RTMP流转换为HLS格式，支持按需转码和多用户共享观看。

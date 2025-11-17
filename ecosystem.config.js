@@ -5,6 +5,7 @@ module.exports = {
       script: 'src/app.js',
       instances: 1, // 单实例运行，避免进程管理冲突
       exec_mode: 'cluster',
+      env_file: './.env',
 
       // 环境配置
       env: {
