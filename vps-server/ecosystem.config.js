@@ -1,6 +1,3 @@
-// 加载 .env 文件（仅在本地开发时需要，生产环境由 PM2 自动加载）
-require('dotenv').config();
-
 module.exports = {
   apps: [
     {
@@ -8,11 +5,8 @@ module.exports = {
       script: 'src/app.js',
       instances: 1, // 单实例运行，避免进程管理冲突
       exec_mode: 'cluster',
-      
-      // 自动加载 .env 文件
-      env_file: '.env',
 
-      // 环境配置（.env 文件中的变量会覆盖这里的配置）
+      // 环境配置（.env 文件通过 app.js 中的 dotenv 加载）
       env: {
         NODE_ENV: 'development',
         PORT: 3000
