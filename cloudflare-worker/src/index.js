@@ -337,6 +337,31 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
+    // 🧪 CORS调试端点：用于快速定位前端跨域问题
+    if (path === '/debug/cors' && method === 'GET') {
+      try {
+        const originHeader = request.headers.get('Origin');
+        const debugHeaders = handleCors(request, env); // GET 场景返回的是普通对象
+        return new Response(JSON.stringify({
+          origin: originHeader || null,
+          allowOrigin: debugHeaders['Access-Control-Allow-Origin'] || null,
+          allowCredentials: debugHeaders['Access-Control-Allow-Credentials'] || null,
+          envFrontend: env.FRONTEND_DOMAIN || null,
+          envPages: env.PAGES_DOMAIN || null,
+          envWorker: env.WORKER_DOMAIN || null,
+          now: new Date().toISOString()
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...debugHeaders }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ status: 'error', message: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
     // 🆕 初始化路由（幂等）：用于小白一键部署后，通过浏览器完成KV/R2初始化与管理员创建
     // 支持两种方式：
     // - 推荐：GET /api/admin/init，并在请求头携带 X-Init-Secret: <secret>
