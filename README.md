@@ -1,4 +1,48 @@
-# YOYO流媒体平台 - 项目结构说明
+# YOYO流媒体平台 - 安全实时直播与监控平台
+
+## 🧩 项目简介
+
+YOYO流媒体平台是一个面向多种实时监控与直播场景的**安全直播/回放一体化解决方案**，通过 Cloudflare 边缘网络 + VPS 转码服务，实现：
+
+- 授权用户可通过浏览器安全观看摄像头实时画面；
+- 管理员可在后台集中管理频道、预加载与定时录制；
+- 利用 Cloudflare Tunnel 隐藏 VPS 源站 IP，提升安全性。
+
+本仓库包含完整的三端代码：Cloudflare Worker（后端 API 网关）、Vue 前端和 VPS 转码服务端。
+
+## ✨ 核心特性
+
+- **安全访问与隐藏源站**：
+  - 前端仅访问 Cloudflare Worker 域名；
+  - 通过 Cloudflare Tunnel 访问 VPS，无需在防火墙开放转码端口。
+
+- **多频道直播管理**：
+  - 支持多个 RTMP 频道配置、排序；
+  - 一键开启/关闭频道预加载与定时录制。
+
+- **智能预加载与定时录制**：
+  - 根据时间段和工作日规则自动启动/停止推流；
+  - 支持录制文件保留策略与清理任务。
+
+- **前后端完全开源**：
+  - 方便二次开发、私有化部署和安全审计。
+
+## 🛠 技术栈
+
+- **前端**：Vue 3 + Vite + Element Plus
+- **边缘层**：Cloudflare Workers + KV +（可选）R2 + Cloudflare Tunnel
+- **VPS 服务端**：Node.js (Express) + FFmpeg + Nginx + PM2
+
+## ⚡ 快速上手（概览）
+
+> 只展示整体流程，详细图文步骤请查看
+> [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)。
+
+1. 在 Cloudflare 中创建 Worker，部署 `cloudflare-worker/` 代码并绑定自定义域名（Workers API 域名）。  
+2. 在 VPS 上执行 `vps-server/scripts/vps-oneclick.sh`，完成 Node.js / FFmpeg / Nginx / PM2 安装与服务端部署。  
+3. 在 Cloudflare Zero Trust 中创建 Tunnel，将 Public Hostname 指向 VPS 上的 Nginx 端口。  
+4. 部署前端（如 Cloudflare Pages），将 API Base URL 指向 Workers API 域名。  
+5. 通过管理后台添加频道、配置预加载与录制，即可开始使用。
 
 ## 📁 目录结构
 
@@ -102,3 +146,5 @@ pm2 restart ecosystem.config.js
 ## 📞 联系方式
 
 如有问题，请查看 \docs/\ 目录中的详细文档。
+
+如需业务或技术支持，可发送邮件至：`shaoye@262777.xyz`
