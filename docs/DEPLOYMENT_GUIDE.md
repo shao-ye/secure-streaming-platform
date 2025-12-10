@@ -1,0 +1,369 @@
+# YOYO 安全实时直播与监控平台部署指南（Cloudflare + VPS）
+
+> 本文档面向希望在自己 VPS + Cloudflare 环境中部署本项目的用户。
+> 适用于家庭、校园、门店、机房等多种实时监控与直播场景。
+
+---
+
+## 1. 系统与架构概览
+
+- **前端 Web**：授权用户/管理员使用的浏览界面（推荐部署到 Cloudflare Pages）。
+- **Cloudflare Workers**：统一的 API 网关 + 鉴权 + HLS 隧道代理。
+- **VPS 转码服务**：运行在 VPS 上的转码 + HLS 服务（Node.js + FFmpeg + Nginx）。
+- **Cloudflare Tunnel（可选，推荐）**：将 VPS 的 HLS/API 暴露给 Worker，而无需在防火墙上开放 VPS 端口。
+
+> 建议整体架构为：浏览器 → Cloudflare Pages（前端）→ Cloudflare Workers（API/HLS 代理）→ Cloudflare Tunnel → VPS（Nginx + Node.js + FFmpeg）。
+
+---
+
+## 2. 域名与角色规划
+
+以下是**推荐的占位示例**，请用你自己的域名替换 `your-domain.com`：
+
+- `https://yoyo.your-domain.com`  
+  前端访问域名（授权用户/管理员访问的地址）。
+
+- `https://yoyoapi.your-domain.com`  
+  绑定到 Cloudflare Worker，用作 **API + HLS 隧道入口**（下文称 *Workers API 域名*）。
+
+- `https://tunnel.your-domain.com`（可选，但推荐）  
+  Cloudflare Tunnel 的 Public Hostname，指向 VPS 上 Nginx 端口（默认 52535）。
+
+- （可选直连）`https://yoyo-vps.your-domain.com`  
+  如需“绕过 Cloudflare Tunnel 的直连模式”，可以额外配置到 VPS/Nginx。
+
+后文统一使用以下占位：
+
+- `FRONTEND_DOMAIN = https://yoyo.your-domain.com`
+- `WORKER_DOMAIN / WORKERS_API_URL = https://yoyoapi.your-domain.com`
+- `VPS_API_URL = https://tunnel.your-domain.com`
+
+---
+
+## 3. 前置条件
+
+- 一台国外 VPS（推荐）：
+    - Linux：Ubuntu 20+ / Debian 11+ / CentOS 7+
+    - 内存建议 ≥ 2G
+    - 拥有 `root` 或 sudo 权限
+- 一个已接入 Cloudflare 的域名（已把 NS 修改到 Cloudflare）
+- GitHub 账号（用于 Fork 本仓库）
+- Cloudflare 账号，并已开启 Workers & Pages / Zero Trust（如需 Tunnel）
+
+---
+
+## 4. 部署步骤总览
+
+1. **Fork GitHub 仓库并获取代码**
+2. **在 Cloudflare 中接入域名并配置 DNS 解析**
+3. **部署 Cloudflare Pages 前端，并配置环境变量**
+4. **部署 Cloudflare Workers API 网关，并配置环境变量与密钥**
+5. **在 VPS 上运行一键部署脚本，完成转码服务部署（可选使用 Cloudflare Tunnel）**
+6. **初始化系统，并登录管理后台完成频道/预加载等配置**
+
+> 下文将按以上顺序展开说明。
+
+---
+
+## 5. 步骤一：Fork 仓库并获取代码
+
+```bash
+# 在本地克隆你自己账号下 Fork 后的仓库
+git clone https://github.com/<your-account>/secure-streaming-platform.git
+cd secure-streaming-platform
+```
+
+> **推荐做法**：先在 GitHub 上将本仓库 **Fork 到你自己的账号**，然后使用上面的地址 `https://github.com/<your-account>/secure-streaming-platform.git` 进行 clone，方便你后续自定义改动和升级，而不影响上游仓库。
+
+---
+
+## 6. 步骤二：在 Cloudflare 中配置域名与 DNS
+
+1. 登录 Cloudflare Dashboard，确保你的根域名（如 `your-domain.com`）已经接入。
+2. 在 **DNS** 页面确认：
+    - 可以创建子域名 `yoyo.your-domain.com`、`yoyoapi.your-domain.com`、`tunnel.your-domain.com`；
+    - 一般情况下，Workers 自定义域名和 Tunnel Public Hostname 会自动为你创建对应 DNS 记录，你只需要在对应功能里选好域名即可。
+
+典型配置思路：
+
+- `yoyo.your-domain.com`：
+    - 作为前端访问域名，用于绑定到 Cloudflare Pages 项目；
+    - 在 Pages 项目中添加自定义域名后，Cloudflare 会自动创建 CNAME 记录。
+
+- `yoyoapi.your-domain.com`：
+    - 作为 Workers API 对外域名，在 Workers 中添加自定义域名时选择；
+    - Cloudflare 会为你创建一条指向 Worker 的 DNS 记录。
+
+- `tunnel.your-domain.com`（可选）：
+    - 在 Cloudflare Zero Trust 的 Tunnel 配置中，添加 Public Hostname 时选择该子域名；
+    - Cloudflare 也会自动管理对应 CNAME 记录。
+
+> 如果你不熟悉 Cloudflare DNS 细节，可以优先通过 Workers/Pages/Tunnel 的向导添加自定义域名，Cloudflare 一般会帮你创建所需记录。
+
+---
+
+## 7. 步骤三：部署 Cloudflare Pages（前端）
+
+前端源码位于仓库的 `frontend` 目录。
+
+### 7.1 通过 Git 集成创建 Pages 项目
+
+1. 登录 Cloudflare Dashboard → Pages → **Create a project**。
+2. 选择 **Connect to Git**，授权访问你 Fork 后的 GitHub 仓库。
+3. 选择包含本项目的仓库。
+
+### 7.2 构建配置
+
+在 Pages 的构建设置中配置：
+
+- **Production branch**：`main`（或你实际使用的分支）
+- **Build command**：`npm run build`
+- **Build output directory**：`dist`
+- **Root directory**：`frontend`
+
+### 7.3 环境变量（推荐配置）
+
+在 Pages 项目的 **Settings → Environment variables** 中添加：
+
+| Key                  | 示例值                                                       | 说明                               |
+|----------------------|--------------------------------------------------------------|------------------------------------|
+| `VITE_API_BASE_URL`  | `https://yoyoapi.your-domain.com`                           | 后端 API 基础 URL（Worker 域名）   |
+| `VITE_HLS_PROXY_URL` | `https://yoyoapi.your-domain.com/hls`                       | HLS 播放代理 URL                   |
+| `VITE_WORKER_URL`    | `https://yoyoapi.your-domain.com`                           | Cloudflare Worker 对外访问域名     |
+| `VITE_APP_TITLE`     | `YOYO流媒体平台`                                            | 前端应用标题                       |
+| `VITE_APP_VERSION`   | `1.0.0`                                                      | 应用版本号                         |
+| `VITE_ENVIRONMENT`   | `production`                                                 | 运行环境标识                       |
+| `VITE_DEBUG`         | `false`                                                      | 是否启用调试日志                   |
+| `VITE_LOG_LEVEL`     | `error`                                                      | 日志级别（debug/info/warn/error） |
+
+> 请使用你自己的域名替换 `your-domain.com`，不要在开源仓库中提交真实域名配置。
+
+部署完成后，可以在 Pages 项目中为其绑定 `yoyo.your-domain.com` 作为前端最终访问域名。
+
+---
+
+## 8. 步骤四：部署 Cloudflare Workers（API 网关）
+
+Workers 代码位于仓库的 `cloudflare-worker` 目录。
+
+### 8.1 创建 Worker 并部署代码
+
+1. 在 Cloudflare Dashboard 中进入 **Workers & Pages → Workers**。
+2. 创建一个 Worker（可以先用默认脚本占位）。
+3. 使用 `wrangler` 或网页编辑器，将 `cloudflare-worker` 目录中的代码部署到该 Worker：
+
+```bash
+cd cloudflare-worker
+# 按需修改 wrangler.toml 后：
+wrangler deploy --env production
+```
+
+4. 在 Worker 的 **Triggers → Custom Domains** 中，为其绑定 `https://yoyoapi.your-domain.com`。
+
+### 8.2 绑定 KV 与 R2（可选但推荐）
+
+参考仓库中的 `wrangler.toml.example`：
+
+- KV：
+    - `YOYO_USER_DB`（存储用户、频道、预加载/录制配置等）
+- R2（如需）：
+    - `PROXY_TEST_HISTORY`（代理诊断记录）
+    - `LOGIN_LOGS`（登录日志）
+
+在 Cloudflare Dashboard 中创建相应资源并绑定到 Worker。
+
+### 8.3 配置 Worker 环境变量
+
+在 Worker 的 **Settings → Variables** 中添加：
+
+#### 8.3.1 业务相关变量（普通变量）
+
+| Key               | 示例值                              | 说明                                      |
+|-------------------|-------------------------------------|-------------------------------------------|
+| `FRONTEND_DOMAIN` | `https://yoyo.your-domain.com`      | 前端访问域名，用于 CORS 校验             |
+| `PAGES_DOMAIN`    | `https://yoyo.pages.dev`（可选）    | 如前端托管在 Pages 默认域名时填写         |
+| `WORKER_DOMAIN`   | `https://yoyoapi.your-domain.com`   | Worker 对外访问域名，用于生成 HLS 播放 URL |
+| `VPS_API_URL`     | `https://tunnel.your-domain.com`    | Worker 通过 Tunnel 访问 VPS API/Nginx    |
+
+> 其中 `VPS_API_URL` 一般指向 Cloudflare Tunnel 的 Public Hostname（如 `tunnel.your-domain.com`），Worker 会通过该地址访问 VPS 上的 Nginx/API。
+
+#### 8.3.2 安全相关变量（建议配置为 Secret）
+
+下列敏感信息建议在 Cloudflare Dashboard 中使用 **Secret** 类型保存：
+
+| Key                        | 说明                                                                 |
+|----------------------------|----------------------------------------------------------------------|
+| `VPS_API_KEY`              | Worker 访问 VPS API 时使用的鉴权密钥，由 VPS 一键脚本生成           |
+| `EMERGENCY_ADMIN_USERNAME` | 紧急管理员账号用户名，例如 `admin`                                  |
+| `EMERGENCY_ADMIN_PASSWORD` | 紧急管理员账号初始密码，用于首次登录管理后台                        |
+| `INIT_SECRET`              | 调用 `/api/admin/init` 初始化接口时使用的安全 Token，对应请求头 `X-Init-Secret` |
+
+##### 使用 INIT_SECRET 执行初始化
+
+配置好 `INIT_SECRET` 后，可以通过类似下面的命令初始化系统（一般只需执行一次）：
+
+```bash
+curl "https://yoyoapi.your-domain.com/api/admin/init" \
+  -H "X-Init-Secret: <INIT_SECRET>"
+```
+
+接口会根据 Worker 配置自动创建管理员账号、初始化 KV 索引等。初始化完成后，请妥善保管或更新相关密钥。
+
+---
+
+## 9. 步骤五：部署 VPS 转码服务（一键脚本）
+
+VPS 端代码位于仓库的 `vps-server` 目录，你可以通过一键脚本在 VPS 上完成安装与配置。
+
+### 9.1 连接到 VPS
+
+```bash
+ssh root@your-vps-ip
+```
+
+### 9.2 执行一键部署脚本
+
+在 VPS 上执行（以实际仓库地址为准，可放在你自己的 GitHub 仓库）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/<your-account>/secure-streaming-platform/master/vps-server/scripts/vps-oneclick.sh)
+```
+
+脚本将自动完成：
+
+- 安装 Node.js 18 / FFmpeg / Nginx / PM2；
+- 下载 `vps-server` 子目录代码到 `/opt/yoyo-transcoder`；
+- 生成 `.env` 配置文件；
+- 启动 `vps-transcoder-api`（默认监听 `3000`，仅本机访问）；
+- 生成 Nginx 配置，默认监听 `52535` 端口。
+
+### 9.3 交互参数说明（重点）
+
+脚本会依次询问：
+
+- **API 端口**（默认 `3000`）：
+    - Node.js API 内部监听端口；
+    - 仅本机访问，无需对外开放防火墙端口。
+
+- **Nginx 暴露端口**（默认 `52535`）：
+    - Cloudflare Tunnel / 直连都连到这个端口；
+    - 若只使用 Tunnel，可以在防火墙中仅允许 `cloudflared` 本地访问。
+
+- **是否安装 Cloudflare Tunnel（Token）**：
+    - 如果选择 `y`，需要粘贴 Cloudflare Zero Trust 中 Tunnel 的 Token；
+    - 脚本会自动安装并启动 `cloudflared`。
+
+- **Tunnel Hostname（可选）**：
+    - 用于自动健康检查，例如 `tunnel.your-domain.com`；
+    - 建议与上文 `VPS_API_URL` 对应。
+
+- **Cloudflare Worker API URL（非常关键）**：
+    - 请输入：`https://yoyoapi.your-domain.com`；
+    - 写入 `.env` 中的 `WORKERS_API_URL`，用于 VPS 反向调用 Worker（读取预加载/录制配置等）。
+
+> 如果这里直接回车使用默认占位值：
+> - 直播基础播放 **不会受影响**；
+> - 但 VPS 无法从 Worker 读取预加载/录制配置，高级调度功能会失效；
+> - 后续可在 `/opt/yoyo-transcoder/.env` 中修改 `WORKERS_API_URL`，再执行：
+    >   ```bash
+>   pm2 restart vps-transcoder-api --update-env
+>   ```
+
+### 9.4 防火墙与端口策略
+
+- **无需对外开放 3000 端口**（Node.js API 内部端口，仅 Nginx 访问）。
+- 对外通常只需：
+    - 允许 Cloudflare Tunnel 进程访问 `127.0.0.1:52535`；
+    - 若确有直连需求，可考虑开放 52535，对应 `https://yoyo-vps.your-domain.com` 之类的直连域名（生产环境更推荐只通过 Cloudflare 访问）。
+
+---
+
+## 10. 步骤六：初始化与验证
+
+### 10.1 初始化 Worker 配置
+
+参考上文 **8.3.2 使用 INIT_SECRET 执行初始化**，调用：
+
+```bash
+curl "https://yoyoapi.your-domain.com/api/admin/init" \
+  -H "X-Init-Secret: <INIT_SECRET>"
+```
+
+初始化成功后，会在 KV 中写入必要配置，并创建管理员账号。
+
+### 10.2 登录管理后台
+
+1. 在浏览器访问前端域名：`https://yoyo.your-domain.com`；
+2. 使用紧急管理员账号（或初始化后生成的账号）登录；
+3. 在“频道管理”中添加 RTMP 源地址、频道名称与排序；
+4. 在“预加载与录制配置”中按工作日/时间段配置调度策略。
+
+### 10.3 验证 HLS 播放（隧道优化）
+
+1. 选择一个已配置 RTMP 的频道，开始向 VPS 推流；
+2. 在前端选择该频道，开启“隧道优化”播放；
+3. 打开浏览器开发者工具，检查：
+    - HLS 请求类似：
+      `https://yoyoapi.your-domain.com/tunnel-proxy/hls/<channelId>/playlist.m3u8`；
+    - `.ts` 分片返回状态码为 `200`；
+    - 无明显 CORS 错误。
+
+---
+
+## 11. 常见问题（FAQ）
+
+### Q1：VPS 上需要开放 3000 端口吗？
+
+- **不需要，且不建议对外开放。**
+- 3000 是 Node.js API 内部端口，仅供 Nginx（本机 `127.0.0.1`）访问。
+- 对外只需：
+    - Cloudflare Tunnel 连到 Nginx 端口（默认 52535）；
+    - 若使用直连模式，则开放 52535 即可。
+
+### Q2：一键脚本时忘记正确填写 Worker API URL 怎么办？
+
+1. 编辑 VPS `.env`：
+
+   ```bash
+   nano /opt/yoyo-transcoder/.env
+   # 修改为：
+   WORKERS_API_URL=https://yoyoapi.your-domain.com
+   ```
+
+2. 重启服务并加载新环境：
+
+   ```bash
+   pm2 restart vps-transcoder-api --update-env
+   ```
+
+### Q3：如何排查播放异常？
+
+- 在浏览器打开开发者工具 → Network 面板：
+    - 检查 HLS `.m3u8` 和 `.ts` 请求是否都返回 200；
+    - 检查请求域名是否都是 `yoyoapi.your-domain.com`（而不是 VPS 直连 IP）。
+- 在 VPS 上查看日志：
+
+  ```bash
+  pm2 status
+  pm2 logs vps-transcoder-api --lines 50 --nostream
+  ```
+
+- 在 Cloudflare Dashboard 查看 Workers 日志，关注是否有 CORS 或鉴权相关错误。
+
+---
+
+## 12. 后续维护与升级
+
+- **更新 VPS 端代码**：
+
+  ```bash
+  cd /opt/yoyo-transcoder
+  # 根据文档执行更新脚本，或手动 git pull + npm install
+  ```
+
+- **调整预加载/录制策略**：
+    - 直接在前端管理后台修改；
+    - Worker 会更新 KV，VPS 调度服务会定期拉取最新配置。
+
+- **监控与告警**：
+    - 可以结合 Cloudflare Analytics、VPS 上的监控工具，构建自己的告警体系。
