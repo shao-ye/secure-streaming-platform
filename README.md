@@ -37,6 +37,9 @@ YOYO流媒体平台是一个面向多种实时监控与直播场景的**安全�
 
 > 只展示整体流程，详细图文步骤请查看
 > [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)。
+>
+> 如需了解 VPS 一键卸载脚本的行为与用法，请参见：
+> [`docs/VPS_UNINSTALL_GUIDE.md`](./docs/VPS_UNINSTALL_GUIDE.md)。
 
 1. 在 Cloudflare 中创建 Worker，部署 `cloudflare-worker/` 代码并绑定自定义域名（Workers API 域名）。  
 2. 在 VPS 上执行 `vps-server/scripts/vps-oneclick.sh`，完成 Node.js / FFmpeg / Nginx / PM2 安装与服务端部署。  
