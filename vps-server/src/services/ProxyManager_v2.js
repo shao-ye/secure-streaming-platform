@@ -322,8 +322,8 @@ class ProxyManager {
       const rules = [
         // 为FFmpeg创建特殊的路由规则，但排除本地服务
         `iptables -t nat -A OUTPUT -p tcp --dport 1935 ! -d 127.0.0.0/8 -j REDIRECT --to-port ${this.proxyPort + 1}`,
-        `iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d 127.0.0.0/8 ! -d 142.171.75.220 -j REDIRECT --to-port ${this.proxyPort + 1}`,
-        `iptables -t nat -A OUTPUT -p tcp --dport 443 ! -d 127.0.0.0/8 ! -d 142.171.75.220 -j REDIRECT --to-port ${this.proxyPort + 1}`
+        `iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d 127.0.0.0/8 ! -d 127.0.0.1 -j REDIRECT --to-port ${this.proxyPort + 1}`,
+        `iptables -t nat -A OUTPUT -p tcp --dport 443 ! -d 127.0.0.0/8 ! -d 127.0.0.1 -j REDIRECT --to-port ${this.proxyPort + 1}`
       ];
 
       for (const rule of rules) {
@@ -353,8 +353,8 @@ class ProxyManager {
       // 删除之前添加的iptables规则
       const rules = [
         `iptables -t nat -D OUTPUT -p tcp --dport 1935 ! -d 127.0.0.0/8 -j REDIRECT --to-port ${this.proxyPort + 1}`,
-        `iptables -t nat -D OUTPUT -p tcp --dport 80 ! -d 127.0.0.0/8 ! -d 142.171.75.220 -j REDIRECT --to-port ${this.proxyPort + 1}`,
-        `iptables -t nat -D OUTPUT -p tcp --dport 443 ! -d 127.0.0.0/8 ! -d 142.171.75.220 -j REDIRECT --to-port ${this.proxyPort + 1}`
+        `iptables -t nat -D OUTPUT -p tcp --dport 80 ! -d 127.0.0.0/8 ! -d 127.0.0.1 -j REDIRECT --to-port ${this.proxyPort + 1}`,
+        `iptables -t nat -D OUTPUT -p tcp --dport 443 ! -d 127.0.0.0/8 ! -d 127.0.0.1 -j REDIRECT --to-port ${this.proxyPort + 1}`
       ];
 
       for (const rule of rules) {
