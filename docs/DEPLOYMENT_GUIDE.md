@@ -418,6 +418,7 @@ curl "https://yoyoapi.your-domain.com/api/admin/init" \
 ### 10.3 验证 HLS 播放（隧道优化）
 
 1. 选择一个已配置 RTMP 的频道，开始向 VPS 推流；
+   ![ScreenShot_2025-12-12_183919_809.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_183919_809.png)
 2. 在前端选择该频道，开启“隧道优化”播放；
    ![ScreenShot_2025-12-12_183614_543.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_183614_543.png)
 3. 打开浏览器开发者工具，检查：
