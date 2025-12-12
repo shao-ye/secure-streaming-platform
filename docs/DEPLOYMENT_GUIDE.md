@@ -136,17 +136,20 @@
 ### 7.3 环境变量（推荐配置）
 
 1. 在部署完成的Pages项目中，点击 **设置** ①，进入设置页面，点击 **变量和机密** ②，在‘**变量和机密**’标签下，点击**‘+添加’**按钮，如下变量，下面有添加后的图示。
-   ![ScreenShot_2025-12-12_131130_177.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_131130_177.png)
 
-| Key                  | 示例值                                                       | 说明                               |
-|----------------------|--------------------------------------------------------------|------------------------------------|
-| `VITE_API_BASE_URL`  | `https://yoyoapi.your-domain.com`                           | 后端 API 基础 URL（Worker 域名）   |
-| `VITE_HLS_PROXY_URL` | `https://yoyoapi.your-domain.com/hls`                       | HLS 播放代理 URL                   |
-| `VITE_WORKER_URL`    | `https://yoyoapi.your-domain.com`                           | Cloudflare Worker 对外访问域名     |
-| `VITE_APP_TITLE`     | `YOYO流媒体平台`                                            | 前端应用标题                       |
-| `VITE_APP_VERSION`   | `1.0.0`                                                      | 应用版本号                         |
-| `VITE_ENVIRONMENT`   | `production`                                                 | 运行环境标识                       |
-| `VITE_DEBUG`         | `false`                                                      | 是否启用调试日志                   |
+其中`VITE_API_BASE_URL`、`VITE_HLS_PROXY_URL`、`VITE_WORKER_URL`这三个变量与workers配置的域名地址相关，等workers配置完成后，再进行配置。
+
+![ScreenShot_2025-12-12_131130_177.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_131130_177.png)
+
+| Key                  | 示例值                                                       | 说明                       |
+|----------------------|--------------------------------------------------------------|--------------------------|
+| `VITE_API_BASE_URL`  | `https://yoyoapi.your-domain.com`                           | 后端 API 基础 URL（Worker 域名） |
+| `VITE_HLS_PROXY_URL` | `https://yoyoapi.your-domain.com/hls`                       | HLS 播放代理 URL             |
+| `VITE_WORKER_URL`    | `https://yoyoapi.your-domain.com`                           | Cloudflare Worker 对外访问域名 |
+| `VITE_APP_TITLE`     | `YOYO流媒体平台`                                            | 前端应用标题                   |
+| `VITE_APP_VERSION`   | `1.0.0`                                                      | 应用版本号                    |
+| `VITE_ENVIRONMENT`   | `production`                                                 | 运行环境标识                   |
+| `VITE_DEBUG`         | `false`                                                      | 是否启用调试日志                 |
 | `VITE_LOG_LEVEL`     | `error`                                                      | 日志级别（debug/info/warn/error） |
 
 > 请使用你自己的域名替换 `your-domain.com`，不要在开源仓库中提交真实域名配置。
@@ -245,7 +248,7 @@ Workers 代码位于仓库的 `cloudflare-worker` 目录。
    ![ScreenShot_2025-12-12_144020_658.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_144020_658.png)
 3. 输入前面准备好的自定义域名，设置子域为 `yoyoapi.your-domain.com`，点击 **添加域** ③，（`your-domain.com` 替换成你的域名）。
    ![ScreenShot_2025-12-12_144225_994.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_144225_994.png)
-4. 在浏览器中访问该域名，如果出现如下页面则说明绑定成功。
+4. 在浏览器中访问该域名，如果出现如下页面则说明绑定成功。**（Workers域名配置完成后，别忘了要回到之前配置好的Pagers中补充遗留的三个环境变量对Workers域名绑定）**
    ![ScreenShot_2025-12-12_144652_703.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_144652_703.png)
 
 #### 8.3.2 业务相关变量（普通变量）
@@ -387,26 +390,36 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-account>/secure-stream
 
 ### 10.1 初始化 Worker 配置
 
-参考上文 **8.3.2 使用 INIT_SECRET 执行初始化**，调用：
+参考上文 **8.3.2 使用 INIT_SECRET 执行初始化**，调用：（前面部署过程执行过此步骤即可省略）
 
 ```bash
 curl "https://yoyoapi.your-domain.com/api/admin/init" \
   -H "X-Init-Secret: <INIT_SECRET>"
 ```
 
-初始化成功后，会在 KV 中写入必要配置，并创建管理员账号。
-
 ### 10.2 登录管理后台
 
 1. 在浏览器访问前端域名：`https://yoyo.your-domain.com`；
 2. 使用紧急管理员账号（或初始化后生成的账号）登录；
+   初始化成功后，会在 KV 中写入必要配置，并创建管理员账号，Workers中配置的`INIT_SECRET`变量和`EMERGENCY_ADMIN_USERNAME`变量（如果配置了的话）和`EMERGENCY_ADMIN_PASSWORD`变量即可删除，以免信息泄露。
+
+    在 **后台管理** → **用户管理** 页面可以添加删除普通用户账号，并为其设置密码。
+
+    ![ScreenShot_2025-12-12_181557_884.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_181557_884.png)
 3. 在“频道管理”中添加 RTMP 源地址、频道名称与排序；
+   ![ScreenShot_2025-12-12_182137_472.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182137_472.png)
+   
 4. 在“预加载与录制配置”中按工作日/时间段配置调度策略。
+   可以单独为频道设置是否需要进行预加载与录制，并设置预加载与录制时长，也可以设置播放视频比例。
+   ![ScreenShot_2025-12-12_182341_331.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182341_331.png)
+   也可以为所有频道统一设置，录制的视频文件保存时长，进行统一清理，以及是否启用视频分段录制，防止单个视频文件过大。
+   ![ScreenShot_2025-12-12_182931_784.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182931_784.png)
 
 ### 10.3 验证 HLS 播放（隧道优化）
 
 1. 选择一个已配置 RTMP 的频道，开始向 VPS 推流；
 2. 在前端选择该频道，开启“隧道优化”播放；
+   ![ScreenShot_2025-12-12_183614_543.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_183614_543.png)
 3. 打开浏览器开发者工具，检查：
     - HLS 请求类似：
       `https://yoyoapi.your-domain.com/tunnel-proxy/hls/<channelId>/playlist.m3u8`；
