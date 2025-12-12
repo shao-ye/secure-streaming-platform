@@ -72,7 +72,7 @@
 3. Fork 完成后，GitHub 会自动跳转到你自己账号下的仓库页面，地址类似：`https://github.com/<your-account>/secure-streaming-platform`。你也可以顺手点一下 **Star**（标记为 ②），方便以后在 GitHub 中快速找到这个仓库。
 4. 记住这个新仓库的地址，后续在 Cloudflare Pages、VPS 一键脚本等界面中，只需要在表单里填写这个地址即可，全程通过网页完成配置，不需要在自己电脑上安装 Git 或执行命令行。
 
-![在 GitHub 页面 Fork 并标记 Star](./deployment/image/github-fork.png)
+![b4f4786f-0295-4026-b70e-12d1bfcf89fa.png](https://image.5202021.xyz/api/rfile/b4f4786f-0295-4026-b70e-12d1bfcf89fa.png)
 
 > **说明**：本部署指南默认用户只需要通过浏览器网页操作即可完成部署；如果你是进阶用户，也可以根据需要在本地克隆这个仓库进行二次开发，但这不是必需步骤。
 
