@@ -475,10 +475,13 @@ curl "https://yoyoapi.your-domain.com/api/admin/init" \
 
 - **更新 VPS 端代码**：
 
-  ```bash
-  cd /opt/yoyo-transcoder
-  # 根据文档执行更新脚本，或手动 git pull + npm install
-  ```
+  1. 在GitHub中 Sync fork 仓库，获取最新代码。
+     ![ScreenShot_2025-12-12_184722_737.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_184722_737.png)
+  
+  2. 登录VPS，执行一键更新脚本：
+    ```bash
+  curl -fsSL https://raw.githubusercontent.com/shao-ye/secure-streaming-platform/master/vps-server/scripts/vps-oneclick.sh | bash -s -- --update
+    ```
 
 - **调整预加载/录制策略**：
     - 直接在前端管理后台修改；
