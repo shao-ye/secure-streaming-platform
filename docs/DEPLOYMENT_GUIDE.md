@@ -69,11 +69,10 @@
 
 1. 在浏览器中打开本项目的 GitHub 页面：[https://github.com/shao-ye/secure-streaming-platform](https://github.com/shao-ye/secure-streaming-platform)。
 2. 如下图所示，在页面右上角点击 **Fork** 按钮（标记为 ①），将仓库 Fork 到你自己的 GitHub 账号下。
-3. Fork 完成后，GitHub 会自动跳转到你自己账号下的仓库页面，地址类似：`https://github.com/<your-account>/secure-streaming-platform`。你也可以顺手点一下 **Star**（标记为 ②），方便以后在 GitHub 中快速找到这个仓库。
+3. Fork 完成后，GitHub 会自动跳转到你自己账号下的仓库页面，地址类似：`https://github.com/<your-account>/secure-streaming-platform`，<your-account>是你自己的github账号。你也可以顺手点一下 **Star**（标记为 ②），方便以后在 GitHub 中快速找到这个仓库。
 4. 记住这个新仓库的地址，后续在 Cloudflare Pages、VPS 一键脚本等界面中，只需要在表单里填写这个地址即可，全程通过网页完成配置，不需要在自己电脑上安装 Git 或执行命令行。
 
-![b4f4786f-0295-4026-b70e-12d1bfcf89fa.png](https://image.5202021.xyz/api/rfile/b4f4786f-0295-4026-b70e-12d1bfcf89fa.png)
-
+![ScreenShot_2025-12-12_121611_576.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_121611_576.png)
 > **说明**：本部署指南默认用户只需要通过浏览器网页操作即可完成部署；如果你是进阶用户，也可以根据需要在本地克隆这个仓库进行二次开发，但这不是必需步骤。
 
 ---
@@ -84,7 +83,7 @@
 2. 在 **DNS** 页面确认：
     - 可以创建子域名 `yoyo.your-domain.com`、`yoyoapi.your-domain.com`、`tunnel.your-domain.com`；
     - 一般情况下，Workers 自定义域名和 Tunnel Public Hostname 会自动为你创建对应 DNS 记录，你只需要在对应功能里选好域名即可。
-
+      ![ScreenShot_2025-12-12_121828_289.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_121828_289.png)
 典型配置思路：
 
 - `yoyo.your-domain.com`：
@@ -109,22 +108,35 @@
 
 ### 7.1 通过 Git 集成创建 Pages 项目
 
-1. 登录 Cloudflare Dashboard → Pages → **Create a project**。
-2. 选择 **Connect to Git**，授权访问你 Fork 后的 GitHub 仓库。
-3. 选择包含本项目的仓库。
+1. 登录 Cloudflare Dashboard → 计算和AI ① → Workers和Pages ② → **创建应用程序** ③。
+   ![ScreenShot_2025-12-12_122103_820.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_122103_820.png)
+2. 点击 **Get started** ①，调整Pages创建页面。
+   ![ScreenShot_2025-12-12_122309_261.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_122309_261.png)
+3. 选择 **导入现有Git存储库**，点击‘**开始使用**’①，授权访问你 Fork 后的 GitHub 仓库。
+   ![ScreenShot_2025-12-12_122437_037.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_122437_037.png)
+4. 选择包含本项目的Git仓库，选择刚才Fork的项目①，点击‘**开始设置**’②。
+   ![ScreenShot_2025-12-12_122753_119.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_122753_119.png)
+5. ‘**框架预设**’选择 ‘**Vue**’①,会自动填充下面的‘**构建命令**’和‘**构建输出目录**’的值，点击‘**根目录（高级）**’，‘**路径**’里输入`frontend`②，然后点击‘**保存并部署**’③ 。
+   ![ScreenShot_2025-12-12_123315_042.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_123315_042.png)
+6. 等待部署完成，点击 **继续处理项目** ①查看项目。
+   ![ScreenShot_2025-12-12_124802_852.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_124802_852.png)
+7. 
 
-### 7.2 构建配置
+### 7.2 配置Pages自定义域
 
-在 Pages 的构建设置中配置：
-
-- **Production branch**：`main`（或你实际使用的分支）
-- **Build command**：`npm run build`
-- **Build output directory**：`dist`
-- **Root directory**：`frontend`
+1. 在部署完成的Pages项目中，点击 **自定义域** ①，进入自定义域设置页面，点击 **设置自定义域** ②。
+   ![ScreenShot_2025-12-12_125301_045.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_125301_045.png)
+2. 输入前面准备好的自定义域名 `yoyo.your-domain.com`，点击 **继续** ③。
+   ![ScreenShot_2025-12-12_125804_851.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_125804_851.png)
+3. 点击 **激活域** ①，等待完成。
+   ![ScreenShot_2025-12-12_130131_994.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_130131_994.png)
+4. 在浏览器中访问刚才设置的自定义域名 `https://yoyo.your-domain.com`，如果显示如下页面，则说明部署成功。
+   ![ScreenShot_2025-12-12_130337_968.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_130337_968.png)
 
 ### 7.3 环境变量（推荐配置）
 
-在 Pages 项目的 **Settings → Environment variables** 中添加：
+1. 在部署完成的Pages项目中，点击 **设置** ①，进入设置页面，点击 **变量和机密** ②，在‘**变量和机密**’标签下，点击**‘+添加’**按钮，如下变量。
+   ![ScreenShot_2025-12-12_131130_177.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_131130_177.png)
 
 | Key                  | 示例值                                                       | 说明                               |
 |----------------------|--------------------------------------------------------------|------------------------------------|
@@ -145,33 +157,53 @@
 
 ## 8. 步骤四：部署 Cloudflare Workers（API 网关）
 
+### 8.1 创建 KV 与 R2（可选但推荐）
+
+1. （必须）创建 KV 存储资源，登录 Cloudflare Dashboard → 存储和数据库 ① → Workers KV ② → **Create Instance** ③。
+   ![ScreenShot_2025-12-12_134328_038.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_134328_038.png)
+2. **命名空间名称**输入 `YOYO_USER_DB` ①，点击 **创建** 按钮②。（存储用户、频道、预加载/录制配置等）
+   ![ScreenShot_2025-12-12_134720_062.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_134720_062.png)
+3. （如需）创建 R2 存储资源，登录 Cloudflare Dashboard → 存储和数据库 → R2对象存储  → 概述 ① → **创建存储桶** ②。
+   ![ScreenShot_2025-12-12_135344_495.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_135344_495.png)
+4. **存储桶名称**输入 `login-logs`（可随便输入） ①，点击 **创建存储桶** 按钮②。（登录日志）
+   ![ScreenShot_2025-12-12_135925_002.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_135925_002.png)
+5. （可选）然后再退出来重新进入创建第二个存储桶，**存储桶名称**输入 `proxy-test-history`（可随便输入） ①，点击 **创建存储桶** 按钮②。（代理诊断记录）
+   ![ScreenShot_2025-12-12_140202_848.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_140202_848.png)
+
+后面步骤中会将创建的资源绑定到 Worker。
+
 Workers 代码位于仓库的 `cloudflare-worker` 目录。
 
-### 8.1 创建 Worker 并部署代码
+### 8.2 创建 Worker 并部署代码
 
-1. 在 Cloudflare Dashboard 中进入 **Workers & Pages → Workers**。
-2. 创建一个 Worker（可以先用默认脚本占位）。
-3. 使用 `wrangler` 或网页编辑器，将 `cloudflare-worker` 目录中的代码部署到该 Worker：
+1. 登录 Cloudflare Dashboard → 计算和AI ① → Workers和Pages ② → **创建应用程序** ③。
+   ![ScreenShot_2025-12-12_122103_820.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_122103_820.png)
+2. 点击 **Continue with GitHub** ①，调整 Workers 创建页面。
+   ![ScreenShot_2025-12-12_131747_990.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_131747_990.png)
+3. 选择包含本项目的Git仓库，选择刚才Fork的项目①，点击‘**下一步**’②。
+   ![ScreenShot_2025-12-12_132032_646.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_132032_646.png)
+4. 在 Cloudflare 这个“创建 Worker（Git 集成）”页面中，可以这样填：
 
-```bash
-cd cloudflare-worker
-# 按需修改 wrangler.toml 后：
-wrangler deploy --env production
-```
+    项目名称：yoyo-streaming-worker（或默认）
+
+   ① 构建命令：npm install
+
+   ② 部署命令：npx wrangler deploy
+
+   ③ 非生产分支支持构建：先关闭
+
+   ④路径： cloudflare-worker
+    
+    其他默认即可，点击页面下方的 **部署**按钮等待部署完成。
+   ![ScreenShot_2025-12-12_133409_505.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_133409_505.png)
+5. 部署成功后进入Workers 的 **绑定**页面，点击**绑定**按钮。
+   ![ScreenShot_2025-12-12_141119_448.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_141119_448.png)
+6. 
+
 
 4. 在 Worker 的 **Triggers → Custom Domains** 中，为其绑定 `https://yoyoapi.your-domain.com`。
 
-### 8.2 绑定 KV 与 R2（可选但推荐）
 
-参考仓库中的 `wrangler.toml.example`：
-
-- KV：
-    - `YOYO_USER_DB`（存储用户、频道、预加载/录制配置等）
-- R2（如需）：
-    - `PROXY_TEST_HISTORY`（代理诊断记录）
-    - `LOGIN_LOGS`（登录日志）
-
-在 Cloudflare Dashboard 中创建相应资源并绑定到 Worker。
 
 ### 8.3 配置 Worker 环境变量
 
