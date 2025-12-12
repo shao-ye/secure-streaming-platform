@@ -126,7 +126,7 @@
 
 1. 在部署完成的Pages项目中，点击 **自定义域** ①，进入自定义域设置页面，点击 **设置自定义域** ②。
    ![ScreenShot_2025-12-12_125301_045.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_125301_045.png)
-2. 输入前面准备好的自定义域名 `yoyo.your-domain.com`，点击 **继续** ③。
+2. 输入前面准备好的自定义域名，设置子域为 `yoyo.your-domain.com`，点击 **继续** ③（`your-domain.com` 替换成你的域名）。
    ![ScreenShot_2025-12-12_125804_851.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_125804_851.png)
 3. 点击 **激活域** ①，等待完成。
    ![ScreenShot_2025-12-12_130131_994.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_130131_994.png)
@@ -198,7 +198,19 @@ Workers 代码位于仓库的 `cloudflare-worker` 目录。
    ![ScreenShot_2025-12-12_133409_505.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_133409_505.png)
 5. 部署成功后进入Workers 的 **绑定**页面，点击**绑定**按钮。
    ![ScreenShot_2025-12-12_141119_448.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_141119_448.png)
-6. 
+6. 点击 **添加绑定** 页面左侧菜单中的 **KV命名空间**① ，然后点击 **添加绑定** ② 按钮。 
+   ![ScreenShot_2025-12-12_141437_674.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_141437_674.png)
+7. 填写 **变量名称** 输入 `YOYO_USER_DB` ①，**KV命名空间** 选择之前创建好的KV ②，点击 **添加绑定** 按钮③。
+   ![ScreenShot_2025-12-12_141750_313.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_141750_313.png)
+8. 添加成功后再继续添加 R2 存储桶。继续点击 **绑定** ①，然后点击 **添加绑定** ②。
+   ![ScreenShot_2025-12-12_142117_561.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_142117_561.png)
+9. 点击 **添加绑定** 页面左侧菜单中的 **R2存储桶**① ，然后点击 **添加绑定** ② 按钮。
+   ![ScreenShot_2025-12-12_142332_652.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_142332_652.png)
+10. 填写 **变量名称** 输入 `LOGIN_LOGS` ①，**R2存储桶** 选择之前创建好的存储桶`login-logs` ②，点击 **部署** 按钮③。
+    ![ScreenShot_2025-12-12_142642_804.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_142642_804.png)
+11. 同样的方式添加第二个 R2 存储桶。填写 **变量名称** 输入 `PROXY_TEST_HISTORY` ①，**R2存储桶** 选择之前创建好的存储桶`proxy-test-history` ②，点击 **部署** 按钮③。
+    ![ScreenShot_2025-12-12_143135_794.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_143135_794.png)
+12. 
 
 
 4. 在 Worker 的 **Triggers → Custom Domains** 中，为其绑定 `https://yoyoapi.your-domain.com`。
@@ -208,8 +220,21 @@ Workers 代码位于仓库的 `cloudflare-worker` 目录。
 ### 8.3 配置 Worker 环境变量
 
 在 Worker 的 **Settings → Variables** 中添加：
+#### 8.3.1 Workers域名绑定
 
-#### 8.3.1 业务相关变量（普通变量）
+1. 进入Workers 的 **设置** ① 页面，点击**域和路由**的 **+添加** ② 按钮。
+   ![ScreenShot_2025-12-12_143356_319.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_143356_319.png)
+2. 选择 **自定义域** ①。
+   ![ScreenShot_2025-12-12_144020_658.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_144020_658.png)
+3. 输入前面准备好的自定义域名，设置子域为 `yoyoapi.your-domain.com`，点击 **添加域** ③，（`your-domain.com` 替换成你的域名）。
+   ![ScreenShot_2025-12-12_144225_994.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_144225_994.png)
+4. 在浏览器中访问该域名，如果出现如下页面则说明绑定成功。
+   ![ScreenShot_2025-12-12_144652_703.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_144652_703.png)
+
+#### 8.3.2 业务相关变量（普通变量）
+
+1. 继续在Workers项目 **设置** 页面中，点击 **变量和机密** ②，在 **变量和机密** 后面的 **添加** 按钮，如下变量。
+   ![ScreenShot_2025-12-12_144954_749.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_144954_749.png)
 
 | Key               | 示例值                              | 说明                                      |
 |-------------------|-------------------------------------|-------------------------------------------|
@@ -220,7 +245,7 @@ Workers 代码位于仓库的 `cloudflare-worker` 目录。
 
 > 其中 `VPS_API_URL` 一般指向 Cloudflare Tunnel 的 Public Hostname（如 `tunnel.your-domain.com`），Worker 会通过该地址访问 VPS 上的 Nginx/API。
 
-#### 8.3.2 安全相关变量（建议配置为 Secret）
+#### 8.3.3 安全相关变量（建议配置为 Secret）
 
 下列敏感信息建议在 Cloudflare Dashboard 中使用 **Secret** 类型保存：
 
