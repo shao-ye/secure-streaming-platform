@@ -410,7 +410,8 @@ curl "https://yoyoapi.your-domain.com/api/admin/init" \
    ![ScreenShot_2025-12-12_182137_472.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182137_472.png)
    
 4. 在“预加载与录制配置”中按工作日/时间段配置调度策略。
-   可以单独为频道设置是否需要进行预加载与录制，并设置预加载与录制时长，也可以设置播放视频比例。
+   
+    可以单独为频道设置是否需要进行预加载与录制，并设置预加载与录制时长，也可以设置播放视频比例。
    ![ScreenShot_2025-12-12_182341_331.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182341_331.png)
    也可以为所有频道统一设置，录制的视频文件保存时长，进行统一清理，以及是否启用视频分段录制，防止单个视频文件过大。
    ![ScreenShot_2025-12-12_182931_784.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182931_784.png)
@@ -418,7 +419,7 @@ curl "https://yoyoapi.your-domain.com/api/admin/init" \
 ### 10.3 验证 HLS 播放（隧道优化）
 
 1. 选择一个已配置 RTMP 的频道，开始向 VPS 推流；
-   ![ScreenShot_2025-12-12_183919_809.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_183919_809.png)
+   ![ScreenShot_2025-12-14_104100_096.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-14_104100_096.png)
 2. 在前端选择该频道，开启“隧道优化”播放；
    ![ScreenShot_2025-12-12_183614_543.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_183614_543.png)
 3. 打开浏览器开发者工具，检查：

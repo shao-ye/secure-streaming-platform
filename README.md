@@ -151,6 +151,25 @@ cd vps-server
 pm2 restart ecosystem.config.js
 ```
 
+## 🚀 系统页面展示
+
+1. 登录页面
+   ![ScreenShot_2025-12-12_155219_799.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_155219_799.png)
+2. 播放页面
+   ![ScreenShot_2025-12-14_104100_096.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-14_104100_096.png)
+3. 后台管理配置页面，可添加频道、配置预加载与录制。
+   ![ScreenShot_2025-12-12_182137_472.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182137_472.png)
+4. 在“预加载与录制配置”中按工作日/时间段配置调度策略。
+
+   可以单独为频道设置是否需要进行预加载与录制，并设置预加载与录制时长，也可以设置播放视频比例。
+   ![ScreenShot_2025-12-12_182341_331.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182341_331.png)
+   也可以为所有频道统一设置，录制的视频文件保存时长，进行统一清理，以及是否启用视频分段录制，防止单个视频文件过大。
+   ![ScreenShot_2025-12-12_182931_784.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182931_784.png)
+5. 在 **后台管理** → **用户管理** 页面可以添加删除普通用户账号，并为其设置密码。
+   ![ScreenShot_2025-12-12_181557_884.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_181557_884.png)
+6.可以监控系统状态
+   ![ScreenShot_2025-12-14_111245_395.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-14_111245_395.png)
+
 ## 📞 联系方式
 
 如有问题，请查看 [`docs/`](./docs/) 目录中的详细文档。
