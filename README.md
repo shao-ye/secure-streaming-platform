@@ -157,7 +157,7 @@ pm2 restart ecosystem.config.js
    ![ScreenShot_2025-12-12_155219_799.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_155219_799.png)
 2. 播放页面
    ![ScreenShot_2025-12-14_104100_096.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-14_104100_096.png)
-3. 后台管理配置页面，可添加频道、配置预加载与录制。
+3. 后台管理配置页面，可添加频道、配置RTMP视频源，配置预加载与录制。
    ![ScreenShot_2025-12-12_182137_472.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_182137_472.png)
 4. 在“预加载与录制配置”中按工作日/时间段配置调度策略。
 
