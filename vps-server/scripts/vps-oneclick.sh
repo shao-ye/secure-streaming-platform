@@ -129,25 +129,55 @@ install_nodejs() {
 
 install_ffmpeg() {
   step "安装 FFmpeg..."
-  if command -v ffmpeg >/dev/null 2>&1; then success "FFmpeg 已安装"; return 0; fi
-  local tmp_dir=$(mktemp -d); cd "$tmp_dir"
-  local arch=$(uname -m); local url=""
-  case "$arch" in
-    x86_64|amd64) url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" ;;
-    aarch64|arm64) url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" ;;
-    *) url="" ;;
-  esac
-  # 显示 FFmpeg 下载进度（去掉 -s）
-  if [[ -n "$url" ]] && curl -fSLO "$url"; then
-    tar -xf ffmpeg-release-*-static.tar.xz
-    local dir=$(find . -maxdepth 1 -type d -name 'ffmpeg-*static' | head -n1)
-    cp "$dir/ffmpeg" /usr/local/bin/; cp "$dir/ffprobe" /usr/local/bin/
-    chmod +x /usr/local/bin/{ffmpeg,ffprobe}; ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg
-  else
-    warn "静态版下载失败，尝试使用系统包安装"
-    $PKG_MANAGER install -y ffmpeg || warn "系统包安装失败，请手动安装 FFmpeg"
+  if command -v ffmpeg >/dev/null 2>&1; then
+    if ffmpeg -version 2>/dev/null | grep -qi 'johnvansickle.com/ffmpeg'; then
+      warn "检测到静态版 FFmpeg（johnvansickle），将切换为系统包版本以避免 RTMP 崩溃"
+    else
+      success "FFmpeg 已安装"
+      return 0
+    fi
   fi
-  cd / && rm -rf "$tmp_dir"; success "FFmpeg 安装完成"
+
+  case $OS in
+    centos|rhel)
+      local ts
+      ts=$(date +%Y%m%d_%H%M%S)
+      mkdir -p "/opt/ffmpeg-backup/$ts" || true
+
+      if [[ -e /usr/local/bin/ffmpeg ]]; then mv /usr/local/bin/ffmpeg "/opt/ffmpeg-backup/$ts/ffmpeg.static" || true; fi
+      if [[ -e /usr/local/bin/ffprobe ]]; then mv /usr/local/bin/ffprobe "/opt/ffmpeg-backup/$ts/ffprobe.static" || true; fi
+
+      if [[ -L /usr/bin/ffmpeg ]]; then
+        local tgt
+        tgt=$(readlink /usr/bin/ffmpeg 2>/dev/null || true)
+        if [[ "$tgt" == /usr/local/bin/* ]]; then mv /usr/bin/ffmpeg "/opt/ffmpeg-backup/$ts/ffmpeg.symlink" || true; fi
+      fi
+      if [[ -L /usr/bin/ffprobe ]]; then
+        local tgt
+        tgt=$(readlink /usr/bin/ffprobe 2>/dev/null || true)
+        if [[ "$tgt" == /usr/local/bin/* ]]; then mv /usr/bin/ffprobe "/opt/ffmpeg-backup/$ts/ffprobe.symlink" || true; fi
+      fi
+
+      $PKG_MANAGER install -y dnf-plugins-core >/dev/null 2>&1 || true
+      dnf config-manager --set-enabled crb >/dev/null 2>&1 || (command -v crb >/dev/null 2>&1 && crb enable) || true
+      dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm >/dev/null 2>&1 || true
+      dnf install -y https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm >/dev/null 2>&1 || true
+      dnf makecache -y --refresh >/dev/null 2>&1 || true
+
+      dnf install -y ladspa >/dev/null 2>&1 || true
+      dnf install -y ffmpeg ffmpeg-libs >/dev/null 2>&1 || dnf install -y --nobest ffmpeg ffmpeg-libs >/dev/null 2>&1 || warn "系统包安装失败，请手动安装 FFmpeg"
+      ;;
+    ubuntu|debian)
+      $PKG_MANAGER update
+      $PKG_MANAGER install -y ffmpeg || warn "系统包安装失败，请手动安装 FFmpeg"
+      ;;
+  esac
+
+  if command -v ffmpeg >/dev/null 2>&1; then
+    success "FFmpeg 安装完成"
+  else
+    warn "未检测到 ffmpeg 可执行文件，请手动安装后重试"
+  fi
 }
 
 install_nginx() {
