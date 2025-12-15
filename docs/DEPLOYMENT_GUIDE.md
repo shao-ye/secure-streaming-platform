@@ -297,7 +297,7 @@ curl "https://yoyoapi.your-domain.com/api/admin/init" \
 ```
 
 3. 完成管理员账号密码初始化后，就可以通过配置好的Pagers域名访问页面进行登录系统了。
-   ![ScreenShot_2025-12-12_155219_799.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_155219_799.png)
+   ![ScreenShot_2025-12-15_133025_547.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-15_133025_547.png)
 4. 使用workers中配置的`EMERGENCY_ADMIN_PASSWORD`变量密码登录系统，即可完成登录，登录成功后就可以删除workers中配置的`INIT_SECRET`变量和`EMERGENCY_ADMIN_USERNAME`变量（如果配置了的话）和`EMERGENCY_ADMIN_PASSWORD`变量了（admin的账号和密码已经被写到了kv中，所以可以删除了，如果想修改admin的密码的话，可以到kv中修改admin的密码，重新添加workers配置中的`INIT_SECRET`变量和`EMERGENCY_ADMIN_PASSWORD`变量，再次执行初始化接口即可）。
    ![ScreenShot_2025-12-12_171852_478.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_171852_478.png)
 
@@ -364,13 +364,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-account>/secure-stream
 > - 直播基础播放 **不会受影响**；
 > - 但 VPS 无法从 Worker 读取预加载/录制配置，高级调度功能会失效；
 > - 后续可在 `/opt/yoyo-transcoder/.env` 中修改 `WORKERS_API_URL`，再执行：
-    >   ```bash
->   pm2 restart vps-transcoder-api --update-env
->   ```
-
-1. VPS执行一键部署脚本执行过程与输入内容如下图所示，安装脚本执行完成后，需要将脚本输出的`VPS_API_KEY`和`VPS_API_URL` ① 的值添加到workers的环境变量中。：
-
-![ScreenShot_2025-12-12_174307_264.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_174307_264.png)
+>
+> ```bash
+> pm2 restart vps-transcoder-api --update-env
+> ```
+ 
+ 1. VPS执行一键部署脚本执行过程与输入内容如下图所示，安装脚本执行完成后，需要将脚本输出的`VPS_API_KEY`和`VPS_API_URL` ① 的值添加到workers的环境变量中。：
+ 
+ ![ScreenShot_2025-12-12_174307_264.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_174307_264.png)
 
 2. 登录 Cloudflare Dashboard → 计算和AI ① → Workers和Pages ② → 选择之前创建的 workers ③。
    ![ScreenShot_2025-12-12_175020_380.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_175020_380.png)

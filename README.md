@@ -154,7 +154,7 @@ pm2 restart ecosystem.config.js
 ## 🖥️ 系统页面展示
 
 1. 登录页面
-   ![ScreenShot_2025-12-12_155219_799.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_155219_799.png)
+   ![ScreenShot_2025-12-15_133025_547.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-15_133025_547.png)
 2. 播放页面，支持电脑端，手机端全屏播放。
    ![ScreenShot_2025-12-14_104100_096.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-14_104100_096.png)
 3. 后台管理配置页面，可添加频道、配置RTMP视频源，配置预加载与录制。
