@@ -151,7 +151,7 @@ cd vps-server
 pm2 restart ecosystem.config.js
 ```
 
-## 🚀 系统页面展示
+## 🖥️ 系统页面展示
 
 1. 登录页面
    ![ScreenShot_2025-12-12_155219_799.png](https://image.5202021.xyz/api/rfile/ScreenShot_2025-12-12_155219_799.png)
