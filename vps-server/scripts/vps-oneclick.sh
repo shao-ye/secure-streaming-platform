@@ -158,14 +158,14 @@ install_ffmpeg() {
         if [[ "$tgt" == /usr/local/bin/* ]]; then mv /usr/bin/ffprobe "/opt/ffmpeg-backup/$ts/ffprobe.symlink" || true; fi
       fi
 
-      $PKG_MANAGER install -y dnf-plugins-core >/dev/null 2>&1 || true
-      dnf config-manager --set-enabled crb >/dev/null 2>&1 || (command -v crb >/dev/null 2>&1 && crb enable) || true
-      dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm >/dev/null 2>&1 || true
-      dnf install -y https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm >/dev/null 2>&1 || true
-      dnf makecache -y --refresh >/dev/null 2>&1 || true
+      $PKG_MANAGER install -y dnf-plugins-core || true
+      dnf config-manager --set-enabled crb || (command -v crb >/dev/null 2>&1 && crb enable) || true
+      dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm || true
+      dnf install -y https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm || true
+      dnf makecache -y --refresh || true
 
-      dnf install -y ladspa >/dev/null 2>&1 || true
-      dnf install -y ffmpeg ffmpeg-libs >/dev/null 2>&1 || dnf install -y --nobest ffmpeg ffmpeg-libs >/dev/null 2>&1 || warn "系统包安装失败，请手动安装 FFmpeg"
+      dnf install -y ladspa || true
+      dnf install -y ffmpeg ffmpeg-libs || dnf install -y --nobest ffmpeg ffmpeg-libs || warn "系统包安装失败，请手动安装 FFmpeg"
       ;;
     ubuntu|debian)
       $PKG_MANAGER update
@@ -187,7 +187,7 @@ install_nginx() {
   success "Nginx 安装完成"
 }
 
-install_pm2() { step "安装 PM2..."; command -v pm2 >/dev/null 2>&1 && success "PM2 已安装" && return 0; npm install -g pm2; success "PM2 安装完成"; }
+install_pm2() { step "安装 PM2..."; command -v pm2 >/dev/null 2>&1 && success "PM2 已安装" && return 0; npm install -g pm2 --progress=true --loglevel=info; success "PM2 安装完成"; }
 
 clone_project() {
   step "下载项目代码..."
@@ -355,12 +355,26 @@ EOF
 
 start_service() {
   step "启动服务..."; cd "$INSTALL_DIR"
-  pm2 stop yoyo-transcoder >/dev/null 2>&1 || true
-  pm2 delete yoyo-transcoder >/dev/null 2>&1 || true
+  pm2 stop vps-transcoder-api >/dev/null 2>&1 || true
+  pm2 delete vps-transcoder-api >/dev/null 2>&1 || true
   pm2 start ecosystem.config.js --env production >/dev/null 2>&1 || error "服务启动失败"
   pm2 save >/dev/null 2>&1; pm2 startup >/dev/null 2>&1 || true
   sleep 3; curl -sf http://127.0.0.1:$API_PORT/health >/dev/null || error "健康检查失败"
   success "服务启动成功"
+
+  echo ""
+  log "服务信息（本机）:"
+  echo "- PM2 应用: vps-transcoder-api"
+  pm2 status || true
+  echo ""
+  echo "- API 健康检查: http://127.0.0.1:$API_PORT/health"
+  echo "- Nginx 健康检查: http://127.0.0.1:$NGINX_PORT/health"
+  echo "- HLS 路径:       http://127.0.0.1:$NGINX_PORT/hls/"
+  echo ""
+  if command -v ss >/dev/null 2>&1; then
+    echo "- 监听端口:"
+    ss -lntp 2>/dev/null | grep -E ":(${API_PORT}|${NGINX_PORT})\b" || true
+  fi
 }
 
 install_cloudflared() {
