@@ -287,6 +287,7 @@ generate_config() {
   fi
   
   cat > "$INSTALL_DIR/.env" << EOF
+TZ=Asia/Shanghai
 NODE_ENV=production
 PORT=$API_PORT
 API_KEY=$API_KEY

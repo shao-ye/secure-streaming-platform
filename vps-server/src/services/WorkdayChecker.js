@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const moment = require('moment-timezone');
 const logger = require('../utils/logger');
 const config = require('../../config');
 
@@ -40,9 +41,9 @@ class WorkdayChecker {
     try {
       logger.info('Initializing WorkdayChecker...');
       
-      const now = new Date();
-      const currentYear = now.getFullYear();
-      const currentMonth = now.getMonth() + 1;
+      const now = moment().tz('Asia/Shanghai');
+      const currentYear = now.year();
+      const currentMonth = now.month() + 1;
       
       // 预取当前月
       await this.prefetchMonthData(currentYear, currentMonth);
@@ -54,10 +55,10 @@ class WorkdayChecker {
       
       // 🆕 设置定时任务：每天凌晨1点执行
       cron.schedule('0 1 * * *', async () => {
-        const today = new Date();
+        const today = moment().tz('Asia/Shanghai');
         
         // 步骤1: 如果是25号，预取下月数据
-        if (today.getDate() === 25) {
+        if (today.date() === 25) {
           const next = this.getNextMonth();
           logger.info('Scheduled task: Prefetching next month data', next);
           await this.prefetchMonthData(next.year, next.month);
@@ -149,7 +150,7 @@ class WorkdayChecker {
       
       // 降级为基础模式：周一至周五视为工作日
       // 注意：此模式无法识别法定节假日和调休
-      const dayOfWeek = date.getDay();
+      const dayOfWeek = moment(date).tz('Asia/Shanghai').day();
       const isWorkday = dayOfWeek >= 1 && dayOfWeek <= 5;
       
       // 🆕 基础模式结果也要缓存（避免重复判断）
@@ -182,7 +183,7 @@ class WorkdayChecker {
         const promises = [];
         
         for (let day = i; day < Math.min(i + batchSize, daysInMonth + 1); day++) {
-          const date = new Date(year, month - 1, day);
+          const date = moment.tz({ year, month: month - 1, day }, 'Asia/Shanghai').toDate();
           promises.push(this.isWorkday(date));
         }
         
@@ -209,15 +210,8 @@ class WorkdayChecker {
    * @returns {{year: number, month: number}}
    */
   getNextMonth() {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth() + 1;
-    
-    if (currentMonth === 12) {
-      return { year: currentYear + 1, month: 1 };
-    } else {
-      return { year: currentYear, month: currentMonth + 1 };
-    }
+    const next = moment().tz('Asia/Shanghai').add(1, 'month');
+    return { year: next.year(), month: next.month() + 1 };
   }
 
   /**
@@ -235,10 +229,7 @@ class WorkdayChecker {
    * @returns {string}
    */
   formatDate(date) {
-    const year = date.getFullYear();
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return moment(date).tz('Asia/Shanghai').format('YYYY-MM-DD');
   }
 }
 
