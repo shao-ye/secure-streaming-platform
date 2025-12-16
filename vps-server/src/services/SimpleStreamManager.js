@@ -40,6 +40,8 @@ class SimpleStreamManager {
     // FFmpeg配置
     this.ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
     this.hlsOutputDir = process.env.HLS_OUTPUT_DIR || '/var/www/hls';
+    const parsedThreads = parseInt(process.env.FFMPEG_THREADS, 10);
+    this.ffmpegThreads = Number.isFinite(parsedThreads) && parsedThreads > 0 ? parsedThreads : null;
     
     // 从统一配置读取域名，无默认值
     this.vpsBaseDomain = config.vpsBaseUrl;
@@ -107,6 +109,11 @@ class SimpleStreamManager {
       logger.error('Failed to create HLS output directory:', error);
       throw new Error(`Cannot create HLS output directory: ${this.hlsOutputDir}`);
     }
+  }
+
+  getFFmpegThreadArgs() {
+    if (!this.ffmpegThreads) return [];
+    return ['-threads', String(this.ffmpegThreads)];
   }
 
   /**
@@ -383,6 +390,7 @@ class SimpleStreamManager {
     
     // 构建FFmpeg命令 - 简化且稳定的配置（基于成功测试）
     const outputFile = path.join(outputDir, 'playlist.m3u8');
+    const threadArgs = this.getFFmpegThreadArgs();
     const ffmpegArgs = [
       // 基本输入配置
       '-i', rtmpUrl,
@@ -390,6 +398,7 @@ class SimpleStreamManager {
       // 视频编码 - 简化配置
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
+      ...threadArgs,
 
       // 🔥 禁用音频输出 - 避免PCM μ-law转码问题
       '-an',  // 不处理音频流
@@ -1054,6 +1063,7 @@ class SimpleStreamManager {
   async spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath, recordConfig, videoFilter = null) {
     const outputDir = path.join(this.hlsOutputDir, channelId);
     const recordDir = path.dirname(recordingPath);
+    const threadArgs = this.getFFmpegThreadArgs();
     
     // 确保目录存在
     if (!fs.existsSync(outputDir)) {
@@ -1078,6 +1088,7 @@ class SimpleStreamManager {
         '-map', '[vout1]',
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
+        ...threadArgs,
         '-an',
         '-f', 'hls',
         '-hls_time', '2',
@@ -1093,6 +1104,7 @@ class SimpleStreamManager {
         '-map', '[vout2]',
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
+        ...threadArgs,
         '-an'
       );
     } else {
@@ -1101,6 +1113,7 @@ class SimpleStreamManager {
         // HLS输出
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
+        ...threadArgs,
         '-an',
         '-f', 'hls',
         '-hls_time', '2',
@@ -1115,6 +1128,7 @@ class SimpleStreamManager {
         // MP4录制输出 - 原始比例
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
+        ...threadArgs,
         '-an'
       );
     }
