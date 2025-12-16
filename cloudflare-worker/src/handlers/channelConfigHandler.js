@@ -48,6 +48,42 @@ async function getChannelConfig(env, channelId) {
   }
 }
 
+async function notifyVpsPreloadReload(env, channelId, config = null) {
+  try {
+    console.log('🔔 Notifying VPS preload reload...', {
+      url: env.VPS_API_URL,
+      channelId,
+      hasConfig: !!config
+    });
+    
+    const response = await fetch(`${env.VPS_API_URL}/api/simple-stream/preload/reload-schedule`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': env.VPS_API_KEY
+      },
+      body: JSON.stringify({
+        channelId,
+        config
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('VPS response failed:', {
+        status: response.status,
+        errorText
+      });
+      throw new Error(`VPS responded with ${response.status}`);
+    }
+    
+    return { success: true };
+  } catch (error) {
+    console.error('VPS preload notification error:', error);
+    throw error;
+  }
+}
+
 /**
  * 更新频道完整配置（一次性更新预加载和录制配置）
  */
@@ -125,8 +161,30 @@ async function updateChannelConfig(env, ctx, channelId, data, username) {
     
     console.log('✅ [updateChannelConfig] KV write completed successfully');
     
+    // 通知 VPS 重载预加载调度
+    let vpsPreloadNotifyResult = null;
+    if (data.preloadConfig) {
+      try {
+        const fullConfig = {
+          channelId: channelData.id,
+          channelName: channelData.name,
+          rtmpUrl: channelData.rtmpUrl,
+          ...channelData.preloadConfig
+        };
+        
+        console.log('📞 [updateChannelConfig] Notifying VPS preload reload...', { fullConfig });
+        vpsPreloadNotifyResult = await notifyVpsPreloadReload(env, channelId, fullConfig);
+        console.log('✅ [updateChannelConfig] VPS preload notification successful');
+      } catch (error) {
+        console.error('⚠️ [updateChannelConfig] VPS preload notification failed (config saved)', {
+          error: error.message
+        });
+        vpsPreloadNotifyResult = { error: error.message };
+      }
+    }
+    
     // 通知 VPS 重载录制调度
-    let vpsNotifyResult = null;
+    let vpsRecordNotifyResult = null;
     if (data.recordConfig) {
       try {
         const fullConfig = {
@@ -137,13 +195,13 @@ async function updateChannelConfig(env, ctx, channelId, data, username) {
         };
         
         console.log('📞 [updateChannelConfig] Notifying VPS...', { fullConfig });
-        vpsNotifyResult = await notifyVpsReload(env, channelId, fullConfig);
+        vpsRecordNotifyResult = await notifyVpsReload(env, channelId, fullConfig);
         console.log('✅ [updateChannelConfig] VPS notification successful');
       } catch (error) {
         console.error('⚠️ [updateChannelConfig] VPS notification failed (config saved)', {
           error: error.message
         });
-        vpsNotifyResult = { error: error.message };
+        vpsRecordNotifyResult = { error: error.message };
       }
     }
     
@@ -156,8 +214,12 @@ async function updateChannelConfig(env, ctx, channelId, data, username) {
         videoAspectRatio: channelData.videoAspectRatio  // 🆕 返回保存的值
       },
       debug: {
-        vpsNotified: vpsNotifyResult?.success || false,
-        vpsError: vpsNotifyResult?.error || null
+        vpsNotified: vpsRecordNotifyResult?.success || false,
+        vpsError: vpsRecordNotifyResult?.error || null,
+        vpsPreloadNotified: vpsPreloadNotifyResult?.success || false,
+        vpsPreloadError: vpsPreloadNotifyResult?.error || null,
+        vpsRecordNotified: vpsRecordNotifyResult?.success || false,
+        vpsRecordError: vpsRecordNotifyResult?.error || null
       }
     };
     
