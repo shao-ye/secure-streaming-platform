@@ -485,6 +485,57 @@ curl "https://yoyoapi.your-domain.com/api/admin/init" \
   curl -fsSL https://raw.githubusercontent.com/shao-ye/secure-streaming-platform/master/vps-server/scripts/vps-oneclick.sh | bash -s -- --update
     ```
 
+- **更新 Cloudflare Workers 端代码**（管理后台、频道配置、预加载/录制调度等逻辑都在 Workers 中）：
+
+  说明：本项目 Workers 目录为 `cloudflare-worker/`，代码是多文件结构（`src/index.js` + `src/handlers/*`）。
+  Workers 的“服务名/项目名”需要保持稳定，否则会出现“代码更新了，但变量/密钥像被清空”的现象。
+  本项目默认服务名来自 `cloudflare-worker/wrangler.toml`：
+  - `name = "secure-streaming-platform"`
+  Git 自动部署/构建时会读取这里的 `name`，并将代码部署到同名 Worker 服务；变量/密钥也绑定在该 Worker 服务的 Production/Preview 环境上。
+
+  方式 A：按部署文档的“页面操作 + Git 自动部署”方式更新（推荐）
+
+  1. 在 GitHub 中 Sync fork / 或向你的仓库 push 新提交。
+  2. Cloudflare Dashboard → 计算和 AI → Workers 和 Pages → 进入对应 Worker/项目。
+  3. 在 Deployments / 部署记录中确认最新提交已触发新部署（通常会显示提交信息/时间）。
+
+  重要：变量/密钥为什么会“丢”以及怎么避免
+
+  - 变量/密钥不在代码仓库里，属于 Cloudflare 的环境配置。
+  - 如果你发现“Sync fork 后自动部署了，但变量没了”，通常是以下原因之一：
+    - 你查看的是 Preview/预览环境，但变量只配在 Production/生产环境（或反过来）。
+    - 本次部署产物对应了另一个 Worker 名称/项目（例如 `wrangler.toml` 的 `name` 与你在页面里创建的 Worker 不一致），导致部署到“另一个 Worker”，另一个 Worker 自然没有变量。
+    - Cloudflare 列表里同时存在 Pages 项目与 Worker 项目（名称可能相同），点错条目也会看到“没有变量”。
+
+  变量/密钥正确配置位置（页面方式，适合小白）
+
+  1. Cloudflare Dashboard → Workers 和 Pages → 进入对应 Worker/项目。
+  2. 找到 Settings / 设置 → Variables and Secrets / 变量和密钥。
+  3. 分别在 Production（生产）和 Preview（预览）（如果有）里配置需要的变量/密钥（至少包括）：
+     - `VPS_API_URL`
+     - `VPS_API_KEY`（建议用“密钥/Secret”类型）
+  4. 保存后重新触发一次部署（或等待下一次 Git 推送自动部署），变量会随环境持续生效。
+
+  方式 B：本地命令方式更新（稳定、可回滚）
+
+  1. 在本地电脑安装 Node.js（建议 18+）。
+  2. 拉取/下载仓库最新代码。
+  3. 进入 `cloudflare-worker/` 目录执行：
+
+     ```bash
+     npm install
+     npm run deploy
+     ```
+
+     如果你配置了 wrangler 的 production 环境，可执行：
+
+     ```bash
+     npm run deploy:production
+     ```
+
+  4. 注意：如果 `wrangler.toml` 的 `name` 与你页面上实际使用的 Worker 名称不一致，wrangler 会部署到另一个 Worker（表现为“变量丢失”）。
+     如果你希望 Workers 在 Cloudflare 中显示为 `secure-streaming-platform`，需要把 `cloudflare-worker/wrangler.toml` 的 `name` 改为 `secure-streaming-platform` 并重新部署，然后再在该 Worker 的 Production/Preview 环境下配置变量/密钥。
+
 - **调整预加载/录制策略**：
     - 直接在前端管理后台修改；
     - Worker 会更新 KV，VPS 调度服务会定期拉取最新配置。
