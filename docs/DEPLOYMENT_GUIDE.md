@@ -348,16 +348,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-account>/secure-stream
     - Cloudflare Tunnel / 直连都连到这个端口；
     - 若只使用 Tunnel，可以在防火墙中仅允许 `cloudflared` 本地访问。
 
-- **FFmpeg 线程数 `FFMPEG_THREADS`**（用于限制转码 CPU 占用）：
-    - 直接回车使用默认推荐值：1 核 CPU 推荐 `1`，其它推荐 `2`；
-    - 输入数字（例如 `1`/`2`）会写入 `/opt/yoyo-transcoder/.env`；
-    - 输入 `0` 表示不设置该项（保持 FFmpeg 自动线程策略）；
-    - 后续如需调整，可编辑 `/opt/yoyo-transcoder/.env` 中的 `FFMPEG_THREADS`，然后执行：
-    
-    ```bash
-    pm2 restart vps-transcoder-api --update-env
-    ```
-
 - **是否安装 Cloudflare Tunnel（Token）**：
     - 如果选择 `y`，需要粘贴 Cloudflare Zero Trust 中 Tunnel 的 Token；（前面创建的隧道tunnel时保存到记事本文件中的秘钥）
     - 脚本会自动安装并启动 `cloudflared`。

@@ -41,7 +41,6 @@ API_SECRET_KEY=test-api-key-change-in-production
 
 # FFmpeg配置
 FFMPEG_PATH=/usr/bin/ffmpeg
-FFMPEG_THREADS=0
 HLS_OUTPUT_DIR=./hls
 HLS_SEGMENT_TIME=2
 HLS_LIST_SIZE=6

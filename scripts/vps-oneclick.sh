@@ -27,7 +27,6 @@ VPS_DOMAIN="${VPS_DOMAIN:-}"
 API_KEY="${API_KEY:-}"
 API_PORT="${API_PORT:-3000}"
 NGINX_PORT="${NGINX_PORT:-52535}"
-FFMPEG_THREADS="${FFMPEG_THREADS:-}"
 SKIP_DEPS="${SKIP_DEPS:-false}"
 CF_TUNNEL_TOKEN="${CF_TUNNEL_TOKEN:-}"
 CF_HOSTNAME="${CF_HOSTNAME:-}"
@@ -48,7 +47,6 @@ parse_args() {
     case "$1" in
       --api-port) API_PORT="$2"; shift 2;;
       --nginx-port) NGINX_PORT="$2"; shift 2;;
-      --ffmpeg-threads) FFMPEG_THREADS="$2"; shift 2;;
       --token) CF_TUNNEL_TOKEN="$2"; shift 2;;
       --hostname) CF_HOSTNAME="$2"; shift 2;;
       --domain) VPS_DOMAIN="$2"; shift 2;;
@@ -62,7 +60,6 @@ parse_args() {
         echo "选项:"
         echo "  --api-port PORT          API 端口（默认: 3000）"
         echo "  --nginx-port PORT        Nginx 暴露端口（默认: 52535）"
-        echo "  --ffmpeg-threads N       FFmpeg 线程数（写入 .env 的 FFMPEG_THREADS；0 表示不设置）"
         echo "  --token TOKEN            Cloudflare Tunnel Token"
         echo "  --hostname HOSTNAME      Tunnel 公开域名"
         echo "  --domain DOMAIN          VPS 域名"
@@ -91,28 +88,6 @@ ask() {
   local prompt="$1"; local default_val="$2"; local var
   read -rp "$prompt" var || true
   [[ -z "$var" ]] && echo "$default_val" || echo "$var"
-}
-
-recommend_ffmpeg_threads() {
-  local nproc_val="1"
-  if command -v nproc >/dev/null 2>&1; then
-    nproc_val=$(nproc 2>/dev/null || echo "1")
-  elif command -v getconf >/dev/null 2>&1; then
-    nproc_val=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo "1")
-  fi
-
-  if [[ "$nproc_val" =~ ^[0-9]+$ ]] && [[ "$nproc_val" -le 1 ]]; then
-    echo "1"
-  else
-    echo "2"
-  fi
-}
-
-validate_ffmpeg_threads() {
-  local v="$1"
-  [[ -z "$v" ]] && return 0
-  [[ "$v" =~ ^[0-9]+$ ]] && return 0
-  return 1
 }
 
 detect_os() {
@@ -301,11 +276,6 @@ ALLOWED_IPS=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.10
 VPS_BASE_URL=$vps_base_url
 WORKERS_API_URL=$workers_api_url
 EOF
-
-  if [[ -n "$FFMPEG_THREADS" && "$FFMPEG_THREADS" != "0" ]]; then
-    echo "FFMPEG_THREADS=$FFMPEG_THREADS" >> "$INSTALL_DIR/.env"
-  fi
-
   chmod 600 "$INSTALL_DIR/.env"; success "配置生成完成"
 }
 
@@ -507,25 +477,6 @@ main() {
     if [[ "$ans" =~ ^(n|N)$ ]]; then API_PORT=$(ask "请输入自定义 API 端口: " "$API_PORT"); fi
     read -rp "是否使用默认 Nginx 暴露端口 $NGINX_PORT ? [Y/n] " ans || true
     if [[ "$ans" =~ ^(n|N)$ ]]; then NGINX_PORT=$(ask "请输入自定义 Nginx 暴露端口: " "$NGINX_PORT"); fi
-
-    if [[ -z "$FFMPEG_THREADS" ]]; then
-      local rec_threads
-      rec_threads=$(recommend_ffmpeg_threads)
-      echo ""
-      log "设置 FFmpeg 线程数（等价于 ffmpeg 参数 -threads，用于限制 CPU 占用）"
-      log "   建议值: ${rec_threads}（1核=1，其它=2）。输入 0 表示不设置（保持 ffmpeg 自动）。"
-      read -rp "   请输入 FFMPEG_THREADS [默认:${rec_threads}]: " ans || true
-
-      if [[ -z "$ans" ]]; then
-        FFMPEG_THREADS="$rec_threads"
-      elif [[ "$ans" =~ ^[0-9]+$ ]]; then
-        FFMPEG_THREADS="$ans"
-      else
-        warn "FFMPEG_THREADS 输入非法，将使用默认值 ${rec_threads}"
-        FFMPEG_THREADS="$rec_threads"
-      fi
-    fi
-
     if [[ -z "$CF_TUNNEL_TOKEN" ]]; then
       read -rp "是否安装并注册 Cloudflare Tunnel（需要 UI 中的 Token）? [y/N] " ans || true
       if [[ "$ans" =~ ^(y|Y)$ ]]; then read -rp "请输入 CF_TUNNEL_TOKEN: " CF_TUNNEL_TOKEN; fi
@@ -534,10 +485,6 @@ main() {
       read -rp "是否输入 Tunnel Hostname 以便连通性测试（例如 yoyo-vps.example.com）? [Y/n] " ans || true
       if [[ ! "$ans" =~ ^(n|N)$ ]]; then read -rp "请输入 Tunnel Hostname: " CF_HOSTNAME; fi
     fi
-  fi
-
-  if ! validate_ffmpeg_threads "$FFMPEG_THREADS"; then
-    error "FFMPEG_THREADS 必须是数字（例如 1/2），或 0（不设置）"
   fi
 
   clone_project; install_deps; generate_config; configure_nginx; start_service; install_cloudflared; show_result
