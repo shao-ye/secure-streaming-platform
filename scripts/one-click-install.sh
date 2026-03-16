@@ -16,7 +16,13 @@ set -e  # 遇到错误立即退出
 SCRIPT_VERSION="2.0.0"
 INSTALL_DIR="/opt/yoyo-transcoder"
 HLS_DIR="/var/www/hls"
-LOG_DIR="/var/log/yoyo-transcoder"
+LOG_DIR="/var/log/transcoder"
+APP_USER="yoyo"
+APP_GROUP="yoyo"
+APP_HOME="/home/yoyo"
+APP_PM2_HOME="$APP_HOME/.pm2"
+SERVICE_NAME="yoyo-transcoder"
+RECORDINGS_DIR="/srv/filebrowser/yoyo-k"
 GITHUB_REPO="https://github.com/shao-ye/secure-streaming-platform.git"
 GITHUB_BRANCH="main"
 
@@ -41,6 +47,83 @@ warn() { echo -e "${YELLOW}[警告]${NC} $1" >&2; }
 error() { echo -e "${RED}[错误]${NC} $1" >&2; exit 1; }
 step() { echo ""; echo -e "${CYAN}▶ $1${NC}"; }
 success() { echo -e "${GREEN}✓${NC} $1"; }
+
+# 中文注释：以固定 HOME / PM2_HOME 切换到运行用户执行命令，避免 root 与 yoyo 的 PM2 上下文混用。
+run_as_app_user() {
+    sudo -H -u "$APP_USER" env HOME="$APP_HOME" PM2_HOME="$APP_PM2_HOME" PATH="/usr/local/bin:/usr/bin:/bin:$PATH" "$@"
+}
+
+# 中文注释：确保运行用户、HOME 与 PM2_HOME 存在，后续所有 PM2 操作统一落到 yoyo 用户下。
+ensure_runtime_user() {
+    if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
+        groupadd -r "$APP_GROUP"
+    fi
+
+    if ! id "$APP_USER" >/dev/null 2>&1; then
+        useradd -r -g "$APP_GROUP" -m -d "$APP_HOME" -s /bin/bash "$APP_USER"
+    fi
+
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$APP_HOME"
+    install -d -m 700 -o "$APP_USER" -g "$APP_GROUP" "$APP_PM2_HOME"
+}
+
+# 中文注释：统一运行目录、日志目录和 HLS 目录权限，避免 root 更新后再次把权限打坏。
+fix_runtime_permissions() {
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$INSTALL_DIR"
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$HLS_DIR"
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$LOG_DIR"
+    chown -R "$APP_USER:$APP_GROUP" "$INSTALL_DIR" "$HLS_DIR" "$LOG_DIR" "$APP_HOME"
+    chmod 700 "$APP_PM2_HOME"
+}
+
+# 中文注释：录制目录仍保留给 File Browser 所在的 root 体系，但额外授予 yoyo 写权限，避免影响下载服务。
+ensure_recordings_permissions() {
+    install -d -m 750 /srv/filebrowser
+    mkdir -p "$RECORDINGS_DIR"
+
+    if command -v setfacl >/dev/null 2>&1; then
+        chmod 750 "$RECORDINGS_DIR"
+        setfacl -R -m "u:${APP_USER}:rwx" "$RECORDINGS_DIR" >/dev/null 2>&1 || true
+        find "$RECORDINGS_DIR" -type d -exec setfacl -m "d:u:${APP_USER}:rwx" {} \; 2>/dev/null || true
+    else
+        chown -R root:"$APP_GROUP" "$RECORDINGS_DIR"
+        find "$RECORDINGS_DIR" -type d -exec chmod 2770 {} \; 2>/dev/null || true
+        find "$RECORDINGS_DIR" -type f -exec chmod 660 {} \; 2>/dev/null || true
+    fi
+}
+
+# 中文注释：生成 systemd 服务，root 后续仍通过 systemctl 运维，但实际运行身份固定为 yoyo。
+ensure_systemd_service() {
+    local pm2_bin
+    pm2_bin=$(command -v pm2 2>/dev/null || echo /usr/bin/pm2)
+
+    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
+[Unit]
+Description=YOYO Transcoder API Service
+After=network.target
+
+[Service]
+Type=forking
+User=$APP_USER
+Group=$APP_GROUP
+WorkingDirectory=$INSTALL_DIR
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=$APP_HOME
+Environment=PM2_HOME=$APP_PM2_HOME
+Environment=TZ=Asia/Shanghai
+ExecStart=$pm2_bin start ecosystem.config.js --env production --update-env
+ExecReload=$pm2_bin reload ecosystem.config.js --env production --update-env
+ExecStop=$pm2_bin delete vps-transcoder-api
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+}
 
 # 检测操作系统
 detect_os() {
@@ -137,6 +220,7 @@ clone_project() {
     git clone --depth 1 --branch "$GITHUB_BRANCH" "$GITHUB_REPO" "$tmp" >/dev/null 2>&1 || error "代码下载失败"
     mkdir -p "$INSTALL_DIR"
     cp -r "$tmp/vps-server/"* "$INSTALL_DIR/"
+    chown -R "$APP_USER:$APP_GROUP" "$INSTALL_DIR"
     rm -rf "$tmp"
     success "代码下载完成"
 }
@@ -145,7 +229,8 @@ clone_project() {
 install_deps() {
     step "安装项目依赖..."
     cd "$INSTALL_DIR"
-    npm install --production >/dev/null 2>&1 || error "依赖安装失败"
+    fix_runtime_permissions
+    run_as_app_user npm install --production >/dev/null 2>&1 || error "依赖安装失败"
     success "依赖安装完成"
 }
 
@@ -155,9 +240,11 @@ generate_config() {
     [[ -z "$API_KEY" ]] && API_KEY=$(openssl rand -hex 32)
     
     cat > "$INSTALL_DIR/.env" << EOF
+TZ=Asia/Shanghai
 NODE_ENV=production
 PORT=$API_PORT
 API_KEY=$API_KEY
+VPS_API_KEY=$API_KEY
 ENABLE_IP_WHITELIST=true
 HLS_OUTPUT_DIR=$HLS_DIR
 LOG_DIR=$LOG_DIR
@@ -169,7 +256,9 @@ MAX_CONCURRENT_STREAMS=10
 STREAM_TIMEOUT=300000
 CLEANUP_INTERVAL=60000
 ALLOWED_IPS=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
+RECORDINGS_PATH=$RECORDINGS_DIR
 EOF
+    chown "$APP_USER:$APP_GROUP" "$INSTALL_DIR/.env"
     chmod 600 "$INSTALL_DIR/.env"
     success "配置生成完成"
 }
@@ -208,11 +297,11 @@ EOF
 start_service() {
     step "启动服务..."
     cd "$INSTALL_DIR"
-    pm2 stop yoyo-transcoder >/dev/null 2>&1 || true
-    pm2 delete yoyo-transcoder >/dev/null 2>&1 || true
-    pm2 start ecosystem.config.js --env production >/dev/null 2>&1 || error "服务启动失败"
-    pm2 save >/dev/null 2>&1
-    pm2 startup >/dev/null 2>&1 || true
+    fix_runtime_permissions
+    ensure_recordings_permissions
+    ensure_systemd_service
+    systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || error "服务启动失败"
+    run_as_app_user pm2 save >/dev/null 2>&1 || true
     sleep 3
     curl -sf http://localhost:$API_PORT/health >/dev/null || error "健康检查失败"
     success "服务启动成功"
@@ -232,7 +321,8 @@ show_result() {
     [[ -n "$VPS_DOMAIN" ]] && echo "   http://$VPS_DOMAIN/health" || echo "   http://$ip:$API_PORT/health"
     echo ""
     echo "🛠️ 管理命令:"
-    echo "   pm2 status | logs | restart yoyo-transcoder"
+    echo "   systemctl status|restart|stop $SERVICE_NAME"
+    echo "   sudo -u $APP_USER HOME=$APP_HOME PM2_HOME=$APP_PM2_HOME pm2 status"
     echo ""
     echo "📝 配置到 Cloudflare Workers:"
     echo "   VPS_API_URL = http://${VPS_DOMAIN:-$ip}"
@@ -250,8 +340,10 @@ main() {
     
     check_root
     detect_os
+    ensure_runtime_user
     
-    mkdir -p "$INSTALL_DIR" "$HLS_DIR" "$LOG_DIR"
+    fix_runtime_permissions
+    ensure_recordings_permissions
     
     [[ "$SKIP_DEPS" != "true" ]] && {
         install_nodejs

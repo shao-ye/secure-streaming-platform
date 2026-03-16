@@ -18,7 +18,13 @@ set -e
 SCRIPT_VERSION="2.1.0"
 INSTALL_DIR="/opt/yoyo-transcoder"
 HLS_DIR="/var/www/hls"
-LOG_DIR="/var/log/yoyo-transcoder"
+LOG_DIR="/var/log/transcoder"
+APP_USER="yoyo"
+APP_GROUP="yoyo"
+APP_HOME="/home/yoyo"
+APP_PM2_HOME="$APP_HOME/.pm2"
+SERVICE_NAME="yoyo-transcoder"
+RECORDINGS_DIR="/srv/filebrowser/yoyo-k"
 GITHUB_REPO="https://github.com/shao-ye/secure-streaming-platform.git"
 GITHUB_BRANCH="main"
 
@@ -40,6 +46,86 @@ warn() { echo -e "${YELLOW}[警告]${NC} $1" >&2; }
 error() { echo -e "${RED}[错误]${NC} $1" >&2; exit 1; }
 step() { echo ""; echo -e "${CYAN}▶ $1${NC}"; }
 success() { echo -e "${GREEN}✓${NC} $1"; }
+
+# 中文注释：以固定 HOME / PM2_HOME 切换到运行用户执行命令，避免 root 与 yoyo 的 PM2 上下文混用。
+run_as_app_user() {
+  sudo -H -u "$APP_USER" env HOME="$APP_HOME" PM2_HOME="$APP_PM2_HOME" PATH="/usr/local/bin:/usr/bin:/bin:$PATH" "$@"
+}
+
+# 中文注释：确保运行用户、HOME 与 PM2_HOME 存在，后续所有 PM2 操作统一落到 yoyo 用户下。
+ensure_runtime_user() {
+  if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
+    groupadd -r "$APP_GROUP"
+  fi
+
+  if ! id "$APP_USER" >/dev/null 2>&1; then
+    useradd -r -g "$APP_GROUP" -m -d "$APP_HOME" -s /bin/bash "$APP_USER"
+    success "运行用户已创建: $APP_USER"
+  fi
+
+  install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$APP_HOME"
+  install -d -m 700 -o "$APP_USER" -g "$APP_GROUP" "$APP_PM2_HOME"
+}
+
+# 中文注释：统一运行目录、日志目录和 HLS 目录权限，避免 root 更新后再次把权限打坏。
+fix_runtime_permissions() {
+  install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$INSTALL_DIR"
+  install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$HLS_DIR"
+  install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$LOG_DIR"
+  chown -R "$APP_USER:$APP_GROUP" "$INSTALL_DIR" "$HLS_DIR" "$LOG_DIR" "$APP_HOME"
+  chmod 700 "$APP_PM2_HOME"
+}
+
+# 中文注释：录制目录仍保留给 File Browser 所在的 root 体系，但额外授予 yoyo 写权限，避免影响下载服务。
+ensure_recordings_permissions() {
+  install -d -m 750 /srv/filebrowser
+  mkdir -p "$RECORDINGS_DIR"
+
+  if command -v setfacl >/dev/null 2>&1; then
+    chmod 750 "$RECORDINGS_DIR"
+    setfacl -R -m "u:${APP_USER}:rwx" "$RECORDINGS_DIR" >/dev/null 2>&1 || true
+    find "$RECORDINGS_DIR" -type d -exec setfacl -m "d:u:${APP_USER}:rwx" {} \; 2>/dev/null || true
+    success "录制目录已配置 ACL 权限"
+  else
+    chown -R root:"$APP_GROUP" "$RECORDINGS_DIR"
+    find "$RECORDINGS_DIR" -type d -exec chmod 2770 {} \; 2>/dev/null || true
+    find "$RECORDINGS_DIR" -type f -exec chmod 660 {} \; 2>/dev/null || true
+    warn "未检测到 setfacl，已回退为 root:${APP_GROUP} 共享组权限"
+  fi
+}
+
+# 中文注释：生成 systemd 服务，root 后续仍通过 systemctl 运维，但实际运行身份固定为 yoyo。
+ensure_systemd_service() {
+  local pm2_bin
+  pm2_bin=$(command -v pm2 2>/dev/null || echo /usr/bin/pm2)
+
+  cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
+[Unit]
+Description=YOYO Transcoder API Service
+After=network.target
+
+[Service]
+Type=forking
+User=$APP_USER
+Group=$APP_GROUP
+WorkingDirectory=$INSTALL_DIR
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=$APP_HOME
+Environment=PM2_HOME=$APP_PM2_HOME
+Environment=TZ=Asia/Shanghai
+ExecStart=$pm2_bin start ecosystem.config.js --env production --update-env
+ExecReload=$pm2_bin reload ecosystem.config.js --env production --update-env
+ExecStop=$pm2_bin delete vps-transcoder-api
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+}
 
 parse_args() {
   # 中文注释：解析命令行参数（非交互模式使用），支持自定义端口/Token/Hostname 等
@@ -202,6 +288,7 @@ clone_project() {
     for br in "${branches[@]}"; do
       if git clone --depth 1 --branch "$br" "$repo_url" "$tmp" >/dev/null 2>&1; then
         mkdir -p "$INSTALL_DIR" && cp -r "$tmp/vps-server/"* "$INSTALL_DIR/" && rm -rf "$tmp"
+        chown -R "$APP_USER:$APP_GROUP" "$INSTALL_DIR"
         success "代码下载完成（git:$br）"
         return 0
       fi
@@ -222,6 +309,7 @@ clone_project() {
       tar -xzf "$tar_file" -C "$tmp" >/dev/null 2>&1 || continue
       if [[ -n "$base" && -d "$tmp/$base/vps-server" ]]; then
         mkdir -p "$INSTALL_DIR" && cp -r "$tmp/$base/vps-server/"* "$INSTALL_DIR/" && rm -rf "$tmp"
+        chown -R "$APP_USER:$APP_GROUP" "$INSTALL_DIR"
         success "代码下载完成（tarball:$br）"
         return 0
       fi
@@ -239,6 +327,7 @@ clone_project() {
         tar -xzf "$tar_file" -C "$tmp" >/dev/null 2>&1 || continue
         if [[ -n "$base" && -d "$tmp/$base/vps-server" ]]; then
           mkdir -p "$INSTALL_DIR" && cp -r "$tmp/$base/vps-server/"* "$INSTALL_DIR/" && rm -rf "$tmp"
+          chown -R "$APP_USER:$APP_GROUP" "$INSTALL_DIR"
           success "代码下载完成（api+token:$br）"
           return 0
         fi
@@ -249,7 +338,13 @@ clone_project() {
   error "代码下载失败"
 }
 
-install_deps() { step "安装项目依赖..."; cd "$INSTALL_DIR"; npm install --production || error "依赖安装失败"; success "依赖安装完成"; }
+install_deps() {
+  step "安装项目依赖..."
+  cd "$INSTALL_DIR"
+  fix_runtime_permissions
+  run_as_app_user npm install --production || error "依赖安装失败"
+  success "依赖安装完成"
+}
 
 generate_config() {
   step "生成配置文件..."
@@ -276,7 +371,7 @@ generate_config() {
     log "   示例1: https://your-worker.example.com (绑定到 Workers 的自定义域名)"
     log "   示例2: https://your-worker.workers.dev (默认 workers.dev 域名)"
     log "   提示: 不要只填写裸域名（例如 your-worker.example.com），否则会导致 VPS 配置校验失败。"
-    log "         如需后续修改，可编辑 /opt/yoyo-transcoder/.env 中的 WORKERS_API_URL 并执行 pm2 restart vps-transcoder-api --update-env"
+    log "         如需后续修改，可编辑 /opt/yoyo-transcoder/.env 中的 WORKERS_API_URL 并执行 systemctl restart $SERVICE_NAME"
     read -rp "   Worker 地址（完整 URL，直接回车使用默认占位值）: " input_url || true
     [[ -n "$input_url" ]] && workers_api_url="$input_url"
 
@@ -306,8 +401,11 @@ CLEANUP_INTERVAL=60000
 ALLOWED_IPS=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
 VPS_BASE_URL=$vps_base_url
 WORKERS_API_URL=$workers_api_url
+RECORDINGS_PATH=$RECORDINGS_DIR
 EOF
-  chmod 600 "$INSTALL_DIR/.env"; success "配置生成完成"
+  chown "$APP_USER:$APP_GROUP" "$INSTALL_DIR/.env"
+  chmod 600 "$INSTALL_DIR/.env"
+  success "配置生成完成"
 }
 
 configure_nginx() {
@@ -355,18 +453,21 @@ EOF
 }
 
 start_service() {
-  step "启动服务..."; cd "$INSTALL_DIR"
-  pm2 stop vps-transcoder-api >/dev/null 2>&1 || true
-  pm2 delete vps-transcoder-api >/dev/null 2>&1 || true
-  pm2 start ecosystem.config.js --env production >/dev/null 2>&1 || error "服务启动失败"
-  pm2 save >/dev/null 2>&1; pm2 startup >/dev/null 2>&1 || true
-  sleep 3; curl -sf http://127.0.0.1:$API_PORT/health >/dev/null || error "健康检查失败"
+  step "启动服务..."
+  cd "$INSTALL_DIR"
+  fix_runtime_permissions
+  ensure_recordings_permissions
+  ensure_systemd_service
+  systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || error "服务启动失败"
+  sleep 3
+  run_as_app_user pm2 save >/dev/null 2>&1 || true
+  curl -sf http://127.0.0.1:$API_PORT/health >/dev/null || error "健康检查失败"
   success "服务启动成功"
 
   echo ""
   log "服务信息（本机）:"
   echo "- PM2 应用: vps-transcoder-api"
-  pm2 status || true
+  run_as_app_user pm2 status || true
   echo ""
   echo "- API 健康检查: http://127.0.0.1:$API_PORT/health"
   echo "- Nginx 健康检查: http://127.0.0.1:$NGINX_PORT/health"
@@ -414,7 +515,7 @@ show_result() {
   echo "🔐 API 密钥: ${YELLOW}$API_KEY${NC}"; echo ""
   echo "🌐 访问地址:"
   if [[ -n "$VPS_DOMAIN" ]]; then echo "   http://$VPS_DOMAIN/health"; else echo "   http://$ip:$API_PORT/health"; fi
-  echo ""; echo "🛠️ 管理命令:"; echo "   pm2 status | logs | restart yoyo-transcoder"; echo ""
+  echo ""; echo "🛠️ 管理命令:"; echo "   systemctl status|restart|stop $SERVICE_NAME"; echo "   sudo -u $APP_USER HOME=$APP_HOME PM2_HOME=$APP_PM2_HOME pm2 status"; echo ""
   echo "📝 配置到 Cloudflare Workers:"
   if [[ -n "$CF_HOSTNAME" ]]; then echo "   VPS_API_URL = https://$CF_HOSTNAME"; else echo "   VPS_API_URL = http://${VPS_DOMAIN:-$ip}"; fi
   echo "   VPS_API_KEY = $API_KEY"; echo "============================================"
@@ -434,6 +535,11 @@ update_project() {
   if [[ ! -f "$INSTALL_DIR/.env" ]]; then
     error "未找到配置文件 .env，请先执行完整安装"
   fi
+
+  ensure_runtime_user
+  fix_runtime_permissions
+  ensure_recordings_permissions
+  ensure_systemd_service
   
   step "备份当前代码..."
   local backup_dir="$INSTALL_DIR.backup.$(date +%Y%m%d_%H%M%S)"
@@ -469,17 +575,19 @@ update_project() {
         
         # 恢复 .env
         cp "$env_backup" "$INSTALL_DIR/.env"
+        chown "$APP_USER:$APP_GROUP" "$INSTALL_DIR/.env"
+        fix_runtime_permissions
         
         rm -rf "$tmp_dir"
         success "代码更新完成（分支: $br）"
         
         step "更新项目依赖..."
         cd "$INSTALL_DIR"
-        npm install --production || warn "依赖更新失败，但不影响使用"
+        run_as_app_user npm install --production || warn "依赖更新失败，但不影响使用"
         success "依赖更新完成"
         
         step "重启服务..."
-        pm2 restart vps-transcoder-api --update-env >/dev/null 2>&1 || error "服务重启失败"
+        systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || error "服务重启失败"
         sleep 3
         curl -sf http://127.0.0.1:$API_PORT/health >/dev/null || warn "健康检查失败，请检查日志"
         success "服务重启成功"
@@ -504,6 +612,7 @@ update_project() {
 main() {
   clear; echo "============================================"; echo -e "${CYAN}  YOYO VPS 一键安装 v$SCRIPT_VERSION${NC}"; echo "============================================"; echo ""
   parse_args "$@"; check_root; detect_os; ensure_basic_tools
+  ensure_runtime_user
   
   # 更新模式
   if [[ "$UPDATE_MODE" == "true" ]]; then
@@ -512,7 +621,8 @@ main() {
   fi
   
   # 完整安装模式
-  mkdir -p "$INSTALL_DIR" "$HLS_DIR" "$LOG_DIR"
+  fix_runtime_permissions
+  ensure_recordings_permissions
   if [[ "$SKIP_DEPS" != "true" ]]; then install_nodejs; install_ffmpeg; install_nginx; install_pm2; fi
 
   # 中文注释：交互式模式下，询问用户是否使用默认端口、是否安装 cloudflared、以及 Hostname
@@ -532,7 +642,7 @@ main() {
     fi
   fi
 
-  clone_project; install_deps; generate_config; configure_nginx; start_service; install_cloudflared; show_result
+  clone_project; fix_runtime_permissions; install_deps; generate_config; configure_nginx; start_service; install_cloudflared; show_result
 }
 
 main "$@"

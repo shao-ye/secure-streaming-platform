@@ -16,9 +16,14 @@ NC='\033[0m' # No Color
 # 配置变量
 APP_DIR="/opt/yoyo-transcoder"
 HLS_DIR="/var/www/hls"
-LOG_DIR="/var/log/yoyo-transcoder"
+LOG_DIR="/var/log/transcoder"
 APP_USER="yoyo"
+APP_GROUP="yoyo"
+APP_HOME="/home/yoyo"
+APP_PM2_HOME="$APP_HOME/.pm2"
 SERVICE_NAME="yoyo-transcoder"
+PM2_APP_NAME="vps-transcoder-api"
+RECORDINGS_DIR="/srv/filebrowser/yoyo-k"
 
 # 日志函数
 log_info() {
@@ -35,6 +40,49 @@ log_error() {
 
 log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
+}
+
+# 中文注释：以固定 HOME / PM2_HOME 切换到运行用户执行命令，避免 root 与 yoyo 的 PM2 上下文混用。
+run_as_app_user() {
+    sudo -H -u "$APP_USER" env HOME="$APP_HOME" PM2_HOME="$APP_PM2_HOME" PATH="/usr/local/bin:/usr/bin:/bin:$PATH" "$@"
+}
+
+# 中文注释：确保运行用户、HOME 与 PM2_HOME 存在，root 后续通过 systemctl 进行运维。
+ensure_runtime_user() {
+    if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
+        groupadd -r "$APP_GROUP"
+    fi
+
+    if ! id "$APP_USER" >/dev/null 2>&1; then
+        useradd -r -g "$APP_GROUP" -m -d "$APP_HOME" -s /bin/bash "$APP_USER"
+    fi
+
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$APP_HOME"
+    install -d -m 700 -o "$APP_USER" -g "$APP_GROUP" "$APP_PM2_HOME"
+}
+
+# 中文注释：统一修复运行目录权限，避免部署后再次出现 PM2_HOME 与日志目录不可写。
+fix_runtime_permissions() {
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$APP_DIR"
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$HLS_DIR"
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$LOG_DIR"
+    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$HLS_DIR" "$LOG_DIR" "$APP_HOME"
+    chmod 700 "$APP_PM2_HOME"
+}
+
+# 中文注释：录制目录保留给 File Browser 所在的 root 体系，同时给 yoyo 增加写权限。
+ensure_recordings_permissions() {
+    mkdir -p "$RECORDINGS_DIR"
+
+    if command -v setfacl >/dev/null 2>&1; then
+        chmod 750 "$RECORDINGS_DIR"
+        setfacl -R -m "u:${APP_USER}:rwx" "$RECORDINGS_DIR" >/dev/null 2>&1 || true
+        find "$RECORDINGS_DIR" -type d -exec setfacl -m "d:u:${APP_USER}:rwx" {} \; 2>/dev/null || true
+    else
+        chown -R root:"$APP_GROUP" "$RECORDINGS_DIR"
+        find "$RECORDINGS_DIR" -type d -exec chmod 2770 {} \; 2>/dev/null || true
+        find "$RECORDINGS_DIR" -type f -exec chmod 660 {} \; 2>/dev/null || true
+    fi
 }
 
 # 检查是否为root用户
@@ -87,12 +135,9 @@ check_dependencies() {
 stop_existing_service() {
     log_step "停止现有服务..."
     
-    # 停止PM2进程
-    if pm2 list | grep -q "$SERVICE_NAME"; then
-        pm2 stop "$SERVICE_NAME" || true
-        pm2 delete "$SERVICE_NAME" || true
-        log_info "已停止现有PM2进程"
-    fi
+    systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    run_as_app_user pm2 delete "$PM2_APP_NAME" >/dev/null 2>&1 || true
+    log_info "已停止现有服务"
     
     # 清理旧的HLS文件
     if [[ -d "$HLS_DIR" ]]; then
@@ -118,7 +163,7 @@ deploy_application() {
     cp -r . "$APP_DIR/"
     
     # 设置目录权限
-    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+    fix_runtime_permissions
     
     log_info "应用代码部署完成"
 }
@@ -130,7 +175,7 @@ install_dependencies() {
     cd "$APP_DIR"
     
     # 切换到应用用户安装依赖
-    sudo -u "$APP_USER" npm install --production
+    run_as_app_user npm install --production
     
     log_info "应用依赖安装完成"
 }
@@ -145,6 +190,7 @@ create_env_file() {
     # 创建.env文件
     cat > "$APP_DIR/.env" << EOF
 # YOYO转码API环境配置
+TZ=Asia/Shanghai
 NODE_ENV=production
 PORT=3000
 
@@ -155,6 +201,7 @@ ENABLE_IP_WHITELIST=true
 # 目录配置
 HLS_OUTPUT_DIR=$HLS_DIR
 LOG_DIR=$LOG_DIR
+RECORDINGS_PATH=$RECORDINGS_DIR
 
 # FFmpeg配置
 FFMPEG_PATH=/usr/bin/ffmpeg
@@ -176,7 +223,7 @@ ALLOWED_IPS=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.10
 EOF
     
     # 设置文件权限
-    chown "$APP_USER:$APP_USER" "$APP_DIR/.env"
+    chown "$APP_USER:$APP_GROUP" "$APP_DIR/.env"
     chmod 600 "$APP_DIR/.env"
     
     log_info "环境配置文件创建完成"
@@ -198,7 +245,7 @@ $LOG_DIR/*.log {
     notifempty
     create 644 $APP_USER $APP_USER
     postrotate
-        pm2 reload $SERVICE_NAME > /dev/null 2>&1 || true
+        systemctl reload $SERVICE_NAME > /dev/null 2>&1 || true
     endscript
 }
 EOF
@@ -209,6 +256,8 @@ EOF
 # 创建系统服务文件
 create_systemd_service() {
     log_step "创建系统服务..."
+    local pm2_bin
+    pm2_bin=$(command -v pm2 2>/dev/null || echo /usr/bin/pm2)
     
     cat > /etc/systemd/system/yoyo-transcoder.service << EOF
 [Unit]
@@ -218,10 +267,15 @@ After=network.target
 [Service]
 Type=forking
 User=$APP_USER
+Group=$APP_GROUP
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/pm2 start ecosystem.config.js --env production
-ExecReload=/usr/bin/pm2 reload ecosystem.config.js --env production
-ExecStop=/usr/bin/pm2 stop ecosystem.config.js
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=$APP_HOME
+Environment=PM2_HOME=$APP_PM2_HOME
+Environment=TZ=Asia/Shanghai
+ExecStart=$pm2_bin start ecosystem.config.js --env production --update-env
+ExecReload=$pm2_bin reload ecosystem.config.js --env production --update-env
+ExecStop=$pm2_bin delete $PM2_APP_NAME
 Restart=always
 RestartSec=10
 
@@ -241,22 +295,20 @@ start_service() {
     log_step "启动转码API服务..."
     
     cd "$APP_DIR"
-    
-    # 使用PM2启动服务
-    sudo -u "$APP_USER" pm2 start ecosystem.config.js --env production
-    
-    # 保存PM2配置
-    sudo -u "$APP_USER" pm2 save
+    fix_runtime_permissions
+    ensure_recordings_permissions
+    systemctl restart "$SERVICE_NAME"
+    run_as_app_user pm2 save >/dev/null 2>&1 || true
     
     # 等待服务启动
     sleep 5
     
     # 检查服务状态
-    if sudo -u "$APP_USER" pm2 list | grep -q "$SERVICE_NAME.*online"; then
+    if run_as_app_user pm2 list | grep -q "$PM2_APP_NAME.*online"; then
         log_info "转码API服务启动成功"
     else
         log_error "转码API服务启动失败"
-        sudo -u "$APP_USER" pm2 logs "$SERVICE_NAME" --lines 20
+        run_as_app_user pm2 logs "$PM2_APP_NAME" --lines 20 --nostream
         exit 1
     fi
 }
@@ -278,7 +330,7 @@ health_check() {
     else
         log_error "健康检查失败"
         log_info "检查服务日志:"
-        sudo -u "$APP_USER" pm2 logs "$SERVICE_NAME" --lines 10
+        run_as_app_user pm2 logs "$PM2_APP_NAME" --lines 10 --nostream
         exit 1
     fi
 }
@@ -305,10 +357,11 @@ show_deployment_info() {
     echo "  - HLS文件: http://YOUR_VPS_IP/hls/"
     echo ""
     echo "管理命令:"
-    echo "  - 查看状态: pm2 status"
-    echo "  - 查看日志: pm2 logs $SERVICE_NAME"
-    echo "  - 重启服务: pm2 restart $SERVICE_NAME"
-    echo "  - 停止服务: pm2 stop $SERVICE_NAME"
+    echo "  - 查看状态: systemctl status $SERVICE_NAME"
+    echo "  - 查看日志: journalctl -u $SERVICE_NAME -f"
+    echo "  - PM2状态: sudo -u $APP_USER HOME=$APP_HOME PM2_HOME=$APP_PM2_HOME pm2 status"
+    echo "  - 重启服务: systemctl restart $SERVICE_NAME"
+    echo "  - 停止服务: systemctl stop $SERVICE_NAME"
     echo ""
     echo "下一步操作:"
     echo "  1. 配置Nginx (运行 bash configure-nginx.sh)"
@@ -329,6 +382,7 @@ main() {
     echo ""
     
     check_root
+    ensure_runtime_user
     check_dependencies
     stop_existing_service
     deploy_application

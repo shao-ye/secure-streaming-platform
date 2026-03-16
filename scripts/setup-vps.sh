@@ -14,6 +14,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+APP_DIR="/opt/yoyo-transcoder"
+HLS_DIR="/var/www/hls"
+LOG_DIR="/var/log/transcoder"
+APP_USER="yoyo"
+APP_GROUP="yoyo"
+APP_HOME="/home/yoyo"
+APP_PM2_HOME="$APP_HOME/.pm2"
+
 # 日志函数
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -239,9 +247,7 @@ install_pm2() {
     PM2_VERSION=$(pm2 --version)
     log_info "PM2安装完成: v$PM2_VERSION"
     
-    # 配置PM2开机自启
-    pm2 startup
-    log_info "PM2开机自启配置完成"
+    log_info "PM2安装完成，开机自启将由yoyo-transcoder systemd服务负责"
 }
 
 # 创建项目目录
@@ -249,24 +255,20 @@ create_directories() {
     log_step "创建项目目录..."
     
     # 创建应用目录
-    mkdir -p /opt/yoyo-transcoder
-    mkdir -p /var/www/hls
-    mkdir -p /var/log/yoyo-transcoder
+    mkdir -p "$APP_DIR"
+    mkdir -p "$HLS_DIR"
+    mkdir -p "$LOG_DIR"
+    mkdir -p "$APP_HOME"
+    mkdir -p "$APP_PM2_HOME"
     
     # 设置目录权限
-    chown -R nginx:nginx /var/www/hls
-    chmod -R 755 /var/www/hls
-    
-    chown -R root:root /opt/yoyo-transcoder
-    chmod -R 755 /opt/yoyo-transcoder
-    
-    chown -R root:root /var/log/yoyo-transcoder
-    chmod -R 755 /var/log/yoyo-transcoder
+    chmod -R 755 "$APP_DIR" "$HLS_DIR" "$LOG_DIR" "$APP_HOME"
+    chmod 700 "$APP_PM2_HOME"
     
     log_info "项目目录创建完成"
-    log_info "应用目录: /opt/yoyo-transcoder"
-    log_info "HLS输出目录: /var/www/hls"
-    log_info "日志目录: /var/log/yoyo-transcoder"
+    log_info "应用目录: $APP_DIR"
+    log_info "HLS输出目录: $HLS_DIR"
+    log_info "日志目录: $LOG_DIR"
 }
 
 # 配置防火墙
@@ -310,16 +312,21 @@ create_system_user() {
     log_step "创建系统用户..."
     
     # 创建yoyo用户用于运行应用
-    if ! id "yoyo" &>/dev/null; then
-        useradd -r -s /bin/bash -d /opt/yoyo-transcoder yoyo
-        log_info "已创建系统用户: yoyo"
+    if ! getent group "$APP_GROUP" &>/dev/null; then
+        groupadd -r "$APP_GROUP"
+    fi
+
+    if ! id "$APP_USER" &>/dev/null; then
+        useradd -r -g "$APP_GROUP" -m -s /bin/bash -d "$APP_HOME" "$APP_USER"
+        log_info "已创建系统用户: $APP_USER"
     else
-        log_info "系统用户yoyo已存在"
+        log_info "系统用户$APP_USER已存在"
     fi
     
     # 设置目录权限
-    chown -R yoyo:yoyo /opt/yoyo-transcoder
-    chown -R yoyo:yoyo /var/log/yoyo-transcoder
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$APP_HOME"
+    install -d -m 700 -o "$APP_USER" -g "$APP_GROUP" "$APP_PM2_HOME"
+    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$HLS_DIR" "$LOG_DIR" "$APP_HOME"
 }
 
 # 系统优化
@@ -394,9 +401,9 @@ final_check() {
     fi
     
     echo "=== 目录检查 ==="
-    echo "✓ 应用目录: /opt/yoyo-transcoder"
-    echo "✓ HLS目录: /var/www/hls"
-    echo "✓ 日志目录: /var/log/yoyo-transcoder"
+    echo "✓ 应用目录: $APP_DIR"
+    echo "✓ HLS目录: $HLS_DIR"
+    echo "✓ 日志目录: $LOG_DIR"
     
     echo "=== 网络端口 ==="
     echo "✓ HTTP: 80"
@@ -439,10 +446,10 @@ main() {
     echo ""
     echo "========================================"
     log_info "下一步操作："
-    echo "1. 上传转码API代码到 /opt/yoyo-transcoder"
+    echo "1. 上传转码API代码到 $APP_DIR"
     echo "2. 运行部署脚本: bash deploy-api.sh"
     echo "3. 配置Nginx: 复制nginx配置文件"
-    echo "4. 启动服务: pm2 start ecosystem.config.js"
+    echo "4. 启动服务: systemctl restart yoyo-transcoder"
     echo "========================================"
 }
 

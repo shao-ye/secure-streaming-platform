@@ -9,6 +9,92 @@ echo "🚀 VPS可靠部署 - $(date)"
 GIT_DIR="/tmp/github/secure-streaming-platform"
 VPS_SERVER_DIR="$GIT_DIR/vps-server"  # vps-server根目录
 TARGET_DIR="/opt/yoyo-transcoder"  # 运行目录根目录
+APP_USER="yoyo"
+APP_GROUP="yoyo"
+APP_HOME="/home/yoyo"
+APP_PM2_HOME="$APP_HOME/.pm2"
+SERVICE_NAME="yoyo-transcoder"
+LOG_DIR="/var/log/transcoder"
+HLS_DIR="/var/www/hls"
+RECORDINGS_DIR="/srv/filebrowser/yoyo-k"
+
+# 中文注释：以固定 HOME / PM2_HOME 切换到 yoyo 用户执行命令，避免误用 root 的 PM2 上下文。
+run_as_app_user() {
+    sudo -H -u "$APP_USER" env HOME="$APP_HOME" PM2_HOME="$APP_PM2_HOME" PATH="/usr/local/bin:/usr/bin:/bin:$PATH" "$@"
+}
+
+# 中文注释：确保运行用户和固定 PM2_HOME 存在，root 仅负责执行脚本与 systemctl。
+ensure_runtime_user() {
+    if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
+        groupadd -r "$APP_GROUP"
+    fi
+
+    if ! id "$APP_USER" >/dev/null 2>&1; then
+        useradd -r -g "$APP_GROUP" -m -d "$APP_HOME" -s /bin/bash "$APP_USER"
+    fi
+
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$APP_HOME"
+    install -d -m 700 -o "$APP_USER" -g "$APP_GROUP" "$APP_PM2_HOME"
+}
+
+# 中文注释：同步代码后统一修复运行目录权限，避免脚本再次把文件留给 root。
+fix_runtime_permissions() {
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$TARGET_DIR"
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$LOG_DIR"
+    install -d -m 755 -o "$APP_USER" -g "$APP_GROUP" "$HLS_DIR"
+    chown -R "$APP_USER:$APP_GROUP" "$TARGET_DIR" "$LOG_DIR" "$HLS_DIR" "$APP_HOME"
+    chmod 700 "$APP_PM2_HOME"
+}
+
+# 中文注释：录制目录保留给 File Browser 所在的 root 体系，同时给 yoyo 增加写权限。
+ensure_recordings_permissions() {
+    mkdir -p "$RECORDINGS_DIR"
+
+    if command -v setfacl >/dev/null 2>&1; then
+        chmod 750 "$RECORDINGS_DIR"
+        setfacl -R -m "u:${APP_USER}:rwx" "$RECORDINGS_DIR" >/dev/null 2>&1 || true
+        find "$RECORDINGS_DIR" -type d -exec setfacl -m "d:u:${APP_USER}:rwx" {} \; 2>/dev/null || true
+    else
+        chown -R root:"$APP_GROUP" "$RECORDINGS_DIR"
+        find "$RECORDINGS_DIR" -type d -exec chmod 2770 {} \; 2>/dev/null || true
+        find "$RECORDINGS_DIR" -type f -exec chmod 660 {} \; 2>/dev/null || true
+    fi
+}
+
+# 中文注释：生成统一的 systemd 服务定义，实际应用进程始终由 yoyo 用户托管。
+ensure_systemd_service() {
+    local pm2_bin
+    pm2_bin=$(command -v pm2 2>/dev/null || echo /usr/bin/pm2)
+
+    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
+[Unit]
+Description=YOYO Transcoder API Service
+After=network.target
+
+[Service]
+Type=forking
+User=$APP_USER
+Group=$APP_GROUP
+WorkingDirectory=$TARGET_DIR
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=$APP_HOME
+Environment=PM2_HOME=$APP_PM2_HOME
+Environment=TZ=Asia/Shanghai
+ExecStart=$pm2_bin start ecosystem.config.js --env production --update-env
+ExecReload=$pm2_bin reload ecosystem.config.js --env production --update-env
+ExecStop=$pm2_bin delete vps-transcoder-api
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+}
+
+ensure_runtime_user
 
 # 1. 检查Git目录是否存在
 echo "📁 检查Git目录..."
@@ -164,6 +250,9 @@ if [ -f "$VPS_SERVER_DIR/.env.example" ]; then
 fi
 
 echo "✅ 所有文件同步完成"
+fix_runtime_permissions
+ensure_recordings_permissions
+ensure_systemd_service
 
 # 5. 检查关键文件是否存在
 echo "🔍 检查关键文件..."
@@ -279,7 +368,7 @@ echo "🔍 检查关键依赖..."
 MISSING_DEPS=()
 
 for dep in "${REQUIRED_DEPS[@]}"; do
-    if npm list "$dep" >/dev/null 2>&1; then
+    if run_as_app_user npm list "$dep" >/dev/null 2>&1; then
         echo "✅ $dep 已安装"
     else
         echo "⚠️ $dep 未安装"
@@ -290,13 +379,13 @@ done
 # 如果有缺失的依赖，批量安装
 if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     echo "📦 安装缺失的依赖: ${MISSING_DEPS[*]}"
-    npm install "${MISSING_DEPS[@]}"
+    run_as_app_user npm install "${MISSING_DEPS[@]}"
     
     # 验证安装结果
     echo "🔍 验证安装结果..."
     FAILED_DEPS=()
     for dep in "${MISSING_DEPS[@]}"; do
-        if npm list "$dep" >/dev/null 2>&1; then
+        if run_as_app_user npm list "$dep" >/dev/null 2>&1; then
             echo "✅ $dep 安装成功"
         else
             echo "❌ $dep 安装失败"
@@ -315,9 +404,9 @@ fi
 
 # 检查package.json中的其他依赖
 echo "🔍 检查package.json完整性..."
-if ! npm list >/dev/null 2>&1; then
+if ! run_as_app_user npm list >/dev/null 2>&1; then
     echo "⚠️ 检测到其他缺失依赖，运行npm install..."
-    npm install
+    run_as_app_user npm install
     echo "✅ 依赖安装完成"
 else
     echo "✅ 所有依赖完整"
@@ -391,42 +480,9 @@ fi
 echo "🔄 重启PM2服务..."
 cd /opt/yoyo-transcoder
 
-# 尝试使用配置文件重启
-if [ -f "ecosystem.config.js" ]; then
-    echo "📄 使用ecosystem.config.js重启..."
-    
-    # 检查进程是否已存在
-    if pm2 describe vps-transcoder-api >/dev/null 2>&1; then
-        echo "🔄 进程已存在，执行reload..."
-        pm2 reload ecosystem.config.js --env production --update-env
-    else
-        echo "🆕 进程不存在，执行start..."
-        pm2 start ecosystem.config.js --env production
-    fi
-    
-    if [ $? -eq 0 ]; then
-        echo "✅ PM2启动成功（使用配置文件）"
-    else
-        echo "❌ PM2启动失败"
-        exit 1
-    fi
-else
-    echo "⚠️ 配置文件不存在，使用传统方式重启..."
-    
-    # 检查进程是否已存在
-    if pm2 describe vps-transcoder-api >/dev/null 2>&1; then
-        pm2 reload vps-transcoder-api --update-env
-    else
-        pm2 start src/app.js --name vps-transcoder-api
-    fi
-    
-    if [ $? -eq 0 ]; then
-        echo "✅ PM2启动成功"
-    else
-        echo "❌ PM2启动失败"
-        exit 1
-    fi
-fi
+systemctl restart "$SERVICE_NAME"
+echo "✅ systemd服务已重启"
+run_as_app_user pm2 save >/dev/null 2>&1 || true
 
 # 12. 等待服务启动
 echo "⏳ 等待服务启动..."
@@ -434,7 +490,7 @@ sleep 3
 
 # 13. 检查服务状态
 echo "🔍 检查服务状态..."
-pm2 list | grep vps-transcoder-api
+run_as_app_user pm2 list | grep vps-transcoder-api
 
 # 14. 测试健康检查
 echo "📡 测试服务健康..."
@@ -442,7 +498,7 @@ if curl -s http://localhost:3000/health >/dev/null; then
     echo "✅ 服务健康检查通过"
 else
     echo "⚠️ 服务健康检查失败，查看日志："
-    pm2 logs vps-transcoder-api --lines 5 --nostream
+    run_as_app_user pm2 logs vps-transcoder-api --lines 5 --nostream
 fi
 
 echo ""
