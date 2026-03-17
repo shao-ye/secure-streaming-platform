@@ -72,13 +72,18 @@ fix_runtime_permissions() {
 
 # 中文注释：录制目录保留给 File Browser 所在的 root 体系，同时给 yoyo 增加写权限。
 ensure_recordings_permissions() {
+    install -d -m 750 /srv/filebrowser
     mkdir -p "$RECORDINGS_DIR"
 
     if command -v setfacl >/dev/null 2>&1; then
+        # 中文注释：父目录只补充穿越权限，避免 yoyo 无法进入 /srv/filebrowser/yoyo-k。
+        setfacl -m "u:${APP_USER}:--x" /srv/filebrowser >/dev/null 2>&1 || true
         chmod 750 "$RECORDINGS_DIR"
         setfacl -R -m "u:${APP_USER}:rwx" "$RECORDINGS_DIR" >/dev/null 2>&1 || true
         find "$RECORDINGS_DIR" -type d -exec setfacl -m "d:u:${APP_USER}:rwx" {} \; 2>/dev/null || true
     else
+        chown root:"$APP_GROUP" /srv/filebrowser
+        chmod 710 /srv/filebrowser
         chown -R root:"$APP_GROUP" "$RECORDINGS_DIR"
         find "$RECORDINGS_DIR" -type d -exec chmod 2770 {} \; 2>/dev/null || true
         find "$RECORDINGS_DIR" -type f -exec chmod 660 {} \; 2>/dev/null || true

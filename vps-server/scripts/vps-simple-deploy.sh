@@ -51,10 +51,16 @@ ensure_recordings_permissions() {
     mkdir -p "$RECORDINGS_DIR"
 
     if command -v setfacl >/dev/null 2>&1; then
+        local recordings_parent
+        recordings_parent=$(dirname "$RECORDINGS_DIR")
+        chmod 750 "$recordings_parent" 2>/dev/null || true
+        setfacl -m "u:${APP_USER}:--x" "$recordings_parent" >/dev/null 2>&1 || true
         chmod 750 "$RECORDINGS_DIR"
         setfacl -R -m "u:${APP_USER}:rwx" "$RECORDINGS_DIR" >/dev/null 2>&1 || true
         find "$RECORDINGS_DIR" -type d -exec setfacl -m "d:u:${APP_USER}:rwx" {} \; 2>/dev/null || true
     else
+        chown root:"$APP_GROUP" "$(dirname "$RECORDINGS_DIR")" 2>/dev/null || true
+        chmod 750 "$(dirname "$RECORDINGS_DIR")" 2>/dev/null || true
         chown -R root:"$APP_GROUP" "$RECORDINGS_DIR"
         find "$RECORDINGS_DIR" -type d -exec chmod 2770 {} \; 2>/dev/null || true
         find "$RECORDINGS_DIR" -type f -exec chmod 660 {} \; 2>/dev/null || true

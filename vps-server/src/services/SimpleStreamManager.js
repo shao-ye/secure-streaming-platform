@@ -35,7 +35,7 @@ class SimpleStreamManager {
     // 🆕 录制功能属性
     this.recordingChannels = new Set();  // 录制中的频道集合
     this.recordingConfigs = new Map();   // 频道录制配置 Map<channelId, recordConfig>
-    this.recordingBaseDir = process.env.RECORDINGS_BASE_DIR || '/var/www/recordings';
+    this.recordingBaseDir = process.env.RECORDINGS_PATH || process.env.RECORDINGS_BASE_DIR || '/var/www/recordings';
 
     // FFmpeg配置
     this.ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
@@ -58,7 +58,8 @@ class SimpleStreamManager {
     logger.info('🎬 SimpleStreamManager initialized', {
       vpsBaseDomain: this.vpsBaseDomain,
       workersApiUrl: this.workersApiUrl,
-      hlsOutputDir: this.hlsOutputDir
+      hlsOutputDir: this.hlsOutputDir,
+      recordingBaseDir: this.recordingBaseDir
     });
   }
 
@@ -126,6 +127,41 @@ class SimpleStreamManager {
       default:
         return null;  // 不使用滤镜
     }
+  }
+
+  /**
+   * 解析录制文件名使用的频道名称
+   * 优先使用频道配置接口返回的权威名称，避免调度配置链路中中文被替换成问号
+   * @param {string} channelId - 频道ID
+   * @param {Object} recordConfig - 录制配置
+   * @param {Object|null} channelConfig - 频道配置接口返回的数据
+   * @returns {string} 可用于文件名的频道名称
+   */
+  resolveRecordingChannelName(channelId, recordConfig, channelConfig = null) {
+    const configChannelName = typeof recordConfig?.channelName === 'string'
+      ? recordConfig.channelName.trim()
+      : '';
+    const authoritativeChannelName = typeof channelConfig?.channelName === 'string'
+      ? channelConfig.channelName.trim()
+      : '';
+
+    if (authoritativeChannelName) {
+      if (configChannelName && configChannelName !== authoritativeChannelName) {
+        logger.warn('Recording channel name corrected from channel config', {
+          channelId,
+          configChannelName,
+          authoritativeChannelName
+        });
+      }
+
+      return authoritativeChannelName;
+    }
+
+    if (configChannelName) {
+      return configChannelName;
+    }
+
+    return channelId;
   }
 
   /**
@@ -851,6 +887,7 @@ class SimpleStreamManager {
           channelConfig = response.data.data;
           logger.info('Fetched channel config for recording', { 
             channelId, 
+            channelName: channelConfig.channelName,
             videoAspectRatio: channelConfig.videoAspectRatio 
           });
         }
@@ -863,6 +900,11 @@ class SimpleStreamManager {
       
       // 生成视频滤镜
       const videoFilter = this.getVideoFilter(channelConfig);
+      const resolvedChannelName = this.resolveRecordingChannelName(channelId, recordConfig, channelConfig);
+      const normalizedRecordConfig = {
+        ...recordConfig,
+        channelName: resolvedChannelName
+      };
       
       // 检查是否已经在录制中
       const existing = this.activeStreams.get(channelId);
@@ -873,7 +915,10 @@ class SimpleStreamManager {
         });
         
         // 更新配置但不重启进程
-        this.recordingConfigs.set(channelId, recordConfig);
+        this.recordingConfigs.set(channelId, {
+          ...normalizedRecordConfig,
+          sessionStartTime: this.recordingConfigs.get(channelId)?.sessionStartTime || Date.now()
+        });
         this.recordingChannels.add(channelId);
         
         return {
@@ -885,7 +930,7 @@ class SimpleStreamManager {
       
       // 保存录制配置
       const configWithSession = {
-        ...recordConfig,
+        ...normalizedRecordConfig,
         sessionStartTime: Date.now()  // 🆕 记录会话开始时间
       };
       this.recordingConfigs.set(channelId, configWithSession);
@@ -993,6 +1038,39 @@ class SimpleStreamManager {
     } catch (error) {
       logger.error('Failed to disable recording', { channelId, error: error.message });
       throw error;
+    }
+  }
+
+  /**
+   * 处理录制进程异常退出后的文件收尾
+   * 保留录制标记给调度器做自动恢复，同时尽量把当前录制文件改成可识别的正式文件名
+   * @param {string} channelId - 频道ID
+   * @param {Object} recordConfig - 录制配置
+   * @param {string} recordingPath - 当前录制路径
+   * @param {number|null} code - 退出码
+   * @param {string|null} signal - 退出信号
+   */
+  async handleUnexpectedRecordingExit(channelId, recordConfig, recordingPath, code, signal) {
+    try {
+      logger.warn('Handling unexpected recording exit', {
+        channelId,
+        code,
+        signal,
+        recordingPath,
+        segmentEnabled: !!recordConfig?.segmentEnabled
+      });
+
+      if (recordConfig?.segmentEnabled) {
+        await this.renameFinalSegment(channelId, recordConfig);
+      } else if (recordingPath) {
+        await this.renameRecordingWithActualEndTime(recordingPath);
+      }
+    } catch (error) {
+      logger.error('Failed to finalize recording after unexpected exit', {
+        channelId,
+        error: error.message,
+        stack: error.stack
+      });
     }
   }
 
@@ -1191,6 +1269,19 @@ class SimpleStreamManager {
     ffmpegProcess.on('exit', (code, signal) => {
       logger.info('FFmpeg process exited', { channelId, code, signal });
       this.activeStreams.delete(channelId);
+
+      if (recordConfig) {
+        setImmediate(() => {
+          this.handleUnexpectedRecordingExit(channelId, recordConfig, recordingPath, code, signal)
+            .catch((error) => {
+              logger.error('Unexpected recording exit cleanup failed', {
+                channelId,
+                error: error.message,
+                stack: error.stack
+              });
+            });
+        });
+      }
     });
 
     ffmpegProcess.stderr.on('data', (data) => {

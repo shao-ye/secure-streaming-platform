@@ -17,11 +17,15 @@ class RecordScheduler {
   constructor(streamManager) {
     this.streamManager = streamManager;
     this.cronTasks = new Map();  // Map<channelId, {startTask, stopTask}>
+    this.channelConfigs = new Map();  // Map<channelId, config>
+    this.recoveryLocks = new Set();
     this.workdayChecker = new WorkdayChecker();
     
     // 从统一配置读取Workers API配置，无默认值
     this.workersApiUrl = config.workersApiUrl;
     this.isRunning = false;
+    this.healthCheckTimer = null;
+    this.healthCheckIntervalMs = 60000;
     
     logger.info('📼 RecordScheduler initialized', {
       workersApiUrl: this.workersApiUrl
@@ -67,6 +71,7 @@ class RecordScheduler {
         }
       }
       
+      this.startHealthCheck();
       this.isRunning = true;
       logger.info('RecordScheduler started successfully', {
         scheduledChannels: this.cronTasks.size
@@ -86,6 +91,7 @@ class RecordScheduler {
     
     // 清除已存在的任务
     this.unscheduleChannel(channelId);
+    this.channelConfigs.set(channelId, { ...config });
     
     const [startH, startM] = startTime.split(':');
     const [endH, endM] = endTime.split(':');
@@ -136,6 +142,103 @@ class RecordScheduler {
       tasks.stopTask.stop();
       this.cronTasks.delete(channelId);
       logger.info('Unscheduled record tasks', { channelId });
+    }
+    this.channelConfigs.delete(channelId);
+  }
+
+  /**
+   * 启动录制健康检查定时器
+   * 用于在录制时段内检测 FFmpeg 意外退出，并自动恢复录制
+   */
+  startHealthCheck() {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+    }
+
+    this.healthCheckTimer = setInterval(() => {
+      this.recoverInterruptedRecordings().catch((error) => {
+        logger.error('RecordScheduler health check failed', {
+          error: error.message,
+          stack: error.stack
+        });
+      });
+    }, this.healthCheckIntervalMs);
+
+    if (typeof this.healthCheckTimer.unref === 'function') {
+      this.healthCheckTimer.unref();
+    }
+
+    logger.info('RecordScheduler health check started', {
+      intervalMs: this.healthCheckIntervalMs
+    });
+  }
+
+  /**
+   * 停止录制健康检查定时器
+   */
+  stopHealthCheck() {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+      logger.info('RecordScheduler health check stopped');
+    }
+  }
+
+  /**
+   * 巡检当前录制状态
+   * 若仍处于录制时间窗，但 FFmpeg 已退出或只剩 HLS 进程，则自动补拉起录制
+   */
+  async recoverInterruptedRecordings() {
+    if (!this.isRunning || this.channelConfigs.size === 0) {
+      return;
+    }
+
+    const recordingStatus = this.streamManager.getRecordingStatus();
+    const recordingStatusMap = new Map(
+      recordingStatus.channels.map((channel) => [channel.channelId, channel])
+    );
+
+    for (const [channelId, channelConfig] of this.channelConfigs.entries()) {
+      if (channelConfig.enabled === false) {
+        continue;
+      }
+
+      if (!(await this.shouldRecordNow(channelConfig))) {
+        continue;
+      }
+
+      const currentStatus = recordingStatusMap.get(channelId);
+      const isHealthyRecording = currentStatus?.isActive && currentStatus?.isRecording;
+
+      if (isHealthyRecording) {
+        continue;
+      }
+
+      if (this.recoveryLocks.has(channelId)) {
+        continue;
+      }
+
+      this.recoveryLocks.add(channelId);
+
+      try {
+        logger.warn('Detected interrupted recording, attempting recovery', {
+          channelId,
+          hasRecordingMarker: !!currentStatus,
+          isActive: currentStatus?.isActive || false,
+          isRecording: currentStatus?.isRecording || false
+        });
+
+        await this.streamManager.disableRecording(channelId);
+        await this.startRecording(channelConfig);
+      } catch (error) {
+        logger.error('Failed to recover interrupted recording', {
+          channelId,
+          error: error.message,
+          stack: error.stack
+        });
+      } finally {
+        this.recoveryLocks.delete(channelId);
+      }
     }
   }
   
@@ -551,7 +654,10 @@ class RecordScheduler {
       this.unscheduleChannel(channelId);
     }
     
+    this.stopHealthCheck();
     this.isRunning = false;
+    this.channelConfigs.clear();
+    this.recoveryLocks.clear();
     logger.info('RecordScheduler stopped');
   }
 }
