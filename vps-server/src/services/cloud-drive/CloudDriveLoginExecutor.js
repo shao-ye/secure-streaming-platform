@@ -71,10 +71,20 @@ class CloudDriveLoginExecutor {
       await smsTab.click().catch(() => {});
     }
 
-    await page.getByPlaceholder('请输入手机号').waitFor({
+    await this.getVisiblePhoneInput(page).waitFor({
       state: 'visible',
       timeout: 10000
     });
+  }
+
+  /**
+   * 获取当前可见的手机号输入框
+   * 139 登录页存在多个同 placeholder 输入框时，必须只选择当前真正可见的那个，避免 strict mode 报错。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {import('playwright').Locator} 手机号输入框定位器
+   */
+  getVisiblePhoneInput(page) {
+    return page.locator('input[placeholder="请输入手机号"]:visible').first();
   }
 
   /**
@@ -84,10 +94,20 @@ class CloudDriveLoginExecutor {
    * @returns {Promise<void>}
    */
   async fillPhoneNumber(page, account) {
-    const phoneInput = page.getByPlaceholder('请输入手机号');
+    const phoneInput = this.getVisiblePhoneInput(page);
     await phoneInput.click();
     await phoneInput.fill('');
     await phoneInput.fill(account);
+  }
+
+  /**
+   * 获取当前可见的验证码输入框
+   * 139 登录页同样可能渲染多个验证码输入框副本，这里统一只操作当前可见元素。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {import('playwright').Locator} 验证码输入框定位器
+   */
+  getVisibleSmsCodeInput(page) {
+    return page.locator('input[placeholder="请输入验证码"]:visible').first();
   }
 
   /**
@@ -193,7 +213,7 @@ class CloudDriveLoginExecutor {
     await this.ensureSmsLoginTab(page);
     await this.ensureAgreementAccepted(page);
 
-    const codeInput = page.getByPlaceholder('请输入验证码');
+    const codeInput = this.getVisibleSmsCodeInput(page);
     await codeInput.click();
     await codeInput.fill('');
     await codeInput.fill(smsCode);
