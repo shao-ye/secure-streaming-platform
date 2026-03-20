@@ -440,7 +440,7 @@ class CloudDriveLoginExecutor {
       };
     }
 
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= 1; attempt += 1) {
       const dragPlan = await this.buildSliderDragPlan(page);
       if (!dragPlan) {
         return {
@@ -471,21 +471,29 @@ class CloudDriveLoginExecutor {
       /**
        * 中文说明：采用前快后慢并带轻微抖动的拖动轨迹，尽量贴近真人操作，降低滑块风控误判概率。
        */
-      const steps = 24;
+      await delay(240 + Math.floor(Math.random() * 120));
+
+      /**
+       * 中文说明：AJ-Captcha 类滑块通常会结合拖动总时长、轨迹抖动和尾部修正进行校验。
+       * 这里把拖动时间拉长到接近真人操作，并加入更明显的减速与回拉动作。
+       */
+      const steps = 42;
       for (let stepIndex = 1; stepIndex <= steps; stepIndex += 1) {
         const progress = stepIndex / steps;
         const easedProgress = 1 - ((1 - progress) * (1 - progress));
         const currentX = startX + (safeDistance * easedProgress);
-        const currentY = startY + ((stepIndex % 2 === 0) ? 0.5 : -0.5);
+        const currentY = startY + ((stepIndex % 3 === 0) ? 0.8 : ((stepIndex % 2 === 0) ? 0.2 : -0.4));
         await page.mouse.move(currentX, currentY, { steps: 1 });
-        await delay(18 + Math.floor(Math.random() * 12));
+        await delay(28 + Math.floor(Math.random() * 18));
       }
 
-      await page.mouse.move(startX + safeDistance + 3, startY, { steps: 1 }).catch(() => {});
-      await delay(60);
+      await page.mouse.move(startX + safeDistance + 6, startY + 0.3, { steps: 1 }).catch(() => {});
+      await delay(90 + Math.floor(Math.random() * 50));
+      await page.mouse.move(startX + safeDistance + 2, startY - 0.2, { steps: 1 }).catch(() => {});
+      await delay(70 + Math.floor(Math.random() * 40));
       await page.mouse.move(startX + safeDistance, startY, { steps: 1 }).catch(() => {});
       await page.mouse.up();
-      await delay(1800);
+      await delay(2200);
 
       if (!await this.hasSliderVerification(page)) {
         return {
@@ -502,12 +510,12 @@ class CloudDriveLoginExecutor {
         };
       }
 
-      if (attempt < 2) {
-        const refreshButton = page.getByText('刷新', { exact: true }).first();
-        if (await refreshButton.isVisible().catch(() => false)) {
-          await refreshButton.click().catch(() => {});
-          await delay(1000);
-        }
+      const knownMessage = this.extractKnownErrorMessage(pageText);
+      if (knownMessage) {
+        return {
+          success: false,
+          message: knownMessage
+        };
       }
     }
 
