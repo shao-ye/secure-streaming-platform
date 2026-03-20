@@ -131,8 +131,61 @@ class CloudDriveLoginExecutor {
 
       if (visibleCheckbox && !visibleCheckbox.checked) {
         visibleCheckbox.click();
+        return;
+      }
+
+      /**
+       * 中文说明：139 登录页当前使用的是自绘协议勾选区，不一定存在原生 checkbox。
+       * 这里补充点击可见的协议勾选容器或其图片节点，尽量在发送短信前完成勾选。
+       */
+      const customAgreementCandidates = Array.from(document.querySelectorAll(
+        '.check-img-wrap.code-sms-check-img-wrap, .code-sms-check-img-wrap, .check-img-wrap, .default_box_tips img'
+      ));
+      const visibleAgreementElement = customAgreementCandidates.find((element) => {
+        const rect = element.getBoundingClientRect();
+        const computedStyle = window.getComputedStyle(element);
+        return rect.width > 0
+          && rect.height > 0
+          && computedStyle.display !== 'none'
+          && computedStyle.visibility !== 'hidden';
+      });
+
+      if (visibleAgreementElement) {
+        visibleAgreementElement.dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
       }
     }).catch(() => {});
+  }
+
+  /**
+   * 处理官网“勾选并获取验证码”提示弹窗
+   * 某些页面版本不会直接勾选协议，而是在点击获取验证码后弹出确认层。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {Promise<boolean>} 是否检测并处理了该提示弹窗
+   */
+  async resolveAgreementPrompt(page) {
+    const confirmLocator = page.getByText(/勾选并获取验证码/, { exact: false }).first();
+    if (await confirmLocator.isVisible().catch(() => false)) {
+      await confirmLocator.click({ timeout: 5000 }).catch(() => {});
+      await delay(1500);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * 判断协议确认提示是否仍然可见
+   * 该提示存在时说明官网尚未真正进入发送验证码阶段。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {Promise<boolean>} 是否存在协议提示
+   */
+  async hasAgreementPrompt(page) {
+    const promptLocator = page.getByText(/获取验证码前请勾选同意|请勾选同意相关协议政策/, { exact: false }).first();
+    return promptLocator.isVisible().catch(() => false);
   }
 
   /**
@@ -146,7 +199,9 @@ class CloudDriveLoginExecutor {
     try {
       const sendButton = session.page.getByText('获取验证码', { exact: true }).first();
       await sendButton.click({ timeout: 10000 });
-      await delay(2000);
+      await delay(1200);
+      await this.resolveAgreementPrompt(session.page);
+      await delay(2500);
 
       const analysisResult = await this.analyzeSmsRequestResult(session.page);
       if (!analysisResult.success) {
@@ -171,6 +226,13 @@ class CloudDriveLoginExecutor {
    * @returns {Promise<{success: boolean, message: string}>} 分析结果
    */
   async analyzeSmsRequestResult(page) {
+    if (await this.hasAgreementPrompt(page)) {
+      return {
+        success: false,
+        message: '官网要求先勾选用户协议后才能发送验证码'
+      };
+    }
+
     const pageText = await this.readVisiblePageText(page);
     const buttonText = await this.readSmsButtonText(page);
     const pageErrorMessage = this.extractKnownErrorMessage(pageText);
@@ -197,8 +259,8 @@ class CloudDriveLoginExecutor {
     }
 
     return {
-      success: true,
-      message: '已触发验证码发送，请留意手机短信'
+      success: false,
+      message: '未检测到验证码发送成功，请检查官网页面提示后重试'
     };
   }
 
@@ -314,10 +376,22 @@ class CloudDriveLoginExecutor {
   async readSmsButtonText(page) {
     return page.evaluate(() => {
       const allText = Array.from(document.querySelectorAll('button, div, span'))
-        .map((element) => (element.textContent || '').trim())
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          const computedStyle = window.getComputedStyle(element);
+          return {
+            text: (element.textContent || '').trim(),
+            visible: rect.width > 0
+              && rect.height > 0
+              && computedStyle.display !== 'none'
+              && computedStyle.visibility !== 'hidden'
+          };
+        })
+        .filter((item) => item.visible)
+        .map((item) => item.text)
         .filter(Boolean);
 
-      return allText.find((text) => /获取验证码|重新获取|重新发送|\d+\s*s|\d+秒/i.test(text)) || '';
+      return allText.find((text) => /^(获取验证码|重新获取|重新发送|\d+\s*s|\d+秒)$/i.test(text)) || '';
     }).catch(() => '');
   }
 
@@ -338,6 +412,8 @@ class CloudDriveLoginExecutor {
       /验证码失效/,
       /验证码发送过于频繁/,
       /操作过于频繁/,
+      /请勾选同意相关协议政策/,
+      /获取验证码前请勾选同意/,
       /系统繁忙/,
       /网络异常/,
       /请稍后再试/
