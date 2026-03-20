@@ -160,6 +160,15 @@ try {
   logger.error('预加载管理API路由加载失败:', error.message);
 }
 
+// 🆕 中国移动云盘API路由
+try {
+  const cloudDriveRoutes = require('./routes/cloud-drive');
+  app.use('/api/cloud-drive', cloudDriveRoutes);
+  logger.info('✅ 中国移动云盘API路由已加载');
+} catch (error) {
+  logger.error('中国移动云盘API路由加载失败:', error.message);
+}
+
 // 🆕 视频清理服务
 let videoCleanupScheduler = null;
 let recoveryService = null;  // 🆕 录制文件恢复服务全局引用

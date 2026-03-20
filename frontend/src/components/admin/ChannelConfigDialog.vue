@@ -150,6 +150,64 @@
         :closable="false"
         style="margin-bottom: 15px"
       />
+
+      <template v-if="form.recordConfig.enabled">
+        <el-divider content-position="left">
+          <span style="font-weight: bold;">自动上传配置</span>
+        </el-divider>
+
+        <el-form-item label="自动上传">
+          <el-switch
+            v-model="form.recordConfig.upload.enabled"
+            active-text="启用"
+            inactive-text="禁用"
+          />
+        </el-form-item>
+
+        <template v-if="form.recordConfig.upload.enabled">
+          <el-form-item label="目标类型">
+            <el-radio-group v-model="form.recordConfig.upload.destinationType">
+              <el-radio label="cloudFile">默认文件目录</el-radio>
+            </el-radio-group>
+            <div style="margin-top: 5px; font-size: 12px; color: #909399;">
+              V1 先支持默认文件目录手动路径配置与校验。
+            </div>
+          </el-form-item>
+
+          <el-form-item label="选择方式">
+            <el-radio-group v-model="form.recordConfig.upload.selectorMode">
+              <el-radio label="manual">手动路径</el-radio>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item label="目标路径">
+            <div style="display: flex; width: 100%; gap: 10px;">
+              <el-input
+                v-model="form.recordConfig.upload.manualPath"
+                placeholder="例如：/我的视频/幼儿园录制"
+              />
+              <el-button
+                :loading="validateUploadTargetLoading"
+                @click="handleValidateUploadTarget"
+              >
+                路径校验
+              </el-button>
+            </div>
+            <div style="margin-top: 5px; font-size: 12px; color: #909399;">
+              当前先校验路径格式并回填目标展示，后续再补真实远端目录可写性验证。
+            </div>
+          </el-form-item>
+
+          <el-form-item label="当前目标">
+            <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+              <el-tag type="info">{{ form.recordConfig.upload.resolvedPath || '尚未校验目标路径' }}</el-tag>
+              <span style="font-size: 12px; color: #909399;">
+                状态：{{ uploadStatusLabel }}
+              </span>
+            </div>
+          </el-form-item>
+        </template>
+      </template>
     </el-form>
     
     <template #footer>
@@ -183,6 +241,21 @@ const props = defineProps({
   }
 });
 
+/**
+ * 自动上传状态文案
+ * 用于在频道配置弹窗中展示当前目标校验结果或待处理状态。
+ */
+const uploadStatusLabel = computed(() => {
+  const uploadStatus = form.value.recordConfig.upload?.status;
+  const labelMap = {
+    idle: '待校验',
+    validated: '已校验',
+    invalid: '校验失败'
+  };
+
+  return labelMap[uploadStatus] || '待校验';
+});
+
 const emit = defineEmits(['update:modelValue', 'saved', 'configUpdated']);
 
 const visible = computed({
@@ -192,6 +265,29 @@ const visible = computed({
 
 const formRef = ref(null);
 const saving = ref(false);
+const validateUploadTargetLoading = ref(false);
+
+/**
+ * 获取默认自动上传配置
+ * 统一补齐页面字段，避免后端未返回时导致表单响应式缺失。
+ * @returns {Object} 默认上传配置
+ */
+function createDefaultUploadConfig() {
+  return {
+    enabled: false,
+    destinationType: 'cloudFile',
+    selectorMode: 'manual',
+    targetName: '',
+    groupId: '',
+    albumId: '',
+    catalogId: '',
+    manualPath: '',
+    resolvedPath: '',
+    uploadTrigger: 'after_finalize',
+    retryTimes: 3,
+    status: 'idle'
+  };
+}
 
 const form = ref({
   preloadConfig: {
@@ -205,7 +301,8 @@ const form = ref({
     startTime: '07:40',
     endTime: '17:25',
     workdaysOnly: false,
-    storagePath: '/var/www/recordings'
+    storagePath: '/var/www/recordings',
+    upload: createDefaultUploadConfig()
   },
   videoAspectRatio: 'original'  // 🆕 视频比例配置
 });
@@ -306,7 +403,11 @@ async function loadConfig() {
         startTime: config.startTime || '07:40',
         endTime: config.endTime || '17:25',
         workdaysOnly: config.workdaysOnly === true,
-        storagePath: config.storagePath || '/var/www/recordings'
+        storagePath: config.storagePath || '/var/www/recordings',
+        upload: {
+          ...createDefaultUploadConfig(),
+          ...(config.upload || {})
+        }
       };
       
       console.log('✅ form.recordConfig.enabled 最终值:', form.value.recordConfig.enabled);
@@ -357,7 +458,12 @@ async function handleSave() {
         startTime: form.value.recordConfig.startTime,
         endTime: form.value.recordConfig.endTime,
         workdaysOnly: form.value.recordConfig.workdaysOnly,
-        storagePath: form.value.recordConfig.storagePath
+        storagePath: form.value.recordConfig.storagePath,
+        upload: {
+          ...createDefaultUploadConfig(),
+          ...form.value.recordConfig.upload,
+          uploadTrigger: 'after_finalize'
+        }
       },
       videoAspectRatio: form.value.videoAspectRatio  // 🆕 提交视频比例配置
     };
@@ -423,6 +529,47 @@ async function handleSave() {
     }
   } finally {
     saving.value = false;
+  }
+}
+
+/**
+ * 校验自动上传目标路径
+ * 当前版本先调用后端完成默认文件目录的基础路径格式校验，并回填展示字段。
+ */
+async function handleValidateUploadTarget() {
+  if (!form.value.recordConfig.upload.manualPath) {
+    ElMessage.warning('请输入需要校验的目标路径');
+    return;
+  }
+
+  validateUploadTargetLoading.value = true;
+  try {
+    const response = await axios.post('/api/admin/cloud-drive/validate-target', {
+      destinationType: form.value.recordConfig.upload.destinationType,
+      selectorMode: form.value.recordConfig.upload.selectorMode,
+      manualPath: form.value.recordConfig.upload.manualPath
+    });
+
+    if (response.data?.status === 'success') {
+      form.value.recordConfig.upload = {
+        ...form.value.recordConfig.upload,
+        targetName: response.data.data?.targetName || form.value.recordConfig.upload.targetName,
+        catalogId: response.data.data?.catalogId || '',
+        resolvedPath: response.data.data?.resolvedPath || form.value.recordConfig.upload.manualPath,
+        status: 'validated'
+      };
+
+      ElMessage.success(response.data.message || '路径校验成功');
+      return;
+    }
+
+    form.value.recordConfig.upload.status = 'invalid';
+    ElMessage.error(response.data?.message || '路径校验失败');
+  } catch (error) {
+    form.value.recordConfig.upload.status = 'invalid';
+    ElMessage.error(error.response?.data?.message || '路径校验失败');
+  } finally {
+    validateUploadTargetLoading.value = false;
   }
 }
 

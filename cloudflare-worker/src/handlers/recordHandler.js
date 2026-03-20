@@ -4,12 +4,49 @@
  */
 
 /**
+ * 获取默认的录制自动上传配置
+ * @returns {Object} 默认上传配置
+ */
+function getDefaultUploadConfig() {
+  return {
+    enabled: false,
+    destinationType: 'cloudFile',
+    selectorMode: 'manual',
+    targetName: '',
+    groupId: '',
+    albumId: '',
+    catalogId: '',
+    manualPath: '',
+    resolvedPath: '',
+    uploadTrigger: 'after_finalize',
+    retryTimes: 3,
+    status: 'idle',
+    updatedAt: '',
+    updatedBy: ''
+  };
+}
+
+/**
  * 获取单个频道的录制配置
  */
 async function getRecordConfig(env, channelId) {
   try {
     const channelKey = `channel:${channelId}`;
     const channelData = await env.YOYO_USER_DB.get(channelKey, { type: 'json' });
+
+    const mergedRecordConfig = {
+      enabled: false,
+      startTime: '07:40',
+      endTime: '17:25',
+      workdaysOnly: false,
+      storagePath: '/var/www/recordings',
+      upload: getDefaultUploadConfig(),
+      ...(channelData?.recordConfig || {}),
+      upload: {
+        ...getDefaultUploadConfig(),
+        ...(channelData?.recordConfig?.upload || {})
+      }
+    };
     
     if (channelData?.recordConfig) {
       return {
@@ -17,7 +54,7 @@ async function getRecordConfig(env, channelId) {
         data: {
           channelId,
           channelName: channelData.name,
-          ...channelData.recordConfig
+          ...mergedRecordConfig
         }
       };
     }
@@ -28,11 +65,7 @@ async function getRecordConfig(env, channelId) {
       data: {
         channelId,
         channelName: channelData?.name || '',
-        enabled: false,
-        startTime: '07:40',
-        endTime: '17:25',
-        workdaysOnly: false,
-        storagePath: '/var/www/recordings'
+        ...mergedRecordConfig
       }
     };
   } catch (error) {

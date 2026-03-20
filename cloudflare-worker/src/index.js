@@ -16,6 +16,12 @@ import { ProxyHandler } from './handlers/proxyHandler.js';
 import { handlePreloadRequest } from './handlers/preloadHandler.js';
 import { handleRecordAPI } from './handlers/recordHandler.js';
 import { handleChannelConfigAPI } from './handlers/channelConfigHandler.js';
+import {
+  getDefaultCloudDriveConfig,
+  getDefaultSystemConfig,
+  handleCloudDriveRequest,
+  sanitizeCloudDriveConfig
+} from './handlers/cloudDriveHandler.js';
 
 // 🔥 V2.6: CHANNELS硬编码已移除，改用频道索引系统
 // 应急admin账号（KV读取达到限制时使用，从环境变量读取）
@@ -33,7 +39,7 @@ function handleCors(request, env) {
   const allowedOrigins = [env.FRONTEND_DOMAIN, env.PAGES_DOMAIN].filter(Boolean);
   // 🆕 当未配置 FRONTEND_DOMAIN/PAGES_DOMAIN 时，自动降级：
   //  - 有 Origin 则回显该来源
-  //  - 无 Origin 则使用 "*"，同时不允许携带凭据
+  //  - 无 Origin 则使用 "*",同时不允许携带凭据
   let allowOrigin;
   let allowCredentials = true;
   if (allowedOrigins.length > 0) {
@@ -530,13 +536,9 @@ async function handleRequest(request, env, ctx) {
         try {
           const cleanupCfg = await env.YOYO_USER_DB.get('system:cleanup:config');
           if (!cleanupCfg) {
-            await env.YOYO_USER_DB.put('system:cleanup:config', JSON.stringify({
-              enabled: true,
-              retentionDays: 2,
-              segmentEnabled: false,
-              segmentDuration: 60,
-              updatedAt: new Date().toISOString()
-            }));
+            const defaultSystemConfig = getDefaultSystemConfig();
+            defaultSystemConfig.updatedAt = new Date().toISOString();
+            await env.YOYO_USER_DB.put('system:cleanup:config', JSON.stringify(defaultSystemConfig));
             results.push('cleanup_config: created');
           } else {
             results.push('cleanup_config: exists');
@@ -632,27 +634,40 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
+    // 🆕 中国移动云盘配置与登录接口
+    if (path.startsWith('/api/admin/cloud-drive/')) {
+      const response = await handleCloudDriveRequest(request, env);
+      const newHeaders = new Headers(response.headers);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        newHeaders.set(key, value);
+      });
+      return new Response(response.body, {
+        status: response.status,
+        headers: newHeaders
+      });
+    }
+
     // 🆕 视频清理配置API路由
     // GET /api/admin/cleanup/config - 获取清理配置
     if (path === '/api/admin/cleanup/config' && method === 'GET') {
       try {
         const configData = await env.YOYO_USER_DB.get('system:cleanup:config');
-        const config = configData ? JSON.parse(configData) : {
-          enabled: true,
-          retentionDays: 2
+        const config = configData ? JSON.parse(configData) : getDefaultSystemConfig();
+        const mergedConfig = {
+          ...getDefaultSystemConfig(),
+          ...config,
+          cloudDrive: {
+            ...getDefaultCloudDriveConfig(),
+            ...(config.cloudDrive || {})
+          }
         };
-        
-        // 🆕 向后兼容：添加分段配置默认值
-        if (config.segmentEnabled === undefined) {
-          config.segmentEnabled = false;
-        }
-        if (config.segmentDuration === undefined) {
-          config.segmentDuration = 60;
-        }
         
         return new Response(JSON.stringify({
           status: 'success',
-          data: config
+          data: {
+            ...mergedConfig,
+            cloudDrive: sanitizeCloudDriveConfig(mergedConfig.cloudDrive)
+          }
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -672,6 +687,16 @@ async function handleRequest(request, env, ctx) {
     if (path === '/api/admin/cleanup/config' && method === 'PUT') {
       try {
         const body = await request.json();
+        const configData = await env.YOYO_USER_DB.get('system:cleanup:config');
+        const currentConfig = configData ? JSON.parse(configData) : getDefaultSystemConfig();
+        const mergedCurrentConfig = {
+          ...getDefaultSystemConfig(),
+          ...currentConfig,
+          cloudDrive: {
+            ...getDefaultCloudDriveConfig(),
+            ...(currentConfig.cloudDrive || {})
+          }
+        };
         
         // 🆕 验证分段配置
         if (body.segmentEnabled !== undefined && typeof body.segmentEnabled !== 'boolean') {
@@ -696,12 +721,40 @@ async function handleRequest(request, env, ctx) {
             });
           }
         }
+
+        const recoveryScanHours = Math.max(
+          12,
+          Math.min(168, parseInt(body.recoveryScanHours) || mergedCurrentConfig.recoveryScanHours || 48)
+        );
+
+        const nextCloudDriveConfig = {
+          ...mergedCurrentConfig.cloudDrive,
+          enabled: body.cloudDrive?.enabled === true,
+          provider: 'cmcc139',
+          loginMode: 'sms',
+          account: typeof body.cloudDrive?.account === 'string'
+            ? body.cloudDrive.account.trim()
+            : mergedCurrentConfig.cloudDrive.account,
+          accountMasked: mergedCurrentConfig.cloudDrive.accountMasked,
+          savePassword: body.cloudDrive?.savePassword === true,
+          passwordEncrypted: mergedCurrentConfig.cloudDrive.passwordEncrypted,
+          sessionBundleEncrypted: mergedCurrentConfig.cloudDrive.sessionBundleEncrypted,
+          authStatus: mergedCurrentConfig.cloudDrive.authStatus,
+          authMessage: mergedCurrentConfig.cloudDrive.authMessage,
+          lastValidatedAt: mergedCurrentConfig.cloudDrive.lastValidatedAt,
+          estimatedExpireAt: mergedCurrentConfig.cloudDrive.estimatedExpireAt,
+          lastValidator: mergedCurrentConfig.cloudDrive.lastValidator,
+          updatedAt: new Date().toISOString(),
+          updatedBy: mergedCurrentConfig.cloudDrive.updatedBy || ''
+        };
         
         const config = {
           enabled: body.enabled === true,
           retentionDays: Math.max(1, parseInt(body.retentionDays) || 2),
           segmentEnabled: body.segmentEnabled ?? false,      // 🆕
           segmentDuration: body.segmentDuration ?? 60,       // 🆕
+          recoveryScanHours,
+          cloudDrive: nextCloudDriveConfig,
           updatedAt: new Date().toISOString()
         };
         
@@ -709,7 +762,10 @@ async function handleRequest(request, env, ctx) {
         
         return new Response(JSON.stringify({
           status: 'success',
-          data: config
+          data: {
+            ...config,
+            cloudDrive: sanitizeCloudDriveConfig(config.cloudDrive)
+          }
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }

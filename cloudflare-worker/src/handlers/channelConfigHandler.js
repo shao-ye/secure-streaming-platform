@@ -4,6 +4,29 @@
  */
 
 /**
+ * 获取默认的录制自动上传配置
+ * @returns {Object} 默认上传配置
+ */
+function getDefaultUploadConfig() {
+  return {
+    enabled: false,
+    destinationType: 'cloudFile',
+    selectorMode: 'manual',
+    targetName: '',
+    groupId: '',
+    albumId: '',
+    catalogId: '',
+    manualPath: '',
+    resolvedPath: '',
+    uploadTrigger: 'after_finalize',
+    retryTimes: 3,
+    status: 'idle',
+    updatedAt: '',
+    updatedBy: ''
+  };
+}
+
+/**
  * 获取频道完整配置
  */
 async function getChannelConfig(env, channelId) {
@@ -18,6 +41,20 @@ async function getChannelConfig(env, channelId) {
       };
     }
     
+    const mergedRecordConfig = {
+      enabled: false,
+      startTime: '08:00',
+      endTime: '17:00',
+      workdaysOnly: false,
+      storagePath: '/var/www/recordings',
+      upload: getDefaultUploadConfig(),
+      ...(channelData.recordConfig || {}),
+      upload: {
+        ...getDefaultUploadConfig(),
+        ...(channelData.recordConfig?.upload || {})
+      }
+    };
+
     return {
       status: 'success',
       data: {
@@ -29,13 +66,7 @@ async function getChannelConfig(env, channelId) {
           endTime: '17:30',
           workdaysOnly: false
         },
-        recordConfig: channelData.recordConfig || {
-          enabled: false,
-          startTime: '08:00',
-          endTime: '17:00',
-          workdaysOnly: false,
-          storagePath: '/var/www/recordings'
-        },
+        recordConfig: mergedRecordConfig,
         videoAspectRatio: channelData.videoAspectRatio || 'original'  // 🆕 返回视频比例配置
       }
     };
@@ -125,12 +156,32 @@ async function updateChannelConfig(env, ctx, channelId, data, username) {
     }
     
     if (data.recordConfig) {
+      const uploadConfig = {
+        ...getDefaultUploadConfig(),
+        ...(data.recordConfig.upload || {}),
+        enabled: data.recordConfig.upload?.enabled === true,
+        destinationType: data.recordConfig.upload?.destinationType || 'cloudFile',
+        selectorMode: data.recordConfig.upload?.selectorMode || 'manual',
+        targetName: data.recordConfig.upload?.targetName || '',
+        groupId: data.recordConfig.upload?.groupId || '',
+        albumId: data.recordConfig.upload?.albumId || '',
+        catalogId: data.recordConfig.upload?.catalogId || '',
+        manualPath: data.recordConfig.upload?.manualPath || '',
+        resolvedPath: data.recordConfig.upload?.resolvedPath || '',
+        uploadTrigger: 'after_finalize',
+        retryTimes: Math.max(0, parseInt(data.recordConfig.upload?.retryTimes) || 3),
+        status: data.recordConfig.upload?.status || 'idle',
+        updatedAt: now,
+        updatedBy: username
+      };
+
       channelData.recordConfig = {
         enabled: data.recordConfig.enabled === true,
         startTime: data.recordConfig.startTime,
         endTime: data.recordConfig.endTime,
         workdaysOnly: data.recordConfig.workdaysOnly === true,
         storagePath: data.recordConfig.storagePath || '/var/www/recordings',
+        upload: uploadConfig,
         updatedAt: now,
         updatedBy: username
       };
