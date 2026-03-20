@@ -244,7 +244,15 @@ class CloudDriveLoginExecutor {
       await sendButton.click({ timeout: 10000 });
       await delay(1200);
       await this.resolveAgreementPrompt(session.page);
-      await delay(2500);
+      await delay(800);
+
+      const sliderResult = await this.tryCompleteSliderVerification(session.page);
+      if (!sliderResult.success) {
+        await this.disposeSession(session);
+        throw new Error(sliderResult.message);
+      }
+
+      await delay(1800);
 
       const analysisResult = await this.analyzeSmsRequestResult(session.page);
       if (!analysisResult.success) {
@@ -276,6 +284,13 @@ class CloudDriveLoginExecutor {
       };
     }
 
+    if (await this.hasSliderVerification(page)) {
+      return {
+        success: false,
+        message: '官网短信发送被滑块验证拦截，请稍后重试'
+      };
+    }
+
     const pageText = await this.readVisiblePageText(page);
     const buttonText = await this.readSmsButtonText(page);
     const pageErrorMessage = this.extractKnownErrorMessage(pageText);
@@ -304,6 +319,201 @@ class CloudDriveLoginExecutor {
     return {
       success: false,
       message: '未检测到验证码发送成功，请检查官网页面提示后重试'
+    };
+  }
+
+  /**
+   * 检测当前页面是否出现滑块验证层
+   * 139 官网会在发送验证码前弹出拼图滑块验证，若不先通过，短信不会真正发送。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {Promise<boolean>} 是否存在滑块验证
+   */
+  async hasSliderVerification(page) {
+    const sliderLocator = page.locator('.verify-move-block').first();
+    if (await sliderLocator.isVisible().catch(() => false)) {
+      return true;
+    }
+
+    const sliderTextLocator = page.getByText(/拖动滑块完成拼图|失败次数超过限制|请控制拼图块对齐缺口/, { exact: false }).first();
+    return sliderTextLocator.isVisible().catch(() => false);
+  }
+
+  /**
+   * 计算滑块拼图目标距离
+   * 通过比较背景图与拼图块图像的像素相似度，估算缺口所在的横向位置。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {Promise<Object|null>} 拖拽方案，无法解析时返回 null
+   */
+  async buildSliderDragPlan(page) {
+    return page.evaluate(() => {
+      const panelImg = document.querySelector('.verify-img-panel img');
+      const subImg = document.querySelector('.verify-sub-block img');
+      const subBlock = document.querySelector('.verify-sub-block');
+      const barArea = document.querySelector('.verify-bar-area');
+
+      if (!panelImg || !subImg || !subBlock || !barArea) {
+        return null;
+      }
+
+      const toImageData = (imageElement) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = imageElement.naturalWidth;
+        canvas.height = imageElement.naturalHeight;
+        const context = canvas.getContext('2d');
+        context.drawImage(imageElement, 0, 0);
+        return context.getImageData(0, 0, canvas.width, canvas.height);
+      };
+
+      const panelData = toImageData(panelImg);
+      const subData = toImageData(subImg);
+      const panelWidth = panelData.width;
+      const panelHeight = panelData.height;
+      const subWidth = subData.width;
+      const subHeight = subData.height;
+
+      let bestX = 0;
+      let bestScore = Number.POSITIVE_INFINITY;
+      let sampledPixels = 0;
+
+      for (let offsetX = 0; offsetX <= panelWidth - subWidth; offsetX += 1) {
+        let score = 0;
+        let count = 0;
+
+        for (let y = 0; y < Math.min(panelHeight, subHeight); y += 2) {
+          for (let x = 0; x < subWidth; x += 2) {
+            const subIndex = (y * subWidth + x) * 4;
+            const alpha = subData.data[subIndex + 3];
+            if (alpha < 200) {
+              continue;
+            }
+
+            const panelIndex = (y * panelWidth + offsetX + x) * 4;
+            const dr = panelData.data[panelIndex] - subData.data[subIndex];
+            const dg = panelData.data[panelIndex + 1] - subData.data[subIndex + 1];
+            const db = panelData.data[panelIndex + 2] - subData.data[subIndex + 2];
+            score += Math.abs(dr) + Math.abs(dg) + Math.abs(db);
+            count += 1;
+          }
+        }
+
+        if (count > 0) {
+          const normalizedScore = score / count;
+          if (normalizedScore < bestScore) {
+            bestScore = normalizedScore;
+            bestX = offsetX;
+            sampledPixels = count;
+          }
+        }
+      }
+
+      const panelRect = panelImg.getBoundingClientRect();
+      const barRect = barArea.getBoundingClientRect();
+      const subLeft = parseFloat(window.getComputedStyle(subBlock).left || '0') || 0;
+      const displayScale = panelRect.width / panelImg.naturalWidth;
+      const targetDisplayX = bestX * displayScale;
+      const dragDistance = targetDisplayX - subLeft + 2;
+
+      return {
+        bestX,
+        bestScore,
+        sampledPixels,
+        displayScale,
+        subLeft,
+        targetDisplayX,
+        dragDistance,
+        barWidth: barRect.width
+      };
+    }).catch(() => null);
+  }
+
+  /**
+   * 尝试自动完成官网滑块验证
+   * 这里使用图像匹配得到目标距离，再通过鼠标轨迹模拟拖动。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {Promise<{success: boolean, message: string}>} 处理结果
+   */
+  async tryCompleteSliderVerification(page) {
+    if (!await this.hasSliderVerification(page)) {
+      return {
+        success: true,
+        message: ''
+      };
+    }
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const dragPlan = await this.buildSliderDragPlan(page);
+      if (!dragPlan) {
+        return {
+          success: false,
+          message: '检测到官网滑块验证，但未能解析拼图图片'
+        };
+      }
+
+      const moveBlock = page.locator('.verify-move-block').first();
+      const boundingBox = await moveBlock.boundingBox().catch(() => null);
+      if (!boundingBox) {
+        return {
+          success: false,
+          message: '检测到官网滑块验证，但未能定位拖拽按钮'
+        };
+      }
+
+      const startX = boundingBox.x + (boundingBox.width / 2);
+      const startY = boundingBox.y + (boundingBox.height / 2);
+      const safeDistance = Math.min(
+        Math.max(dragPlan.dragDistance, 20),
+        Math.max(dragPlan.barWidth - 25, 20)
+      );
+
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+
+      /**
+       * 中文说明：采用前快后慢并带轻微抖动的拖动轨迹，尽量贴近真人操作，降低滑块风控误判概率。
+       */
+      const steps = 24;
+      for (let stepIndex = 1; stepIndex <= steps; stepIndex += 1) {
+        const progress = stepIndex / steps;
+        const easedProgress = 1 - ((1 - progress) * (1 - progress));
+        const currentX = startX + (safeDistance * easedProgress);
+        const currentY = startY + ((stepIndex % 2 === 0) ? 0.5 : -0.5);
+        await page.mouse.move(currentX, currentY, { steps: 1 });
+        await delay(18 + Math.floor(Math.random() * 12));
+      }
+
+      await page.mouse.move(startX + safeDistance + 3, startY, { steps: 1 }).catch(() => {});
+      await delay(60);
+      await page.mouse.move(startX + safeDistance, startY, { steps: 1 }).catch(() => {});
+      await page.mouse.up();
+      await delay(1800);
+
+      if (!await this.hasSliderVerification(page)) {
+        return {
+          success: true,
+          message: ''
+        };
+      }
+
+      const pageText = await this.readVisiblePageText(page);
+      if (/失败次数超过限制/.test(pageText)) {
+        return {
+          success: false,
+          message: '官网滑块验证失败次数超过限制，请稍后重试'
+        };
+      }
+
+      if (attempt < 2) {
+        const refreshButton = page.getByText('刷新', { exact: true }).first();
+        if (await refreshButton.isVisible().catch(() => false)) {
+          await refreshButton.click().catch(() => {});
+          await delay(1000);
+        }
+      }
+    }
+
+    return {
+      success: false,
+      message: '未能通过官网滑块验证，请稍后重试'
     };
   }
 
@@ -457,6 +667,9 @@ class CloudDriveLoginExecutor {
       /操作过于频繁/,
       /请勾选同意相关协议政策/,
       /获取验证码前请勾选同意/,
+      /拖动滑块完成拼图/,
+      /请控制拼图块对齐缺口/,
+      /失败次数超过限制/,
       /系统繁忙/,
       /网络异常/,
       /请稍后再试/
