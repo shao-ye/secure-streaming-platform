@@ -8,7 +8,7 @@ const cloudDriveService = new CloudDriveService();
 
 /**
  * 中国移动云盘路由
- * 当前阶段主要提供配置页所需的状态查询、短信登录骨架与手动路径校验能力。
+ * 当前阶段主要提供配置页所需的状态查询、短信登录与手动路径校验能力。
  */
 router.use(authMiddleware);
 
@@ -33,9 +33,9 @@ router.get('/auth-status', (req, res) => {
  * POST /api/cloud-drive/send-sms
  * 请求发送短信验证码。
  */
-router.post('/send-sms', (req, res) => {
+router.post('/send-sms', async (req, res) => {
   try {
-    const result = cloudDriveService.sendSms(req.body || {});
+    const result = await cloudDriveService.sendSms(req.body || {});
     res.status(result.statusCode).json(result.payload);
   } catch (error) {
     logger.error('请求发送短信验证码失败', { error: error.message });
@@ -50,9 +50,9 @@ router.post('/send-sms', (req, res) => {
  * POST /api/cloud-drive/login/validate
  * 执行云盘登录验证。
  */
-router.post('/login/validate', (req, res) => {
+router.post('/login/validate', async (req, res) => {
   try {
-    const result = cloudDriveService.validateLogin(req.body || {});
+    const result = await cloudDriveService.validateLogin(req.body || {});
     res.status(result.statusCode).json(result.payload);
   } catch (error) {
     logger.error('执行云盘登录验证失败', { error: error.message });

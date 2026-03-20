@@ -263,9 +263,32 @@ const cloudDriveStatusLabel = computed(() => {
  * 同步云盘状态到页面表单
  * 接口已对敏感字段做脱敏，这里只合并允许展示的字段。
  * @param {Object} cloudDriveData 云盘返回数据
+ * @param {Object} options 合并选项
  */
-const applyCloudDriveData = (cloudDriveData = {}) => {
-  Object.assign(form.cloudDrive, createDefaultCloudDriveForm(), cloudDriveData)
+const applyCloudDriveData = (cloudDriveData = {}, options = {}) => {
+  const {
+    preserveEnabled = false,
+    preserveSmsCode = false
+  } = options
+
+  const mergedCloudDriveData = {
+    ...createDefaultCloudDriveForm(),
+    ...cloudDriveData
+  }
+
+  /**
+   * 这里保留页面上尚未点击“保存”的局部编辑状态。
+   * 云盘状态刷新接口主要返回登录态元信息，不应该把管理员刚刚手动打开的开关或已输入验证码覆盖掉。
+   */
+  if (preserveEnabled) {
+    mergedCloudDriveData.enabled = form.cloudDrive.enabled
+  }
+
+  if (preserveSmsCode) {
+    mergedCloudDriveData.smsCode = form.cloudDrive.smsCode
+  }
+
+  Object.assign(form.cloudDrive, mergedCloudDriveData)
 }
 
 // 监听外部变化
@@ -316,7 +339,10 @@ const fetchCloudDriveStatus = async () => {
   try {
     const response = await axios.get('/api/admin/cloud-drive/auth-status')
     if (response.data?.status === 'success') {
-      applyCloudDriveData(response.data.data)
+      applyCloudDriveData(response.data.data, {
+        preserveEnabled: true,
+        preserveSmsCode: true
+      })
     }
   } catch (error) {
     console.error('获取云盘状态失败:', error)
@@ -375,7 +401,10 @@ const handleSendSms = async () => {
     })
 
     if (response.data?.status === 'success') {
-      applyCloudDriveData(response.data.data?.cloudDrive)
+      applyCloudDriveData(response.data.data?.cloudDrive, {
+        preserveEnabled: true,
+        preserveSmsCode: true
+      })
       ElMessage.success(response.data.message || '验证码已发送')
     } else {
       ElMessage.error(response.data?.message || '发送验证码失败')
@@ -412,7 +441,9 @@ const handleValidateCloudDriveLogin = async () => {
     })
 
     if (response.data?.status === 'success') {
-      applyCloudDriveData(response.data.data?.cloudDrive)
+      applyCloudDriveData(response.data.data?.cloudDrive, {
+        preserveEnabled: true
+      })
       form.cloudDrive.smsCode = ''
       ElMessage.success(response.data.message || '云盘登录验证成功')
     } else {
