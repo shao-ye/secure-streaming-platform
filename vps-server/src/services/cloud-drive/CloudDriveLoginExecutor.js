@@ -40,11 +40,7 @@ class CloudDriveLoginExecutor {
     const context = await browser.newContext();
     const page = await context.newPage();
 
-    await page.goto(this.loginUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: this.navigationTimeout
-    });
-    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await this.navigateToLoginPage(page);
 
     await this.ensureSmsLoginTab(page);
     await this.fillPhoneNumber(page, account);
@@ -57,6 +53,53 @@ class CloudDriveLoginExecutor {
       account,
       createdAt: Date.now()
     };
+  }
+
+  /**
+   * 导航到 139 登录页并等待关键登录表单可用
+   * 官网首屏偶发较慢，直接等待 domcontentloaded 容易超时；这里改为更早的 commit 级别导航，
+   * 再以手机号输入框可见作为真正可操作的页面就绪信号，并在失败时自动重试。
+   * @param {import('playwright').Page} page 页面对象
+   * @returns {Promise<void>}
+   */
+  async navigateToLoginPage(page) {
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await page.goto(this.loginUrl, {
+          waitUntil: 'commit',
+          timeout: Math.max(this.navigationTimeout, 45000)
+        });
+
+        await this.getVisiblePhoneInput(page).waitFor({
+          state: 'visible',
+          timeout: 20000
+        });
+
+        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+        return;
+      } catch (error) {
+        lastError = error;
+
+        /**
+         * 中文说明：部分情况下 goto 超时后页面资源仍在继续加载。
+         * 这里额外检查一次表单是否已经可见，避免把实际可用的页面误判为失败。
+         */
+        const phoneInputVisible = await this.getVisiblePhoneInput(page)
+          .isVisible()
+          .catch(() => false);
+        if (phoneInputVisible) {
+          return;
+        }
+
+        if (attempt < 2) {
+          await delay(1500);
+        }
+      }
+    }
+
+    throw lastError || new Error('打开中国移动云盘登录页失败');
   }
 
   /**
