@@ -226,6 +226,8 @@ import { ref, computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import axios from '@/utils/axios';
 
+const CLOUD_DRIVE_API_PREFIX = '/api/cloud-drive';
+
 const props = defineProps({
   modelValue: {
     type: Boolean,
@@ -544,7 +546,7 @@ async function handleValidateUploadTarget() {
 
   validateUploadTargetLoading.value = true;
   try {
-    const response = await axios.post('/api/admin/cloud-drive/validate-target', {
+    const response = await axios.post(`${CLOUD_DRIVE_API_PREFIX}/validate-target`, {
       destinationType: form.value.recordConfig.upload.destinationType,
       selectorMode: form.value.recordConfig.upload.selectorMode,
       manualPath: form.value.recordConfig.upload.manualPath

@@ -181,6 +181,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { axios } from '@/utils/axios'
 
+const CLOUD_DRIVE_API_PREFIX = '/api/cloud-drive'
+
 const props = defineProps({
   modelValue: {
     type: Boolean,
@@ -337,7 +339,7 @@ const fetchConfig = async () => {
  */
 const fetchCloudDriveStatus = async () => {
   try {
-    const response = await axios.get('/api/admin/cloud-drive/auth-status')
+    const response = await axios.get(`${CLOUD_DRIVE_API_PREFIX}/auth-status`)
     if (response.data?.status === 'success') {
       applyCloudDriveData(response.data.data, {
         preserveEnabled: true,
@@ -396,7 +398,7 @@ const handleSendSms = async () => {
 
   sendSmsLoading.value = true
   try {
-    const response = await axios.post('/api/admin/cloud-drive/send-sms', {
+    const response = await axios.post(`${CLOUD_DRIVE_API_PREFIX}/send-sms`, {
       account: form.cloudDrive.account
     })
 
@@ -434,7 +436,7 @@ const handleValidateCloudDriveLogin = async () => {
 
   validateLoginLoading.value = true
   try {
-    const response = await axios.post('/api/admin/cloud-drive/login/validate', {
+    const response = await axios.post(`${CLOUD_DRIVE_API_PREFIX}/login/validate`, {
       loginMode: 'sms',
       account: form.cloudDrive.account,
       smsCode: form.cloudDrive.smsCode

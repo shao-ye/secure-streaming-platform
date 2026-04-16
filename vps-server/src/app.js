@@ -164,6 +164,7 @@ try {
 try {
   const cloudDriveRoutes = require('./routes/cloud-drive');
   app.use('/api/cloud-drive', cloudDriveRoutes);
+  app.use('/api/admin/cloud-drive', cloudDriveRoutes);
   logger.info('✅ 中国移动云盘API路由已加载');
 } catch (error) {
   logger.error('中国移动云盘API路由加载失败:', error.message);
