@@ -635,7 +635,7 @@ async function handleRequest(request, env, ctx) {
     }
 
     // 🆕 中国移动云盘配置与登录接口
-    if (path.startsWith('/api/admin/cloud-drive/')) {
+    if (path.startsWith('/api/admin/cloud-drive/') || path.startsWith('/api/cloud-drive/')) {
       const response = await handleCloudDriveRequest(request, env);
       const newHeaders = new Headers(response.headers);
       Object.entries(corsHeaders).forEach(([key, value]) => {

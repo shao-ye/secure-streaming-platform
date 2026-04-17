@@ -360,19 +360,27 @@ async function handleCloudDriveRequest(request, env) {
   const pathname = new URL(request.url).pathname;
   const method = request.method;
 
-  if (pathname === '/api/admin/cloud-drive/send-sms' && method === 'POST') {
+  /**
+   * 兼容历史前端直接调用 /api/cloud-drive/* 的路径。
+   * 这里统一归一化为 /api/admin/cloud-drive/*，避免 Worker 层因前缀不一致返回 404。
+   */
+  const normalizedPathname = pathname.startsWith('/api/cloud-drive/')
+    ? pathname.replace('/api/cloud-drive/', '/api/admin/cloud-drive/')
+    : pathname;
+
+  if (normalizedPathname === '/api/admin/cloud-drive/send-sms' && method === 'POST') {
     return handleSendSms(env, request);
   }
 
-  if (pathname === '/api/admin/cloud-drive/login/validate' && method === 'POST') {
+  if (normalizedPathname === '/api/admin/cloud-drive/login/validate' && method === 'POST') {
     return handleValidateLogin(env, request);
   }
 
-  if (pathname === '/api/admin/cloud-drive/auth-status' && method === 'GET') {
+  if (normalizedPathname === '/api/admin/cloud-drive/auth-status' && method === 'GET') {
     return handleAuthStatus(env);
   }
 
-  if (pathname === '/api/admin/cloud-drive/validate-target' && method === 'POST') {
+  if (normalizedPathname === '/api/admin/cloud-drive/validate-target' && method === 'POST') {
     return handleValidateTarget(env, request);
   }
 

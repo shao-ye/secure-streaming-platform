@@ -155,50 +155,76 @@ class CloudDriveLoginExecutor {
 
   /**
    * 勾选协议确认
-   * 该页面在不同版本下可能使用原生 checkbox 或自绘勾选框。
-   * 这里优先尝试点击可见 checkbox，若未找到则保持兼容，不强制报错。
+   * 2026-04 抓取确认 139 登录页协议勾选 DOM 如下：
+   *   <div class="bottom-tip-text code-sms-bottom-tip">
+   *     <div class="default_box_check_tip" style="display:none;">请勾选同意相关协议政策</div>
+   *     <div class="check-img-wrap code-sms-check-img-wrap">
+   *       <img src="data:image/png;base64,..." />   ← Vue 通过替换 src 表现勾选状态
+   *     </div>
+   *     <p> 我已阅读并同意 ... </p>
+   *   </div>
+   *
+   * 关键点：Vue 的 click 监听挂在 <img> 上，`dispatchEvent(new MouseEvent('click'))`
+   * 合成事件无法触发 Vue 的响应式更新，必须使用 Playwright 真实鼠标点击，
+   * 并以 <img> 的 src 属性前后变化作为勾选是否成功的判定。
    * @param {import('playwright').Page} page 页面对象
    * @returns {Promise<void>}
    */
   async ensureAgreementAccepted(page) {
+    // 策略 1：Playwright 真实鼠标点击 <img>，这是 Vue 实际绑定 click 的目标
+    const imgLocator = page.locator('.code-sms-check-img-wrap img').first();
+    const imgVisible = await imgLocator.isVisible().catch(() => false);
+    if (imgVisible) {
+      const srcBefore = await imgLocator.getAttribute('src').catch(() => null);
+      await imgLocator.click({ timeout: 3000 }).catch(() => {});
+      await delay(300);
+      const srcAfter = await imgLocator.getAttribute('src').catch(() => null);
+      // src 变化 → Vue 响应式已触发，勾选状态已切换，直接返回
+      if (srcBefore && srcAfter && srcBefore !== srcAfter) {
+        return;
+      }
+    }
+
+    // 策略 2：兜底点击外层容器，应对 img 被层叠遮挡或未完全渲染的场景
+    const wrapLocator = page.locator('.check-img-wrap.code-sms-check-img-wrap, .code-sms-check-img-wrap').first();
+    if (await wrapLocator.isVisible().catch(() => false)) {
+      await wrapLocator.click({ timeout: 3000 }).catch(() => {});
+      await delay(300);
+    }
+
+    // 策略 3：进程内 evaluate 兜底，兼容旧版本或极端 DOM（原生 checkbox / 其他自绘样式）
     await page.evaluate(() => {
-      /**
-       * 中文说明：优先处理原生 checkbox，避免按钮因未勾选协议而不可点击。
-       * 若页面使用的是自绘组件而非原生 input，这里保持静默，由后续点击结果判断。
-       */
+      // 兼容原生 checkbox
       const checkboxList = Array.from(document.querySelectorAll('input[type="checkbox"]'));
       const visibleCheckbox = checkboxList.find((element) => {
         const rect = element.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
       });
-
       if (visibleCheckbox && !visibleCheckbox.checked) {
         visibleCheckbox.click();
         return;
       }
 
-      /**
-       * 中文说明：139 登录页当前使用的是自绘协议勾选区，不一定存在原生 checkbox。
-       * 这里补充点击可见的协议勾选容器或其图片节点，尽量在发送短信前完成勾选。
-       */
-      const customAgreementCandidates = Array.from(document.querySelectorAll(
+      // 兼容自绘勾选区，采用 mousedown → mouseup → click 完整事件链，提高命中率
+      const customCandidates = Array.from(document.querySelectorAll(
         '.check-img-wrap.code-sms-check-img-wrap, .code-sms-check-img-wrap, .check-img-wrap, .default_box_tips img'
       ));
-      const visibleAgreementElement = customAgreementCandidates.find((element) => {
+      const visibleCandidate = customCandidates.find((element) => {
         const rect = element.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(element);
+        const style = window.getComputedStyle(element);
         return rect.width > 0
           && rect.height > 0
-          && computedStyle.display !== 'none'
-          && computedStyle.visibility !== 'hidden';
+          && style.display !== 'none'
+          && style.visibility !== 'hidden';
       });
-
-      if (visibleAgreementElement) {
-        visibleAgreementElement.dispatchEvent(new MouseEvent('click', {
-          bubbles: true,
-          cancelable: true,
-          view: window
-        }));
+      if (visibleCandidate) {
+        ['mousedown', 'mouseup', 'click'].forEach((type) => {
+          visibleCandidate.dispatchEvent(new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          }));
+        });
       }
     }).catch(() => {});
   }
@@ -725,7 +751,20 @@ class CloudDriveLoginExecutor {
     const loginButton = page.getByText('登录/注册', { exact: true }).first();
     await loginButton.click({ timeout: 10000 });
 
-    const loginResult = await this.waitForLoginSuccess(page);
+    let loginResult = await this.waitForLoginSuccess(page);
+
+    /**
+     * 兼容场景：若 ensureAgreementAccepted 在登录前未能真正勾上协议（例如 <img>
+     * 瞬间被遮挡），139 会在点击登录后弹出“请勾选同意相关协议政策”提示。
+     * 此时重新勾选并再点一次登录按钮，最多补偿一次，避免用户重发短信。
+     */
+    if (!loginResult.success && await this.hasAgreementPrompt(page)) {
+      await this.ensureAgreementAccepted(page);
+      await delay(600);
+      await loginButton.click({ timeout: 10000 }).catch(() => {});
+      loginResult = await this.waitForLoginSuccess(page);
+    }
+
     if (!loginResult.success) {
       throw new Error(loginResult.message);
     }
