@@ -40,6 +40,42 @@ const API_PATH_INCLUDES = [
 ];
 
 /**
+ * 需要在报告落盘前脱敏的请求头字段（全部小写对比）。
+ * 这些字段要么本身是凭据（authorization/cookie），
+ * 要么在短时间窗口内可被回放（mcloud-sign），
+ * 要么包含设备硬件特征（x-yun-client-info / x-deviceinfo）。
+ * GitGuardian 等扫描器会把 "Basic <base64>" 或长 base64 认定为泄露，
+ * 所以即使是本地 outputs/ 目录也要脱敏，防止被误 git add -f 或被人复制分享。
+ */
+const SENSITIVE_HEADER_NAMES = new Set([
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'mcloud-sign',
+  'x-yun-client-info',
+  'x-deviceinfo'
+]);
+
+/**
+ * 对一组 HTTP 请求头做脱敏处理：命中敏感名单的 value 替换为 [REDACTED]。
+ * 采用浅拷贝，不会修改原 headers 对象。
+ * @param {Object<string,string>} headers 原始请求头
+ * @returns {Object<string,string>} 脱敏后的新对象
+ */
+function sanitizeHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return headers;
+  const result = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (SENSITIVE_HEADER_NAMES.has(String(key).toLowerCase())) {
+      result[key] = '[REDACTED]';
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * 查找本机可用的 Chrome / Edge 可执行路径
  * @returns {string} 可执行路径；未找到时返回空字符串
  */
@@ -480,11 +516,19 @@ async function runOnce() {
   const outputFile = path.join(outputsDir, '139-api-探测报告.json');
 
   const uniqueEndpoints = [...new Set(apiLog.map((e) => e.method + ' ' + e.path))].sort();
+  // 报告落盘前统一脱敏 headers，避免 authorization / mcloud-sign / cookie 等凭据被写入文件
+  const sanitizedRequests = apiLog.map((entry) => ({
+    ...entry,
+    headers: sanitizeHeaders(entry.headers)
+  }));
   const report = {
     generatedAt: new Date().toISOString(),
     totalRequests: apiLog.length,
     uniqueEndpoints,
-    requests: apiLog
+    // 说明字段：让 reviewer 一眼看出该报告已脱敏
+    sanitized: true,
+    sensitiveHeaderNames: [...SENSITIVE_HEADER_NAMES],
+    requests: sanitizedRequests
   };
 
   fs.writeFileSync(outputFile, JSON.stringify(report, null, 2), 'utf-8');

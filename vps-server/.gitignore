@@ -116,3 +116,9 @@ Thumbs.db
 
 # Test files
 test-results/
+
+# 云盘相关敏感数据（严禁入仓）
+# data/cloud-drive/ 存放扫码登录后的 sessionBundleEncrypted、手机号等状态
+# scripts/outputs/ 存放 API 探测脚本的原始 headers（含 Authorization、mcloud-sign）
+data/cloud-drive/
+scripts/outputs/
