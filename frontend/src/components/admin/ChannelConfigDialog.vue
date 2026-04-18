@@ -151,6 +151,12 @@
         style="margin-bottom: 15px"
       />
 
+      <!-- 云盘目录选择器：点击目标路径旁的“浏览”打开，选中后回填 manualPath / catalogId -->
+      <CloudDriveFolderPicker
+        v-model="pickerVisible"
+        @confirm="handlePickerConfirm"
+      />
+
       <template v-if="form.recordConfig.enabled">
         <el-divider content-position="left">
           <span style="font-weight: bold;">自动上传配置</span>
@@ -184,8 +190,12 @@
             <div style="display: flex; width: 100%; gap: 10px;">
               <el-input
                 v-model="form.recordConfig.upload.manualPath"
-                placeholder="例如：/我的视频/幼儿园录制"
+                placeholder="点击右侧「浏览」从云盘选择目标目录"
+                readonly
               />
+              <el-button :icon="FolderOpened" @click="handleOpenFolderPicker">
+                浏览…
+              </el-button>
               <el-button
                 :loading="validateUploadTargetLoading"
                 @click="handleValidateUploadTarget"
@@ -194,7 +204,7 @@
               </el-button>
             </div>
             <div style="margin-top: 5px; font-size: 12px; color: #909399;">
-              当前先校验路径格式并回填目标展示，后续再补真实远端目录可写性验证。
+              点击“浏览”从云盘目录中选择上传位置；选择后会自动回填路径、catalogId 并标记为已校验。
             </div>
           </el-form-item>
 
@@ -224,7 +234,9 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { FolderOpened } from '@element-plus/icons-vue';
 import axios from '@/utils/axios';
+import CloudDriveFolderPicker from './CloudDriveFolderPicker.vue';
 
 const CLOUD_DRIVE_API_PREFIX = '/api/cloud-drive';
 
@@ -268,6 +280,45 @@ const visible = computed({
 const formRef = ref(null);
 const saving = ref(false);
 const validateUploadTargetLoading = ref(false);
+
+/**
+ * 云盘目录选择器开关，用于 v-model CloudDriveFolderPicker
+ */
+const pickerVisible = ref(false);
+
+/**
+ * 打开云盘目录选择器前的前置检查
+ * 当前仅限制 destinationType=cloudFile（默认文件目录）；后续扩展家庭相册时再调整。
+ */
+function handleOpenFolderPicker() {
+  if (form.value.recordConfig.upload.destinationType !== 'cloudFile') {
+    ElMessage.warning('当前仅支持选择默认文件目录下的位置');
+    return;
+  }
+  pickerVisible.value = true;
+}
+
+/**
+ * 云盘目录选择确认回调
+ * picker 会返回 { path, fileId, name }，其中 path 是通过面包屑拼接出的可读路径、
+ * fileId 是 139 侧的内部 ID。我们同时回填：
+ *   - manualPath：给用户看的路径
+ *   - catalogId：上传时需要的内部句柄
+ *   - resolvedPath / targetName / status：统一样式，跳过二次路径校验
+ * @param {{ path: string, fileId: string, name: string }} payload
+ */
+function handlePickerConfirm(payload) {
+  const { path, fileId, name } = payload || {};
+  form.value.recordConfig.upload = {
+    ...form.value.recordConfig.upload,
+    manualPath: path || '/',
+    catalogId: fileId || '',
+    targetName: name || '',
+    resolvedPath: path ? `默认文件目录 / ${String(path).replace(/^\//, '')}` : '默认文件目录',
+    status: 'validated'
+  };
+  ElMessage.success(`已选择目录：${path}`);
+}
 
 /**
  * 获取默认自动上传配置

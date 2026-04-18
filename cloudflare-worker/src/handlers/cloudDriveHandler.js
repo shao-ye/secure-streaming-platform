@@ -351,6 +351,72 @@ async function handleValidateTarget(env, request) {
 }
 
 /**
+ * 透传 VPS 的云盘浏览响应（含查询参数）
+ * 浏览类接口不需要更新 systemConfig，直接把 VPS 的响应原样返回给前端。
+ * @param {Object} env - Workers 环境变量
+ * @param {string} endpointWithQuery - VPS 云盘接口路径（可带 query，例如 /browse/personal?parentFileId=xxx）
+ * @returns {Promise<Response>} HTTP 响应
+ */
+async function proxyBrowseGet(env, endpointWithQuery) {
+  const { statusCode, payload } = await callVpsCloudDrive(env, endpointWithQuery, 'GET', null);
+  return new Response(JSON.stringify(payload), {
+    status: statusCode,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+/**
+ * 浏览个人网盘目录
+ * @param {Object} env - Workers 环境变量
+ * @param {Request} request - 当前请求对象
+ * @returns {Promise<Response>} HTTP 响应
+ */
+async function handleBrowsePersonal(env, request) {
+  const url = new URL(request.url);
+  // 把前端传入的 parentFileId / pageSize / pageCursor 原样透传给 VPS
+  const params = new URLSearchParams();
+  const parentFileId = url.searchParams.get('parentFileId');
+  if (parentFileId) params.set('parentFileId', parentFileId);
+  const pageSize = url.searchParams.get('pageSize');
+  if (pageSize) params.set('pageSize', pageSize);
+  const pageCursor = url.searchParams.get('pageCursor');
+  if (pageCursor) params.set('pageCursor', pageCursor);
+
+  const query = params.toString();
+  return proxyBrowseGet(env, `/browse/personal${query ? `?${query}` : ''}`);
+}
+
+/**
+ * 列出当前账号所属家庭列表
+ * @param {Object} env - Workers 环境变量
+ * @returns {Promise<Response>} HTTP 响应
+ */
+async function handleBrowseFamily(env) {
+  return proxyBrowseGet(env, '/browse/family');
+}
+
+/**
+ * 列出指定家庭下的相册
+ * @param {Object} env - Workers 环境变量
+ * @param {Request} request - 当前请求对象
+ * @returns {Promise<Response>} HTTP 响应
+ */
+async function handleBrowseFamilyAlbums(env, request) {
+  const url = new URL(request.url);
+  const cloudId = (url.searchParams.get('cloudId') || '').trim();
+  if (!cloudId) {
+    return new Response(JSON.stringify({
+      status: 'error',
+      message: '缺少 cloudId 参数'
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+  return proxyBrowseGet(env, `/browse/family-albums?cloudId=${encodeURIComponent(cloudId)}`);
+}
+
+/**
  * 云盘 API 统一处理入口
  * @param {Request} request - 当前请求对象
  * @param {Object} env - Workers 环境变量
@@ -382,6 +448,19 @@ async function handleCloudDriveRequest(request, env) {
 
   if (normalizedPathname === '/api/admin/cloud-drive/validate-target' && method === 'POST') {
     return handleValidateTarget(env, request);
+  }
+
+  // 目录浏览接口：仅 GET，透传给 VPS，不修改 systemConfig
+  if (normalizedPathname === '/api/admin/cloud-drive/browse/personal' && method === 'GET') {
+    return handleBrowsePersonal(env, request);
+  }
+
+  if (normalizedPathname === '/api/admin/cloud-drive/browse/family' && method === 'GET') {
+    return handleBrowseFamily(env);
+  }
+
+  if (normalizedPathname === '/api/admin/cloud-drive/browse/family-albums' && method === 'GET') {
+    return handleBrowseFamilyAlbums(env, request);
   }
 
   return new Response(JSON.stringify({
