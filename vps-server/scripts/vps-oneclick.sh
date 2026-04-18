@@ -545,7 +545,26 @@ update_project() {
   local backup_dir="$INSTALL_DIR.backup.$(date +%Y%m%d_%H%M%S)"
   cp -r "$INSTALL_DIR" "$backup_dir"
   success "备份已保存到: $backup_dir"
-  
+
+  # 中文注释：备份保留策略 —— 仅保留本次新创建的一份，其他历史备份全部清理。
+  # 理由：每次 update 都会完整 cp 整个 INSTALL_DIR（含 node_modules 约 1.5G），
+  #       若不清理会快速堆积（曾在 11 次 update 后占满 34G 磁盘触发 ENOSPC）。
+  # 安全边界：只匹配 "$INSTALL_DIR.backup.*" 这一前缀，绝不碰 $INSTALL_DIR 本体、
+  #          data 目录、.env、录制文件等运行时数据。
+  step "清理历史备份（保留最新 1 份）..."
+  local pruned=0
+  # tail -n +2 从 "按时间倒序" 的第 2 条开始，也就是排除掉刚创建的这一份
+  while IFS= read -r old_backup; do
+    # 再加一层显式保险：跳过本次刚创建的
+    [[ "$old_backup" == "$backup_dir" ]] && continue
+    rm -rf "$old_backup" && pruned=$((pruned + 1)) && echo "  已删除: $old_backup"
+  done < <(ls -dt "$INSTALL_DIR".backup.* 2>/dev/null | tail -n +2)
+  if [[ $pruned -gt 0 ]]; then
+    success "已清理 $pruned 份历史备份"
+  else
+    echo "  (无历史备份需要清理)"
+  fi
+
   step "下载最新代码..."
   local tmp_dir="/tmp/yoyo-update-$$"
   rm -rf "$tmp_dir"; mkdir -p "$tmp_dir"
