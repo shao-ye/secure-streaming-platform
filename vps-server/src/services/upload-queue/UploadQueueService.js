@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const logger = require('../../utils/logger');
 
 /**
@@ -11,6 +13,12 @@ const logger = require('../../utils/logger');
  *   - pendingSet：在队列里、还没被 Worker 取走的 filePath
  *   - uploadingSet：Worker 正在处理的 filePath
  *   - 入队前检查两个 Set 任一包含 → 直接拒绝，避免重复上传
+ *
+ * 排序策略（用户需求：创建时间最早的优先上传）：
+ *   - enqueue 时计算 `startTimeMs`（文件名里的录制起始时间戳），按升序插入
+ *   - 新文件（mtime 晚）会被插到队尾；老文件（mtime 早）会被插到队首
+ *   - Scanner 扫到的一批"历史漏网文件"天然会排在实时触发的新文件前面，达成"最早先传"
+ *   - requeueHead 仍保持 unshift 语义（登录失效恢复场景必须让原任务留在队首）
  */
 class UploadQueueService {
   /**
@@ -66,19 +74,83 @@ class UploadQueueService {
       return { enqueued: false, reason: 'already_uploading' };
     }
 
-    // 填充入队时间戳
+    // 🆕 解析文件起始时间（录制开始时刻），用于按时间排序插入
+    const startTimeMs = this._resolveStartTimeMs(filePath);
+
+    // 填充入队时间戳 + 起始时间戳
     const enqueuedTask = {
       ...task,
-      enqueuedAt: typeof task.enqueuedAt === 'number' ? task.enqueuedAt : Date.now()
+      enqueuedAt: typeof task.enqueuedAt === 'number' ? task.enqueuedAt : Date.now(),
+      startTimeMs
     };
-    this.queue.push(enqueuedTask);
+
+    // 🆕 按 startTimeMs 升序线性插入（队列规模通常百级以内，O(N) 插入可接受）
+    // 这样越"老"的文件越靠前，Worker 串行消费时就是"创建时间最早的先上传"
+    let insertIdx = this.queue.length;
+    for (let i = 0; i < this.queue.length; i++) {
+      if (this.queue[i].startTimeMs > startTimeMs) {
+        insertIdx = i;
+        break;
+      }
+    }
+    this.queue.splice(insertIdx, 0, enqueuedTask);
     this.pendingSet.add(filePath);
+
     logger.info('[UploadQueue] 入队成功', {
       filePath,
       channelId: task.channelId,
-      pendingSize: this.pendingSet.size
+      pendingSize: this.pendingSet.size,
+      // 便于排查：插入到队列哪个位置、起始时间戳是多少
+      insertPosition: insertIdx,
+      startTimeMs
     });
     return { enqueued: true };
+  }
+
+  /**
+   * 解析文件的"录制起始时间"（ms 时间戳），用于入队排序
+   *
+   * 优先级：
+   *   1) 文件名里的 `_YYYYMMDD_HHMMSS_to_HHMMSS.mp4` 起始时间戳
+   *      （这是录制真正开始的时刻，最稳、最贴合"创建时间"语义）
+   *   2) 文件系统的 mtime（改名后的修改时间，接近录制结束时间；不理想但能兜底）
+   *   3) 当前时间（最差情况，确保不会报错）
+   *
+   * 注意：文件名里的时间戳是北京时间；本方法显式拼接 +08:00 时区，
+   * 这样即使 VPS 运行在 UTC 时区也能正确比较。
+   *
+   * @private
+   * @param {string} filePath 文件绝对路径
+   * @returns {number} 起始时间戳（ms）
+   */
+  _resolveStartTimeMs(filePath) {
+    try {
+      const name = path.basename(filePath);
+      // 匹配 channelId_YYYYMMDD_HHMMSS_to_HHMMSS.mp4 或 xx_YYYYMMDD_HHMMSS_to_HHMMSS.mp4
+      const m = name.match(/_(\d{8})_(\d{6})_to_\d{6}\.(mp4|MP4)$/);
+      if (m) {
+        const d = m[1];            // YYYYMMDD
+        const t = m[2];            // HHMMSS
+        // 显式指定 +08:00（北京时间），避免 VPS 时区差异
+        const iso = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T`
+          + `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}+08:00`;
+        const ms = Date.parse(iso);
+        if (!Number.isNaN(ms)) return ms;
+      }
+    } catch (err) {
+      // 文件名解析异常不应阻塞入队，走后续 fallback
+    }
+
+    // fallback 1：使用 mtime
+    try {
+      const st = fs.statSync(filePath);
+      if (st && typeof st.mtimeMs === 'number') return st.mtimeMs;
+    } catch (err) {
+      // stat 失败（文件已被删等）走最终 fallback
+    }
+
+    // fallback 2：当前时间戳（最老的会排队尾，但至少不会报错）
+    return Date.now();
   }
 
   /**
@@ -167,7 +239,9 @@ class UploadQueueService {
       queue: this.queue.map((t) => ({
         filePath: t.filePath,
         channelId: t.channelId,
-        enqueuedAt: t.enqueuedAt
+        enqueuedAt: t.enqueuedAt,
+        // 🆕 暴露出队列当前排序依据，便于前端 / 排查确认"按时间升序"生效
+        startTimeMs: t.startTimeMs
       })),
       uploadingList: [...this.uploadingSet],
       recentFailures: [...this.recentFailures]
