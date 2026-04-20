@@ -52,6 +52,12 @@ class SimpleStreamManager {
     this.HEARTBEAT_TIMEOUT = 60000; // 60秒心跳超时
     this.CLEANUP_INTERVAL = 30000; // 30秒清理间隔
 
+    // 🛡️ 频道级异步串行锁
+    // 防止 startWatching / enableRecording 等对同一频道的并发调用
+    // 同时看到 activeStreams 为空、各自 spawn 一个 ffmpeg 造成重复录制
+    // Map<channelId, Promise>，保存当前频道正在执行的锁端 Promise
+    this.channelLocks = new Map();
+
     // 初始化
     // 注意：initialize 是异步的（要清理僵尸 ffmpeg、扫 HLS 目录），
     // 为避免构造器返回时 activeStreams 尚未就绪、外部直接调 enableRecording
@@ -65,6 +71,53 @@ class SimpleStreamManager {
       hlsOutputDir: this.hlsOutputDir,
       recordingBaseDir: this.recordingBaseDir
     });
+  }
+
+  /**
+   * 获取频道级串行锁
+   *
+   * 使用示例：
+   *   const release = await this._acquireChannelLock(channelId);
+   *   try {
+   *     // 对单频道的临界区操作，如判断 activeStreams、spawn、set
+   *   } finally {
+   *     release();
+   *   }
+   *
+   * 实现：链式排队——新任务先 await 前一任务完成，再执行自己。
+   * 释放时调 release()，同时如果队尾已空则清理 Map 条目避免内存泄漏。
+   *
+   * @param {string} channelId - 频道ID
+   * @returns {Promise<Function>} 释放函数，必须在临界区执行后调用
+   */
+  async _acquireChannelLock(channelId) {
+    // 前一个任务的 Promise（如果有）
+    const prev = this.channelLocks.get(channelId) || Promise.resolve();
+
+    // 创建当前任务的 Promise，release 是触发其 resolve 的闸门
+    let release;
+    const current = new Promise(resolve => { release = resolve; });
+
+    // 将队尾更新为「等前一个完成后再等当前完成」的复合 Promise
+    // 这样紧跟在后面的新任务会自动排到队尾
+    const chained = prev.catch(() => {}).then(() => current);
+    this.channelLocks.set(channelId, chained);
+
+    // 等上一个任务完成（忽略其异常），才返回给调用方
+    await prev.catch(() => {});
+
+    // 返回释放函数
+    return () => {
+      // 触发当前任务的 resolve，让后续等待者拿到锁
+      release();
+      // 如果队尾就是自己（没有后续者），清除 Map 条目避免内存泄漏
+      // 用 queueMicrotask 延后一个微任务，给 chained 链上的后续 then 机会被触发
+      queueMicrotask(() => {
+        if (this.channelLocks.get(channelId) === chained) {
+          this.channelLocks.delete(channelId);
+        }
+      });
+    };
   }
 
   /**
@@ -176,6 +229,8 @@ class SimpleStreamManager {
    * @returns {Object} 观看结果
    */
   async startWatching(channelId, rtmpUrl, channelConfig = null) {
+    // 🛡️ 申请频道级串行锁，避免与 enableRecording 并发重复 spawn ffmpeg
+    const release = await this._acquireChannelLock(channelId);
     // 🆕 为每个频道生成独立的滤镜（作为局部变量）
     const videoFilter = this.getVideoFilter(channelConfig);
     logger.info('Video filter for channel', { 
@@ -225,6 +280,9 @@ class SimpleStreamManager {
     } catch (error) {
       logger.error('Failed to start watching', { channelId, rtmpUrl, error: error.message });
       throw error;
+    } finally {
+      // 🛡️ 释放频道锁
+      release();
     }
   }
 
@@ -999,6 +1057,8 @@ class SimpleStreamManager {
    * @param {Object} recordConfig - 录制配置（包含channelName）
    */
   async enableRecording(channelId, recordConfig) {
+    // 🛡️ 申请频道级串行锁，避免与 startWatching 并发重复 spawn ffmpeg
+    const release = await this._acquireChannelLock(channelId);
     try {
       logger.info('Enabling recording', { channelId, recordConfig });
 
@@ -1087,6 +1147,9 @@ class SimpleStreamManager {
       this.recordingChannels.delete(channelId);
       this.recordingConfigs.delete(channelId);
       throw error;
+    } finally {
+      // 🛡️ 释放频道锁
+      release();
     }
   }
 
