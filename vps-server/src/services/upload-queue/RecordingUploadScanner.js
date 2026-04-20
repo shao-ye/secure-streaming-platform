@@ -33,7 +33,9 @@ class RecordingUploadScanner {
    * @param {Object} options.dispatcher      FileFinalizeDispatcher 实例
    * @param {string} [options.recordingsPath] 录制根目录，默认读环境变量 RECORDINGS_PATH
    * @param {number} [options.initialDelayMs] 启动后首次扫描延迟（毫秒），默认 30s
-   * @param {number} [options.scanIntervalMs] 周期性扫描间隔（毫秒），默认 1 小时
+   * @param {number} [options.scanIntervalMs] 周期性扫描间隔（毫秒），默认 10 分钟
+   *   默认 10min 的原因：失败文件依赖 Scanner 下次扫描才能重新入队，1h 太慢；
+   *   Worker 串行消费 + UploadQueueService 双 Set 去重保证频繁扫描不会重复上传。
    */
   constructor(options = {}) {
     if (!options.dispatcher) throw new Error('RecordingUploadScanner 需要 dispatcher');
@@ -46,7 +48,7 @@ class RecordingUploadScanner {
       : 30 * 1000;
     this.scanIntervalMs = typeof options.scanIntervalMs === 'number'
       ? options.scanIntervalMs
-      : 60 * 60 * 1000;
+      : 10 * 60 * 1000;
 
     this.initialTimer = null;
     this.intervalTimer = null;

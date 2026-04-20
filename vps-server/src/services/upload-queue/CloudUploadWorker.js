@@ -29,7 +29,10 @@ class CloudUploadWorker {
    * @param {Object} options.notifier UploadNotifier 实例
    * @param {Object} options.cloudDriveService CloudDriveService 实例（读 sessionBundle + 登录态）
    * @param {number} [options.throttleMs=15000] 任务之间的节流间隔（毫秒）
-   * @param {number} [options.retryDelayMs=5000] 同任务内重试之间的等待（毫秒）
+   * @param {number} [options.retryDelayMs=30000] 同任务内重试之间的等待（毫秒）
+   *   默认 30s 的原因：5s 太短，同一分钟内 3 次 retry 大概率撞到 139 LB
+   *   session affinity / DNS 缓存窗口里的同一批后端节点；30s 够让 DNS / LB
+   *   状态自然过期，争取拿到与上一次不同的路由。
    * @param {number} [options.idlePollMs=5000] 队列为空时轮询等待时长（毫秒）
    * @param {number} [options.minFileSize=1048576] 视为"太小可能空"的阈值（字节），默认 1MB
    * @param {number} [options.mtimeGraceMs=5000] 文件 mtime 距今不到这个值则跳过，防止还在写（毫秒）
@@ -44,7 +47,7 @@ class CloudUploadWorker {
     this.cloudDriveService = options.cloudDriveService;
 
     this.throttleMs = options.throttleMs || 15000;
-    this.retryDelayMs = options.retryDelayMs || 5000;
+    this.retryDelayMs = options.retryDelayMs || 30000;
     this.idlePollMs = options.idlePollMs || 5000;
     this.minFileSize = options.minFileSize || 1024 * 1024;
     this.mtimeGraceMs = options.mtimeGraceMs || 5000;
