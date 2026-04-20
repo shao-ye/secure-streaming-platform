@@ -250,11 +250,27 @@ class HybridUploader {
     };
     const headers = this._buildSignedHeaders(body);
 
-    const res = await fetch(API_FILE_CREATE, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body)
-    });
+    // 🆕 加 30s 硬超时：接口卡住时立即 abort，避免 Worker 主循环永久阻塞
+    const abortCtrl = new AbortController();
+    const timer = setTimeout(() => abortCtrl.abort(new Error('file/create 超时 30s')), 30_000);
+
+    let res;
+    try {
+      res = await fetch(API_FILE_CREATE, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: abortCtrl.signal
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error('file/create 请求超时（30s 未响应），可能网络中断或 139 接口卡住');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+
     const text = await res.text();
     let json;
     try {
@@ -284,11 +300,37 @@ class HybridUploader {
   async streamPutFile(filePath, uploadUrl, fileSize) {
     const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
 
+    // 🆕 超时保护：idle 60s 无数据流动 + 总时长 30min 双重 abort
+    // 背景：移动云 OSS 偶发把 TCP 连接保持 ESTABLISHED 但完全不吃数据，
+    // 老版代码无超时，会让 CloudUploadWorker 主循环永久阻塞在本 fetch
+    const IDLE_TIMEOUT_MS = 60_000;          // 60s 无 data 事件即判定为卡死
+    const TOTAL_TIMEOUT_MS = 30 * 60_000;    // 单个文件最长 30min（GB 级大文件兜底）
+    const abortCtrl = new AbortController();
+    let idleTimer = null;
+    let totalTimer = null;
+    let abortReason = '';
+
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        abortReason = `PUT idle 超过 ${IDLE_TIMEOUT_MS / 1000}s 无数据流动`;
+        console.error(`[Hybrid] ${abortReason}，abort 连接`);
+        abortCtrl.abort();
+      }, IDLE_TIMEOUT_MS);
+    };
+    totalTimer = setTimeout(() => {
+      abortReason = `PUT 总时长超过 ${TOTAL_TIMEOUT_MS / 60_000} 分钟`;
+      console.error(`[Hybrid] ${abortReason}，abort 连接`);
+      abortCtrl.abort();
+    }, TOTAL_TIMEOUT_MS);
+
     // 进度统计：每 10% 打一行日志，避免刷屏
     let uploaded = 0;
     let lastLogPercent = 0;
     const onProgress = this.onProgress;
     stream.on('data', (chunk) => {
+      // 🆕 每收到一块数据就重置 idle 计时器，保证只要还在传就不会被误杀
+      resetIdleTimer();
       uploaded += chunk.length;
       const percent = fileSize > 0 ? Math.floor((uploaded / fileSize) * 100) : 0;
       if (percent >= lastLogPercent + 10) {
@@ -300,14 +342,32 @@ class HybridUploader {
       }
     });
 
-    const res = await fetch(uploadUrl, {
-      method: 'PUT',
-      body: stream,
-      duplex: 'half',
-      headers: {
-        'content-length': String(fileSize)
+    // 开启 idle 计时（在 fetch 开始前就启动，防止连接握手阶段就卡住）
+    resetIdleTimer();
+
+    let res;
+    try {
+      res = await fetch(uploadUrl, {
+        method: 'PUT',
+        body: stream,
+        duplex: 'half',
+        headers: {
+          'content-length': String(fileSize)
+        },
+        signal: abortCtrl.signal
+      });
+    } catch (err) {
+      // abort 事件会被 fetch 转成 AbortError；把真实原因拼回去，便于上层日志排查
+      if (err.name === 'AbortError') {
+        throw new Error(`PUT 被中止：${abortReason || '未知原因'}`);
       }
-    });
+      throw err;
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (totalTimer) clearTimeout(totalTimer);
+      // 确保文件流被关闭，避免文件描述符泄漏
+      if (!stream.destroyed) stream.destroy();
+    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -333,11 +393,27 @@ class HybridUploader {
     };
     const headers = this._buildSignedHeaders(body);
 
-    const res = await fetch(API_FILE_COMPLETE, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body)
-    });
+    // 🆕 加 30s 硬超时：接口卡住时立即 abort，避免 Worker 主循环永久阻塞
+    const abortCtrl = new AbortController();
+    const timer = setTimeout(() => abortCtrl.abort(new Error('file/complete 超时 30s')), 30_000);
+
+    let res;
+    try {
+      res = await fetch(API_FILE_COMPLETE, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: abortCtrl.signal
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error('file/complete 请求超时（30s 未响应），可能网络中断或 139 接口卡住');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+
     const text = await res.text();
     let json;
     try {
