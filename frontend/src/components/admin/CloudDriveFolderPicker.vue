@@ -100,10 +100,10 @@
 
       <!-- ========================== Tab 2: 我的家庭 ========================== -->
       <el-tab-pane label="我的家庭" name="family">
-        <!-- 顶部提示：该 tab 仅浏览，不支持作为上传目标 -->
+        <!-- 顶部提示：不同层级的操作提示 -->
         <el-alert
-          title="当前版本仅支持浏览家庭云；如需作为上传目标请选择「我的文件」。"
-          type="warning"
+          :title="familyActionHint"
+          type="info"
           :closable="false"
           style="margin-bottom: 8px;"
         />
@@ -170,10 +170,25 @@
           </el-table-column>
           <el-table-column label="名称" min-width="240">
             <template #default="{ row }">
+              <!--
+                名称行为：
+                  - family 行：点击进入相册列表（下钻）
+                  - album 行：点击选中相册，选中后可选为上传目标
+                被选中的 album 在名字旁边显示「已选中」小标，便于用户识别。
+              -->
               <span
-                :class="{ 'folder-name-clickable': canEnterFamilyRow(row) }"
-                @click="canEnterFamilyRow(row) && enterFamilyRow(row)"
+                :class="{ 'folder-name-clickable': canInteractFamilyRow(row) }"
+                @click="canInteractFamilyRow(row) && onFamilyRowNameClick(row)"
               >{{ row.name }}</span>
+              <el-tag
+                v-if="row.type === 'album' && isFamilyRowSelected(row)"
+                size="small"
+                type="success"
+                effect="dark"
+                style="margin-left: 8px;"
+              >
+                已选中
+              </el-tag>
             </template>
           </el-table-column>
           <el-table-column label="类型" width="90" align="center">
@@ -193,16 +208,22 @@
     <template #footer>
       <div class="folder-picker-footer">
         <span class="selected-hint">
-          将选中当前目录：<el-tag :type="activeTab === 'family' ? 'warning' : 'info'" size="small">{{ selectedPath }}</el-tag>
+          将选中当前目录：<el-tag :type="confirmTagType" size="small">{{ selectedPath }}</el-tag>
         </span>
         <div>
           <el-button :disabled="anyLoading" @click="handleClose">取消</el-button>
+          <!--
+            "选择此目录" 禁用条件分解：
+              - personal tab：加载中时禁用
+              - family tab：需要已选中某个相册（familySelectedAlbum 有值）
+                * 未选中时 tooltip 提示 "请先点击列表中的相册"
+                * 选中后 tooltip 显示已选择的完整路径
+          -->
           <el-tooltip
-            v-if="activeTab === 'family'"
-            content="当前版本暂不支持家庭相册作为上传目标，请切换到「我的文件」选择"
+            v-if="activeTab === 'family' && !familySelectedAlbum"
+            content="请先进入某个家庭并点击列表中的相册"
             placement="top"
           >
-            <!-- span 包裹是为了让 tooltip 在 button 禁用时也能触发 -->
             <span>
               <el-button type="primary" disabled>
                 选择此目录
@@ -212,7 +233,7 @@
           <el-button
             v-else
             type="primary"
-            :disabled="loading"
+            :disabled="confirmDisabled"
             @click="handleConfirm"
           >
             选择此目录
@@ -300,6 +321,14 @@ const familyBreadcrumbs = ref([{ ...FAMILY_ROOT }]);
 const familyItems = ref([]);
 
 /**
+ * 当前在家庭 tab 中选中的相册对象（下钻到某家庭后可选中其中一个相册作为上传目标）。
+ * 结构：{ id, name, cloudId }
+ * — 当面包屑返回 L0 或切换家庭时应清空。
+ * — 未选中时 "选择此目录" 按钮禁用。
+ */
+const familySelectedAlbum = ref(null);
+
+/**
  * 计算当前目录对象（面包屑末尾）
  */
 const currentFolder = computed(() => breadcrumbs.value[breadcrumbs.value.length - 1]);
@@ -319,17 +348,54 @@ const familyEmptyText = computed(() => (
 ));
 
 /**
+ * 家庭 tab 操作提示文案：根据面包屑深度动态提示下一步操作
+ *   - L0（家庭列表）："点击家庭名称进入家庭查看相册"
+ *   - L1（某家庭下的相册列表）："点击相册名称选中，然后点击底部「选择此目录」"
+ */
+const familyActionHint = computed(() => (
+  familyBreadcrumbs.value.length >= 2
+    ? '点击相册名称选中其为上传目标，然后点击底部「选择此目录」。'
+    : '点击家庭名称进入家庭查看其下相册。'
+));
+
+/**
  * 拼接用于展示/提交的路径字符串（根据 activeTab 动态）
  * - personal: 根目录 "/"，子级 "/A/B"
  * - family:   "/我的家庭" / "/我的家庭/家庭名" / "/我的家庭/家庭名/相册名"
+ *   — 进入某家庭并选中了某相册时，路径末尾追加相册名，方便用户识别
  */
 const selectedPath = computed(() => {
   if (activeTab.value === 'family') {
     if (familyBreadcrumbs.value.length === 0) return '/';
-    return '/' + familyBreadcrumbs.value.map((b) => b.name).join('/');
+    const crumbPath = '/' + familyBreadcrumbs.value.map((b) => b.name).join('/');
+    if (familySelectedAlbum.value && familyBreadcrumbs.value.length >= 2) {
+      return `${crumbPath}/${familySelectedAlbum.value.name}`;
+    }
+    return crumbPath;
   }
   if (breadcrumbs.value.length <= 1) return '/';
   return '/' + breadcrumbs.value.slice(1).map((b) => b.name).join('/');
+});
+
+/**
+ * 底部路径标签的视觉类型：不同 Tab / 状态色调不同
+ *   - personal: info（蓝灰）
+ *   - family 且已选中相册：success（绿，意味可确认）
+ *   - family 未选中：warning（橙，提醒尚未选中）
+ */
+const confirmTagType = computed(() => {
+  if (activeTab.value !== 'family') return 'info';
+  return familySelectedAlbum.value ? 'success' : 'warning';
+});
+
+/**
+ * "选择此目录"按钮的禁用状态
+ * 注：family tab + 未选中的条件已在模板中用 el-tooltip 代替这里的禁用（让 tooltip 生效）
+ * 这里只盖盖 loading 时禁用。
+ */
+const confirmDisabled = computed(() => {
+  if (activeTab.value === 'family') return familyLoading.value;
+  return loading.value;
 });
 
 // ================= 工具 =================
@@ -437,15 +503,34 @@ function loadMore() {
 }
 
 /**
- * 选中"当前目录"并关闭弹窗（仅 personal tab 允许确认；family tab 下按钮 disabled）
- * 触发 confirm 事件，父组件据此回填 manualPath / catalogId
+ * 选中"当前目录"并关闭弹窗
+ * - personal tab：emit { destinationType:'cloudFile', path, fileId, name } — 保持向后兼容
+ * - family   tab：emit { destinationType:'familyAlbum', path, cloudId, albumId, albumName, familyName } —
+ *             用于父组件 ChannelConfigDialog 将家庭相册作为上传目标回填到表单
  */
 function handleConfirm() {
-  if (activeTab.value !== 'personal') return;
+  if (activeTab.value === 'personal') {
+    emit('confirm', {
+      destinationType: 'cloudFile',
+      path: selectedPath.value,
+      fileId: currentFolder.value.id,
+      name: currentFolder.value.name
+    });
+    visible.value = false;
+    return;
+  }
+
+  // family tab：需已选中相册
+  if (!familySelectedAlbum.value) return;
+  // L1 的面包屑单元素是家庭本身
+  const familyCrumb = familyBreadcrumbs.value[1] || null;
   emit('confirm', {
+    destinationType: 'familyAlbum',
     path: selectedPath.value,
-    fileId: currentFolder.value.id,
-    name: currentFolder.value.name
+    cloudId: familyCrumb?.id || familySelectedAlbum.value.cloudId || '',
+    familyName: familyCrumb?.name || '',
+    albumId: familySelectedAlbum.value.id,
+    albumName: familySelectedAlbum.value.name
   });
   visible.value = false;
 }
@@ -453,12 +538,46 @@ function handleConfirm() {
 // ================= 家庭云浏览 =================
 
 /**
- * 判断家庭 tab 当前行是否可以点击进入下一级
- * - family 行（家庭条目）可进入相册列表
- * - album 行（相册）不再下钻
+ * 判断家庭 tab 当前行是否可以交互（点击）：
+ * - family 行可点击（进入相册列表）
+ * - album  行可点击（选中相册）
+ * - 加载中暂不允许交互
  */
-function canEnterFamilyRow(row) {
-  return !!row && row.type === 'family' && !familyLoading.value;
+function canInteractFamilyRow(row) {
+  if (!row || familyLoading.value) return false;
+  return row.type === 'family' || row.type === 'album';
+}
+
+/**
+ * 判断某个相册行是否为当前已选中的相册（用于展示"已选中"标签）
+ */
+function isFamilyRowSelected(row) {
+  return !!(familySelectedAlbum.value && row?.type === 'album' && row.id === familySelectedAlbum.value.id);
+}
+
+/**
+ * 家庭 tab 行名称点击分发：
+ * - family 行 → 进入相册列表（并清空之前的相册选中）
+ * - album  行 → 选中 / 取消选中相册
+ */
+function onFamilyRowNameClick(row) {
+  if (!canInteractFamilyRow(row)) return;
+  if (row.type === 'family') {
+    enterFamilyRow(row);
+  } else if (row.type === 'album') {
+    // 已选中再点视为取消选中，方便用户试错
+    if (familySelectedAlbum.value?.id === row.id) {
+      familySelectedAlbum.value = null;
+    } else {
+      // L1 的面包屑末尾是当前家庭，id 即 cloudId
+      const familyCrumb = familyBreadcrumbs.value[1];
+      familySelectedAlbum.value = {
+        id: row.id,
+        name: row.name,
+        cloudId: familyCrumb?.id || row.cloudId || ''
+      };
+    }
+  }
 }
 
 /**
@@ -544,30 +663,48 @@ async function fetchFamilyAlbums(cloudId) {
 /**
  * 进入家庭 tab 某一行的下一级
  * 目前仅 family -> album（二级）；album 为终点不下钻
+ * 进入新家庭时应清空之前的相册选中（跨家庭选中无义）
  * @param {Object} row 表格行
  */
 function enterFamilyRow(row) {
-  if (!canEnterFamilyRow(row)) return;
+  if (!row || familyLoading.value) return;
   if (row.type === 'family') {
+    familySelectedAlbum.value = null;
     familyBreadcrumbs.value.push({ id: row.id, name: row.name });
     fetchFamilyAlbums(row.id);
   }
 }
 
 /**
- * 家庭 tab 双击行等同于进入下一级
+ * 家庭 tab 双击行：
+ * - family 行：进入下一级
+ * - album  行：选中并直接确认（提供“双击快捷选择”的体验）
  */
 function handleFamilyRowDoubleClick(row) {
-  enterFamilyRow(row);
+  if (!row) return;
+  if (row.type === 'family') {
+    enterFamilyRow(row);
+  } else if (row.type === 'album') {
+    // 先确保已选中，再触发确认
+    const familyCrumb = familyBreadcrumbs.value[1];
+    familySelectedAlbum.value = {
+      id: row.id,
+      name: row.name,
+      cloudId: familyCrumb?.id || row.cloudId || ''
+    };
+    handleConfirm();
+  }
 }
 
 /**
  * 家庭 tab 面包屑点击返回上层
+ * 返回任何上层都应清空相册选中（改变上下文后之前的选中不再成立）
  * @param {number} index 目标层级下标（必须 < 末尾）
  */
 function navigateFamilyTo(index) {
   if (index < 0 || index >= familyBreadcrumbs.value.length - 1 || familyLoading.value) return;
   familyBreadcrumbs.value = familyBreadcrumbs.value.slice(0, index + 1);
+  familySelectedAlbum.value = null;
   if (index === 0) {
     // 返回到 L0：重新拉家庭列表
     fetchFamilyRoot();
@@ -611,6 +748,7 @@ watch(() => props.modelValue, (val) => {
     familyBreadcrumbs.value = [{ ...FAMILY_ROOT }];
     familyItems.value = [];
     familyFirstLoad.value = true;
+    familySelectedAlbum.value = null;
   }
 });
 </script>

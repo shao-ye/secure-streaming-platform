@@ -172,11 +172,18 @@
 
         <template v-if="form.recordConfig.upload.enabled">
           <el-form-item label="目标类型">
+            <!--
+              目标类型：
+                - cloudFile: 默认文件目录（个人网盘）
+                - familyAlbum: 家庭相册（家庭云下的某个相册）
+              上传执行时按此值路由到不同的 139 云盘 API 分支。
+            -->
             <el-radio-group v-model="form.recordConfig.upload.destinationType">
               <el-radio label="cloudFile">默认文件目录</el-radio>
+              <el-radio label="familyAlbum">家庭相册</el-radio>
             </el-radio-group>
             <div style="margin-top: 5px; font-size: 12px; color: #909399;">
-              V1 先支持默认文件目录手动路径配置与校验。
+              默认文件目录对应个人网盘；家庭相册需先在“浏览”中选中某个家庭下的相册。
             </div>
           </el-form-item>
 
@@ -287,30 +294,57 @@ const validateUploadTargetLoading = ref(false);
 const pickerVisible = ref(false);
 
 /**
- * 打开云盘目录选择器前的前置检查
- * 当前仅限制 destinationType=cloudFile（默认文件目录）；后续扩展家庭相册时再调整。
+ * 打开云盘目录选择器
+ * picker 内部已经通过 Tab 分别对应 "我的文件"和"我的家庭"，用户可任选。
+ * 选完后回调会根据 destinationType 自动同步到表单。
  */
 function handleOpenFolderPicker() {
-  if (form.value.recordConfig.upload.destinationType !== 'cloudFile') {
-    ElMessage.warning('当前仅支持选择默认文件目录下的位置');
-    return;
-  }
   pickerVisible.value = true;
 }
 
 /**
  * 云盘目录选择确认回调
- * picker 会返回 { path, fileId, name }，其中 path 是通过面包屑拼接出的可读路径、
- * fileId 是 139 侧的内部 ID。我们同时回填：
- *   - manualPath：给用户看的路径
- *   - catalogId：上传时需要的内部句柄
- *   - resolvedPath / targetName / status：统一样式，跳过二次路径校验
- * @param {{ path: string, fileId: string, name: string }} payload
+ * 按 payload.destinationType 分派回填表单：
+ *   - cloudFile   (个人网盘)：回填 manualPath / catalogId / targetName / resolvedPath
+ *   - familyAlbum (家庭相册)：回填 groupId / albumId / targetName，并用 139 原生 URL
+ *                   格式 /familycloud/{cloudId}/{albumName} 填入 manualPath 方便用户辨认
+ * 选择器回填后视同“已校验”（这是前端语义的 validated，服务端校验仍可点「路径校验」再跑一遍）。
+ * @param {Object} payload picker emit 的 结构（包含 destinationType 等字段）
  */
 function handlePickerConfirm(payload) {
+  const destinationType = payload?.destinationType || 'cloudFile';
+
+  if (destinationType === 'familyAlbum') {
+    const { path, cloudId, albumId, albumName, familyName } = payload || {};
+    // 139 原生 URL 路径，与用户在浏览器报地址栏看到的一致，便于核对
+    const manualPathForDisplay = cloudId && albumName
+      ? `/familycloud/${cloudId}/${albumName}`
+      : (path || '/');
+    form.value.recordConfig.upload = {
+      ...form.value.recordConfig.upload,
+      destinationType: 'familyAlbum',
+      selectorMode: 'manual',
+      groupId: cloudId || '',
+      albumId: albumId || '',
+      targetName: albumName || '',
+      catalogId: '',
+      manualPath: manualPathForDisplay,
+      resolvedPath: `家庭相册 / ${familyName || '未知家庭'} / ${albumName || '未知相册'}`,
+      status: 'validated'
+    };
+    ElMessage.success(`已选择家庭相册：${familyName || ''} / ${albumName || ''}`);
+    return;
+  }
+
+  // 默认文件目录（cloudFile）- 保持原有逻辑
   const { path, fileId, name } = payload || {};
   form.value.recordConfig.upload = {
     ...form.value.recordConfig.upload,
+    destinationType: 'cloudFile',
+    selectorMode: 'manual',
+    // 切回个人网盘时清理家庭相册专属字段，避免历史数据串值
+    groupId: '',
+    albumId: '',
     manualPath: path || '/',
     catalogId: fileId || '',
     targetName: name || '',
@@ -587,28 +621,54 @@ async function handleSave() {
 
 /**
  * 校验自动上传目标路径
- * 当前版本先调用后端完成默认文件目录的基础路径格式校验，并回填展示字段。
+ * 根据 destinationType 提交不同字段给后端：
+ *   - cloudFile  : destinationType, selectorMode, manualPath
+ *   - familyAlbum: destinationType, selectorMode, groupId, albumId, targetName
+ * 后端返回的 resolvedPath / catalogId / targetName 会回填到表单。
  */
 async function handleValidateUploadTarget() {
-  if (!form.value.recordConfig.upload.manualPath) {
+  const uploadCfg = form.value.recordConfig.upload;
+  const destinationType = uploadCfg.destinationType || 'cloudFile';
+
+  // 不同目标类型的前置非空检查
+  if (destinationType === 'familyAlbum') {
+    if (!uploadCfg.groupId || !uploadCfg.albumId) {
+      ElMessage.warning('请先通过「浏览」选中家庭相册');
+      return;
+    }
+  } else if (!uploadCfg.manualPath) {
     ElMessage.warning('请输入需要校验的目标路径');
     return;
   }
 
   validateUploadTargetLoading.value = true;
   try {
-    const response = await axios.post(`${CLOUD_DRIVE_API_PREFIX}/validate-target`, {
-      destinationType: form.value.recordConfig.upload.destinationType,
-      selectorMode: form.value.recordConfig.upload.selectorMode,
-      manualPath: form.value.recordConfig.upload.manualPath
-    });
+    // 按目标类型组装 payload
+    const payload = destinationType === 'familyAlbum'
+      ? {
+          destinationType,
+          selectorMode: uploadCfg.selectorMode || 'manual',
+          groupId: uploadCfg.groupId,
+          albumId: uploadCfg.albumId,
+          targetName: uploadCfg.targetName
+        }
+      : {
+          destinationType,
+          selectorMode: uploadCfg.selectorMode || 'manual',
+          manualPath: uploadCfg.manualPath
+        };
+
+    const response = await axios.post(`${CLOUD_DRIVE_API_PREFIX}/validate-target`, payload);
 
     if (response.data?.status === 'success') {
       form.value.recordConfig.upload = {
         ...form.value.recordConfig.upload,
-        targetName: response.data.data?.targetName || form.value.recordConfig.upload.targetName,
-        catalogId: response.data.data?.catalogId || '',
-        resolvedPath: response.data.data?.resolvedPath || form.value.recordConfig.upload.manualPath,
+        targetName: response.data.data?.targetName || uploadCfg.targetName,
+        // cloudFile 以后端返回为准；familyAlbum 保留已有 albumId
+        catalogId: destinationType === 'familyAlbum'
+          ? uploadCfg.catalogId || ''
+          : (response.data.data?.catalogId || ''),
+        resolvedPath: response.data.data?.resolvedPath || uploadCfg.resolvedPath || uploadCfg.manualPath,
         status: 'validated'
       };
 

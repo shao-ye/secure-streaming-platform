@@ -453,21 +453,63 @@ class CloudDriveService {
 
   /**
    * 校验上传目标
-   * 当前阶段对默认文件目录执行基础格式校验，并明确说明尚未完成远端可写性验证。
+   * 支持的目标类型：
+   *   - cloudFile  : 默认文件目录（个人网盘），对 manualPath 做基础格式校验
+   *   - familyAlbum: 家庭相册，对 groupId / albumId 做非空校验
+   * 说明：两种类型都仅做格式/非空级校验，不伪造远端目录可写性验证；等后续上传执行器
+   * 接入时再补充真实的 139 侧写入能力校验（账户是否有权限、相册是否归属该家庭等）。
    * @param {Object} payload - 校验参数
    * @returns {Object} 接口返回内容
    */
   validateTarget(payload) {
     const destinationType = payload.destinationType || 'cloudFile';
     const selectorMode = payload.selectorMode || 'manual';
-    const manualPath = typeof payload.manualPath === 'string' ? payload.manualPath.trim() : '';
 
+    // ========== 分支 1：家庭相册 ==========
+    if (destinationType === 'familyAlbum') {
+      const groupId = typeof payload.groupId === 'string' ? payload.groupId.trim() : '';
+      const albumId = typeof payload.albumId === 'string' ? payload.albumId.trim() : '';
+      const targetName = typeof payload.targetName === 'string' ? payload.targetName.trim() : '';
+
+      if (!groupId || !albumId) {
+        return {
+          statusCode: 400,
+          payload: {
+            status: 'error',
+            message: '家庭相册校验需要同时提供 groupId（家庭 ID）与 albumId（相册 ID）'
+          }
+        };
+      }
+
+      return {
+        statusCode: 200,
+        payload: {
+          status: 'success',
+          message: '已通过家庭相册基础非空校验，远端可写性校验待上传执行器接入后补充',
+          data: {
+            valid: true,
+            checkMode: 'syntax_only',
+            destinationType,
+            selectorMode,
+            groupId,
+            albumId,
+            targetName,
+            // 与前端保持一致的展示格式，避免前后端各自拼
+            resolvedPath: `家庭相册 / ${targetName || albumId}`,
+            // 家庭相册没有 catalogId 的概念，显式置空
+            catalogId: ''
+          }
+        }
+      };
+    }
+
+    // ========== 分支 2：默认文件目录（个人网盘）==========
     if (destinationType !== 'cloudFile') {
       return {
         statusCode: 400,
         payload: {
           status: 'error',
-          message: '当前版本仅支持默认文件目录的手动路径校验'
+          message: '不支持的目标类型：' + destinationType
         }
       };
     }
@@ -482,6 +524,7 @@ class CloudDriveService {
       };
     }
 
+    const manualPath = typeof payload.manualPath === 'string' ? payload.manualPath.trim() : '';
     if (!manualPath) {
       return {
         statusCode: 400,
