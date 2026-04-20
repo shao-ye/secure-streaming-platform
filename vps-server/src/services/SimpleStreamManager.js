@@ -53,7 +53,11 @@ class SimpleStreamManager {
     this.CLEANUP_INTERVAL = 30000; // 30秒清理间隔
 
     // 初始化
-    this.initialize();
+    // 注意：initialize 是异步的（要清理僵尸 ffmpeg、扫 HLS 目录），
+    // 为避免构造器返回时 activeStreams 尚未就绪、外部直接调 enableRecording
+    // 导致重复启动 ffmpeg（见重复录制 bug 根因），这里把 Promise 暴露为 this.ready，
+    // 由调用方（app.js）在启动 RecordScheduler 之前 await 一次。
+    this.ready = this.initialize();
     
     logger.info('🎬 SimpleStreamManager initialized', {
       vpsBaseDomain: this.vpsBaseDomain,
@@ -540,25 +544,147 @@ class SimpleStreamManager {
 
   /**
    * 清理僵尸FFmpeg进程
+   *
+   * 策略：
+   *  1) 扫出所有 ffmpeg 进程 PID
+   *  2) 发 SIGTERM（给 FFmpeg 机会 flush 输出、关闭文件）
+   *  3) 等待 3 秒
+   *  4) 对仍存活的进程发 SIGKILL 强制回收
+   *
+   * 背景：早期实现只发 SIGTERM 不等待、不兜底，遇到 RTMP I/O 阻塞时
+   * ffmpeg 会忽略 SIGTERM，Node 进程继续跑，activeStreams 被清空，
+   * 随后 RecordScheduler 启动新 ffmpeg → 同一频道残留两份录制进程。
    */
   async cleanupZombieProcesses() {
     try {
       const { stdout } = await execAsync('ps aux | grep ffmpeg | grep -v grep || true');
-      const processes = stdout.split('\n').filter(line => line.trim());
+      // 提取 PID 列表并过滤掉非数字项，避免把 ps 输出中的奇怪列当 pid 用
+      const pids = stdout
+        .split('\n')
+        .map(line => line.trim().split(/\s+/)[1])
+        .filter(pid => pid && /^\d+$/.test(pid))
+        .map(pid => Number(pid));
 
-      for (const processLine of processes) {
-        const pid = processLine.split(/\s+/)[1];
-        if (pid) {
-          logger.warn('Killing zombie FFmpeg process', { pid });
+      if (pids.length === 0) {
+        return;
+      }
+
+      // 阶段 1：发 SIGTERM 让 ffmpeg 尝试优雅退出
+      for (const pid of pids) {
+        logger.warn('清理僵尸 FFmpeg 进程 (SIGTERM)', { pid });
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch (error) {
+          // ESRCH 表示进程已经不在，忽略
+          if (error.code !== 'ESRCH') {
+            logger.warn('发送 SIGTERM 失败', { pid, error: error.message });
+          }
+        }
+      }
+
+      // 阶段 2：等待 3 秒给 ffmpeg flush + 退出
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // 阶段 3：对仍存活的进程发 SIGKILL 兜底
+      for (const pid of pids) {
+        try {
+          // kill(pid, 0) 不发信号，只探测进程是否存在
+          process.kill(pid, 0);
+          // 没抛异常说明进程还活着 → 强制 kill
+          logger.warn('FFmpeg 进程未响应 SIGTERM，强制清理 (SIGKILL)', { pid });
           try {
-            process.kill(pid, 'SIGTERM');
-          } catch (error) {
-            logger.warn('Failed to kill process', { pid, error: error.message });
+            process.kill(pid, 'SIGKILL');
+          } catch (killError) {
+            if (killError.code !== 'ESRCH') {
+              logger.warn('发送 SIGKILL 失败', { pid, error: killError.message });
+            }
+          }
+        } catch (error) {
+          // ESRCH = 进程已退出，这是期望结果
+          if (error.code !== 'ESRCH') {
+            logger.warn('探测进程存活状态异常', { pid, error: error.message });
           }
         }
       }
     } catch (error) {
-      logger.warn('No zombie processes found or cleanup failed', { error: error.message });
+      logger.warn('清理僵尸进程过程异常', { error: error.message });
+    }
+  }
+
+  /**
+   * 清理指定频道的孤儿 FFmpeg 进程
+   *
+   * 用途：在 enableRecording 真正启动新 ffmpeg 前做一次 OS 级别检查，
+   * 防止以下场景出现重复录制：
+   *   - 服务重启后 cleanupZombieProcesses 发的 SIGTERM 被旧 ffmpeg 忽略；
+   *   - activeStreams 被清空，enableRecording 判断为「未录制」；
+   *   - 于是又启动一个新的 ffmpeg，同频道两个进程并存。
+   *
+   * 识别方式：
+   *   - pgrep -f 匹配命令行中含 channelId 的 ffmpeg 进程
+   *   - 排除本 Node 进程 activeStreams 里已登记的 pid（那些是正常进程）
+   *   - 剩下的视为孤儿进程，直接 SIGKILL
+   *
+   * @param {string} channelId - 频道ID
+   */
+  async killOrphanFfmpegForChannel(channelId) {
+    try {
+      // 命令行里含 channelId 的 ffmpeg 进程（输出路径、HLS 目录都会带 channelId）
+      // 用 shell 转义防止 channelId 里有特殊字符（虽然业务上不会，但做好防御）
+      const safeChannelId = String(channelId).replace(/[^a-zA-Z0-9_\-]/g, '');
+      if (!safeChannelId) {
+        return;
+      }
+      const { stdout } = await execAsync(`pgrep -f "ffmpeg.*${safeChannelId}" || true`);
+      const osPids = stdout
+        .trim()
+        .split('\n')
+        .map(p => p.trim())
+        .filter(p => /^\d+$/.test(p));
+
+      if (osPids.length === 0) {
+        return;
+      }
+
+      // 收集本 Node 进程在 activeStreams 里已知的所有 ffmpeg pid
+      const knownPids = new Set();
+      for (const info of this.activeStreams.values()) {
+        if (info && info.process && info.process.pid) {
+          knownPids.add(String(info.process.pid));
+        }
+      }
+
+      // OS 有、本进程不知道 → 孤儿
+      const orphans = osPids.filter(pid => !knownPids.has(pid));
+      if (orphans.length === 0) {
+        return;
+      }
+
+      logger.warn('🧹 发现频道的孤儿 FFmpeg 进程，强制清理', {
+        channelId,
+        orphanPids: orphans,
+        knownPids: Array.from(knownPids)
+      });
+
+      // 直接 SIGKILL（这些进程已经游离于本服务管理之外，不需要优雅退出）
+      for (const pid of orphans) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch (error) {
+          if (error.code !== 'ESRCH') {
+            logger.warn('SIGKILL 孤儿 ffmpeg 失败', { pid, error: error.message });
+          }
+        }
+      }
+
+      // 等一小段时间让 OS 回收 PID / 释放文件描述符，避免后续 ffmpeg 输出路径冲突
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      // 清理失败不阻塞后续录制启动（安全兜底）
+      logger.error('清理孤儿 FFmpeg 进程失败', {
+        channelId,
+        error: error.message
+      });
     }
   }
 
@@ -875,6 +1001,10 @@ class SimpleStreamManager {
   async enableRecording(channelId, recordConfig) {
     try {
       logger.info('Enabling recording', { channelId, recordConfig });
+
+      // 🛡️ 防重复录制：启动前先清理本频道的孤儿 ffmpeg 进程
+      // （可能来自上次服务重启后未被 SIGTERM 成功回收的旧进程）
+      await this.killOrphanFfmpegForChannel(channelId);
       
       // 🆕 获取频道配置（包含videoAspectRatio）
       let channelConfig = null;

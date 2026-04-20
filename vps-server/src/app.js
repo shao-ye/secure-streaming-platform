@@ -296,6 +296,39 @@ try {
   logger.error('部署管理API路由加载失败:', error.message);
 }
 
+// 🆕 录制文件自动上传：队列 + Worker + 路由（迭代 2）
+// 复用迭代 1 的 HybridUploader，在 VPS 内完成串行自动上传
+let uploadQueue = null;
+let uploadWorker = null;
+try {
+  const UploadQueueService = require('./services/upload-queue/UploadQueueService');
+  const UploadNotifier = require('./services/upload-queue/UploadNotifier');
+  const CloudUploadWorker = require('./services/upload-queue/CloudUploadWorker');
+  const CloudDriveService = require('./services/CloudDriveService');
+  const uploadRoutes = require('./routes/upload');
+
+  // 独立的 CloudDriveService 实例，与 cloud-drive 路由里的实例各自管理
+  // state.json 通过 AES-GCM 加密 + 原子写入，并发读写安全
+  const uploadCloudDriveService = new CloudDriveService();
+
+  uploadQueue = new UploadQueueService();
+  const uploadNotifier = new UploadNotifier();
+  uploadWorker = new CloudUploadWorker({
+    queue: uploadQueue,
+    notifier: uploadNotifier,
+    cloudDriveService: uploadCloudDriveService
+  });
+
+  // 挂到 app.locals，供 upload 路由处理器读取
+  app.locals.uploadQueue = uploadQueue;
+  app.locals.uploadWorker = uploadWorker;
+
+  app.use('/api/upload', uploadRoutes);
+  logger.info('✅ 录制文件自动上传模块已加载（队列 + Worker + 路由）');
+} catch (error) {
+  logger.error('录制文件自动上传模块加载失败:', error.message, error.stack);
+}
+
 // 保留原有API路由（向后兼容）
 try {
   const apiRoutes = require('./routes/api');
@@ -341,6 +374,16 @@ const gracefulShutdown = async (signal) => {
         await processManager.stopAllStreams();
         logger.info('All streams stopped');
         
+        // 停止上传 Worker（迭代 2）
+        if (uploadWorker) {
+          try {
+            await uploadWorker.stop();
+            logger.info('CloudUploadWorker stopped');
+          } catch (error) {
+            logger.error('CloudUploadWorker 停止失败', { error: error.message });
+          }
+        }
+
         // 停止视频清理调度器
         if (videoCleanupScheduler) {
             await videoCleanupScheduler.stop();
@@ -377,6 +420,24 @@ if (require.main === module) {
         logger.info(`📁 HLS Output Directory: ${hlsDir}`);
         logger.info(`🔐 API Security: ${process.env.ENABLE_IP_WHITELIST === 'true' ? 'Enabled' : 'Disabled'}`);
         
+        // 🛡️ 等待 SimpleStreamManager 初始化完成（清理僵尸 ffmpeg + 旧 HLS 文件）
+        // 必须在启动 PreloadScheduler / RecordScheduler 之前 await，否则会出现竞态：
+        //   - activeStreams 尚未就绪
+        //   - 旧的 ffmpeg 进程还没被 SIGTERM / SIGKILL
+        //   - 调度器已经开始调 enableRecording / startWatching → 同频道残留两份 ffmpeg
+        if (streamManager && streamManager.ready) {
+          try {
+            logger.info('⏳ 等待 SimpleStreamManager 初始化完成...');
+            await streamManager.ready;
+            logger.info('✅ SimpleStreamManager 初始化完成，准备启动调度器');
+          } catch (error) {
+            logger.error('❌ SimpleStreamManager 初始化失败（继续启动调度器，可能有风险）', {
+              error: error.message,
+              stack: error.stack
+            });
+          }
+        }
+        
         // 🆕 启动PreloadScheduler（在服务器启动后，确保单次执行）
         if (preloadScheduler) {
           try {
@@ -411,6 +472,19 @@ if (require.main === module) {
           }
         }
         
+        // 🆕 启动上传 Worker（迭代 2）
+        if (uploadWorker) {
+          try {
+            uploadWorker.start();
+            logger.info('✅ CloudUploadWorker 已启动');
+          } catch (error) {
+            logger.error('❌ CloudUploadWorker 启动失败', {
+              error: error.message,
+              stack: error.stack
+            });
+          }
+        }
+
         // 🆕 服务启动后初始化Recovery Service
         if (RecordingRecoveryService && streamManager) {
           try {
