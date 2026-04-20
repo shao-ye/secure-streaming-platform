@@ -359,19 +359,33 @@ class HybridUploader {
     let isFirstCheck = true;
     stallTimer = setInterval(() => {
       const delta = uploaded - lastCheckBytes;
+      const percent = fileSize > 0 ? Math.floor((uploaded / fileSize) * 100) : 0;
+
+      // 🆕 每 30s 主动推一次前端进度：即便还没跨 10% 门槛，也让前端知道
+      // PUT 阶段"在慢速传"而不是"卡死"；避免面板停留在"hash 100%"误导用户。
+      try {
+        onProgress({ phase: 'put', uploaded, total: fileSize, percent });
+      } catch (err) { /* 忽略进度回调异常 */ }
+
+      // 👀 每个窗口打一条节拍日志，便于排查慢速场景
+      const uploadedMb = (uploaded / 1024 / 1024).toFixed(1);
+      const totalMb = (fileSize / 1024 / 1024).toFixed(1);
+      const deltaKb = (delta / 1024).toFixed(1);
+
       if (isFirstCheck) {
         // 给 fetch 首次发送数据一个宽限期
         isFirstCheck = false;
         lastCheckBytes = uploaded;
-        console.log(`[Hybrid] PUT stall 检测：首个窗口 ${(delta / 1024).toFixed(1)} KB（宽限，不触发 abort）`);
+        console.log(`[Hybrid] PUT stall 节拍：首个窗口 ${deltaKb} KB（宽限，不触发 abort）`);
         return;
       }
       if (delta < STALL_MIN_BYTES) {
-        abortReason = `PUT stall：最近 ${STALL_INTERVAL_MS / 1000}s 仅传输 ${(delta / 1024).toFixed(1)} KB（< ${STALL_MIN_BYTES / 1024 / 1024} MB），判定为网络阻塞`;
+        abortReason = `PUT stall：最近 ${STALL_INTERVAL_MS / 1000}s 仅传输 ${deltaKb} KB（< ${STALL_MIN_BYTES / 1024 / 1024} MB），判定为网络阻塞`;
         console.error(`[Hybrid] ${abortReason}，abort 连接`);
         abortCtrl.abort();
         return;
       }
+      console.log(`[Hybrid] PUT stall 节拍：本窗口 ${deltaKb} KB，累计 ${uploadedMb}/${totalMb} MB (${percent}%)`);
       lastCheckBytes = uploaded;
     }, STALL_INTERVAL_MS);
 
