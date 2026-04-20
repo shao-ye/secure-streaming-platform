@@ -227,18 +227,46 @@
           <!-- 🆕 迭代 3：上传队列实时状态（对话框打开且上传开启时每 10s 轮询） -->
           <el-form-item label="上传队列">
             <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+              <!-- 一行：队列总体状态 + 待传/上传中数量 -->
               <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                 <el-tag :type="uploadQueueRunningTagType">{{ uploadQueueRunningLabel }}</el-tag>
                 <span style="font-size: 12px; color: #606266;">
                   待传 {{ uploadQueueStatus?.queue?.pending ?? 0 }} · 上传中 {{ uploadQueueStatus?.queue?.uploading ?? 0 }}
                 </span>
+                <span v-if="totalSuccessCount" style="font-size: 12px; color: #67c23a;">
+                  累计成功 {{ totalSuccessCount }}
+                </span>
+                <span v-if="totalFailedCount" style="font-size: 12px; color: #e6a23c;">
+                  累计失败 {{ totalFailedCount }}
+                </span>
               </div>
-              <div v-if="currentUploadFileName" style="font-size: 12px; color: #409eff; word-break: break-all;">
-                📤 当前：{{ currentUploadFileName }}
-              </div>
+
+              <!-- 当前任务：文件名 + 进度条 + 进度文案 + 已持续时长 + 尝试次数 -->
+              <template v-if="currentUploadFileName">
+                <div style="font-size: 12px; color: #409eff; word-break: break-all;">
+                  📤 当前：{{ currentUploadFileName }}
+                </div>
+                <el-progress
+                  v-if="currentUploadProgressPercent !== null"
+                  :percentage="currentUploadProgressPercent"
+                  :status="currentUploadProgressStatus"
+                  :stroke-width="8"
+                  style="margin-top: 2px;"
+                />
+                <div style="font-size: 12px; color: #909399; display: flex; gap: 12px; flex-wrap: wrap;">
+                  <span v-if="currentUploadPhaseLabel">{{ currentUploadPhaseLabel }}</span>
+                  <span v-if="currentUploadSizeText">{{ currentUploadSizeText }}</span>
+                  <span v-if="currentUploadElapsedText">已持续 {{ currentUploadElapsedText }}</span>
+                  <span v-if="currentUploadAttemptText" style="color: #e6a23c;">{{ currentUploadAttemptText }}</span>
+                </div>
+              </template>
+
+              <!-- 最近失败摘要 -->
               <div v-if="latestUploadFailure" style="font-size: 12px; color: #f56c6c; word-break: break-all;">
                 ❌ 最近失败：{{ latestUploadFailure }}
               </div>
+
+              <!-- 行为说明（固定展示，降低管理员疑惑） -->
               <div style="font-size: 12px; color: #909399;">
                 成功上传后，文件名末尾会加 <code>_u</code> 标记；登录失效会暂停消费，重新扫码后自动恢复。
               </div>
@@ -719,6 +747,11 @@ function handleClose() {
  * 结构定义见 vps-server/src/routes/upload.js
  */
 const uploadQueueStatus = ref(null);
+/**
+ * 用于让「已持续时长」显示保持响应式；每次 fetchUploadQueueStatus 成功时刷新
+ * 精度跟随 10s 轮询即可，无需单独秒级计时
+ */
+const nowTick = ref(Date.now());
 let uploadQueueTimer = null;
 
 /**
@@ -730,6 +763,87 @@ const currentUploadFileName = computed(() => {
   const fullPath = list[0] || '';
   const name = fullPath.split('/').pop() || '';
   return name.length > 60 ? '…' + name.slice(-60) : name;
+});
+
+/**
+ * 当前 Worker 执行的任务（含进度 / 尝试次数 / 启动时间）
+ */
+const currentWorkerTask = computed(() => {
+  return uploadQueueStatus.value?.worker?.stats?.currentTask || null;
+});
+
+/**
+ * 当前进度百分比（0-100），没有则返回 null（模板不渲染进度条）
+ */
+const currentUploadProgressPercent = computed(() => {
+  const p = currentWorkerTask.value?.progress;
+  if (!p || typeof p.percent !== 'number') return null;
+  // 限制到 [0, 100]，防止因浮点计算产生负数 / 超过 100
+  return Math.max(0, Math.min(100, Math.round(p.percent)));
+});
+
+/**
+ * 进度条的状态色（hash 阶段 / put 阶段 100% 高亮）
+ */
+const currentUploadProgressStatus = computed(() => {
+  const p = currentWorkerTask.value?.progress;
+  if (!p) return '';
+  if (p.phase === 'put' && p.percent >= 100) return 'success';
+  return '';
+});
+
+/**
+ * 进度阶段文案：hash / put 映射到中文
+ */
+const currentUploadPhaseLabel = computed(() => {
+  const p = currentWorkerTask.value?.progress;
+  if (!p) return '';
+  if (p.phase === 'hash') return '📝 正在计算 SHA256';
+  if (p.phase === 'put') return '📤 流式上传中';
+  return '';
+});
+
+/**
+ * 已上传大小文案（put 阶段才展示 X / Y MB）
+ */
+const currentUploadSizeText = computed(() => {
+  const p = currentWorkerTask.value?.progress;
+  if (!p || p.phase !== 'put' || !p.total) return '';
+  const mb = (bytes) => (bytes / 1024 / 1024).toFixed(1);
+  return `${mb(p.uploaded)} / ${mb(p.total)} MB`;
+});
+
+/**
+ * 当前任务已持续时长文案（按 10s 轮询刷新）
+ */
+const currentUploadElapsedText = computed(() => {
+  const task = currentWorkerTask.value;
+  if (!task || !task.startedAt) return '';
+  const elapsedMs = Math.max(0, nowTick.value - task.startedAt);
+  const seconds = Math.floor(elapsedMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m${s.toString().padStart(2, '0')}s`;
+});
+
+/**
+ * 尝试次数提示（仅在 attempt > 1 时展示，减少正常情况干扰）
+ */
+const currentUploadAttemptText = computed(() => {
+  const task = currentWorkerTask.value;
+  if (!task || !task.attempt || task.attempt <= 1) return '';
+  return `第 ${task.attempt} 次重试`;
+});
+
+/**
+ * Worker 累计成功 / 失败数（Worker 重启后会重置，仅本进程内累计）
+ */
+const totalSuccessCount = computed(() => {
+  return uploadQueueStatus.value?.worker?.stats?.totalSuccess || 0;
+});
+const totalFailedCount = computed(() => {
+  return uploadQueueStatus.value?.worker?.stats?.totalFailed || 0;
 });
 
 /**
@@ -776,6 +890,8 @@ async function fetchUploadQueueStatus() {
     const resp = await axios.get('/api/upload/queue-status');
     if (resp.data?.status === 'success') {
       uploadQueueStatus.value = resp.data.data;
+      // 刷新时间戳让「已持续时长」按 10s 节拍重新计算
+      nowTick.value = Date.now();
     }
   } catch (err) {
     // 静默忽略

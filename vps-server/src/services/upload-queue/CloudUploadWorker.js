@@ -181,7 +181,10 @@ class CloudUploadWorker {
       filePath,
       channelId,
       startedAt: Date.now(),
-      attempt: 0
+      attempt: 0,
+      // 🆕 迭代 3 前端补强：实时进度字段，由 HybridUploader 的 onProgress 回调写入
+      // phase: 'hash'（SHA256 计算）| 'put'（流式上传中）
+      progress: null
     };
 
     // 步骤 1：登录态检查（每次任务前都检查，登录失效场景能立即感知）
@@ -248,6 +251,8 @@ class CloudUploadWorker {
     let lastError = null;
     for (let attempt = 1; attempt <= retryTimes; attempt++) {
       this.stats.currentTask.attempt = attempt;
+      // 🆕 新尝试开始时清零进度，避免展示上一轮残留
+      this.stats.currentTask.progress = null;
       try {
         logger.info('[UploadWorker] 开始上传', {
           filePath,
@@ -262,7 +267,20 @@ class CloudUploadWorker {
         const uploader = new HybridUploader({
           sessionBundle,
           groupId: cfg.groupId,
-          targetAlbumId: cfg.albumId
+          targetAlbumId: cfg.albumId,
+          // 🆕 迭代 3 前端补强：进度回调写入 currentTask.progress
+          // HybridUploader 在 SHA256 阶段和 PUT 阶段（每 10% 一次）回调本函数
+          onProgress: (info) => {
+            if (this.stats.currentTask) {
+              this.stats.currentTask.progress = {
+                phase: info.phase,           // 'hash' | 'put'
+                percent: info.percent,       // 0-100
+                uploaded: info.uploaded || 0,
+                total: info.total || 0,
+                updatedAt: Date.now()
+              };
+            }
+          }
         });
         const result = await uploader.upload(filePath);
 
