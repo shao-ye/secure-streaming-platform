@@ -58,6 +58,11 @@ class SimpleStreamManager {
     // Map<channelId, Promise>，保存当前频道正在执行的锁端 Promise
     this.channelLocks = new Map();
 
+    // 🆕 文件最终化调度器（迭代 3：录制文件改名成功后触发自动上传）
+    // 由 app.js 调 setFinalizeDispatcher(...) 注入；未注入时保持 null
+    // 所有 dispatch 调用走 _safeFinalizeDispatch，不会押塞或影响原有 rename 流程
+    this.finalizeDispatcher = null;
+
     // 初始化
     // 注意：initialize 是异步的（要清理僵尸 ffmpeg、扫 HLS 目录），
     // 为避免构造器返回时 activeStreams 尚未就绪、外部直接调 enableRecording
@@ -118,6 +123,67 @@ class SimpleStreamManager {
         }
       });
     };
+  }
+
+  /**
+   * 注入文件最终化调度器（迭代 3）
+   *
+   * 属于依赖注入模式：app.js 启动时实例化 FileFinalizeDispatcher 后调本方法。
+   * 未注入时所有 dispatch 调用会被安静忽略，适用于禁用上传模块的部署场景。
+   *
+   * @param {Object|null} dispatcher FileFinalizeDispatcher 实例，传 null 可撤销
+   */
+  setFinalizeDispatcher(dispatcher) {
+    this.finalizeDispatcher = dispatcher || null;
+    if (dispatcher) {
+      logger.info('SimpleStreamManager 已注入 FileFinalizeDispatcher');
+    }
+  }
+
+  /**
+   * 安全调用 dispatcher.onFinalize
+   *
+   * 设计原则：
+   *   - dispatcher 未注入时直接 return
+   *   - 任何异常吃掉，不押塞录制改名流程
+   *   - onFinalize 本身内部用 setImmediate 异步化，无需在此 await
+   *
+   * @param {string} filePath  改名完成后的最终文件路径
+   * @param {string} channelId 频道 ID
+   */
+  _safeFinalizeDispatch(filePath, channelId) {
+    try {
+      if (!this.finalizeDispatcher || typeof this.finalizeDispatcher.onFinalize !== 'function') {
+        return;
+      }
+      this.finalizeDispatcher.onFinalize(filePath, channelId);
+    } catch (err) {
+      logger.warn('SimpleStreamManager 派发 onFinalize 失败（已吞）', {
+        filePath,
+        channelId,
+        error: err && err.message
+      });
+    }
+  }
+
+  /**
+   * 从文件路径反推频道 ID
+   *
+   * 约定录制文件路径结构为 {root}/{channelId}/{YYYYMMDD}/{file.mp4}，
+   * 因此倒数第二层目录名 = channelId。只有 stream_ 开头的视为有效。
+   *
+   * @param {string} filePath
+   * @returns {string|null}
+   */
+  _extractChannelIdFromPath(filePath) {
+    try {
+      const dateDir = path.dirname(filePath);
+      const channelDir = path.dirname(dateDir);
+      const channelId = path.basename(channelDir);
+      return /^stream_/.test(channelId) ? channelId : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1624,6 +1690,14 @@ class SimpleStreamManager {
         configuredEndTime,
         actualEndTime
       });
+
+      // 🆕 迭代 3：从路径反推 channelId 后派发文件最终化事件
+      const channelId = this._extractChannelIdFromPath(newPath);
+      if (channelId) {
+        this._safeFinalizeDispatch(newPath, channelId);
+      } else {
+        logger.warn('无法从路径反推 channelId，跳过上传触发', { newPath });
+      }
     } catch (error) {
       logger.error('Failed to rename recording file', {
         oldPath,
@@ -1699,6 +1773,9 @@ class SimpleStreamManager {
         to: finalFilename,
         size: `${(fileSize / 1024 / 1024).toFixed(2)}MB`
       });
+
+      // 🆕 迭代 3：派发文件最终化事件，由 FileFinalizeDispatcher 判断是否入队上传
+      this._safeFinalizeDispatch(finalPath, channelId);
     } catch (error) {
       logger.error('Failed to rename completed segment', {
         channelId,
@@ -1869,6 +1946,9 @@ class SimpleStreamManager {
           to: finalFilename,
           size: `${(fileSize / 1024 / 1024).toFixed(2)}MB`
         });
+
+        // 🆕 迭代 3：派发文件最终化事件
+        this._safeFinalizeDispatch(finalPath, channelId);
       }
       
       logger.info('All final segments renamed successfully', { channelId });

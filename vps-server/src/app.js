@@ -300,6 +300,9 @@ try {
 // 复用迭代 1 的 HybridUploader，在 VPS 内完成串行自动上传
 let uploadQueue = null;
 let uploadWorker = null;
+// 🆕 迭代 3：文件最终化调度器 + 录制上传扫描器
+let uploadDispatcher = null;
+let uploadScanner = null;
 try {
   const UploadQueueService = require('./services/upload-queue/UploadQueueService');
   const UploadNotifier = require('./services/upload-queue/UploadNotifier');
@@ -324,7 +327,39 @@ try {
   app.locals.uploadWorker = uploadWorker;
 
   app.use('/api/upload', uploadRoutes);
-  logger.info('✅ 录制文件自动上传模块已加载（队列 + Worker + 路由）');
+
+  // 🆕 迭代 3：文件最终化调度器（录制改名成功后进此入口决定是否入队）
+  const FileFinalizeDispatcher = require('./services/upload-queue/FileFinalizeDispatcher');
+  const RecordingUploadScanner = require('./services/upload-queue/RecordingUploadScanner');
+  const axios = require('axios');
+  const configModule = require('../config');
+
+  uploadDispatcher = new FileFinalizeDispatcher({
+    uploadQueue,
+    // 通过 Workers API 拉取频道配置（含 recordConfig.upload）
+    channelConfigFetcher: async (channelId) => {
+      const url = `${configModule.workersApiUrl}/api/channel/${channelId}/config`;
+      const resp = await axios.get(url, { timeout: 3000 });
+      if (!resp.data || resp.data.status !== 'success') return null;
+      return resp.data.data;
+    }
+  });
+
+  // 录制上传扫描器：启动 30s 后首扫 + 每小时兜底
+  uploadScanner = new RecordingUploadScanner({
+    dispatcher: uploadDispatcher
+  });
+
+  // 挂到 app.locals 供路由处理器读取
+  app.locals.uploadDispatcher = uploadDispatcher;
+  app.locals.uploadScanner = uploadScanner;
+
+  // 向已加载的 SimpleStreamManager 注入 dispatcher
+  if (streamManager && typeof streamManager.setFinalizeDispatcher === 'function') {
+    streamManager.setFinalizeDispatcher(uploadDispatcher);
+  }
+
+  logger.info('✅ 录制文件自动上传模块已加载（队列 + Worker + Dispatcher + Scanner + 路由）');
 } catch (error) {
   logger.error('录制文件自动上传模块加载失败:', error.message, error.stack);
 }
@@ -374,6 +409,16 @@ const gracefulShutdown = async (signal) => {
         await processManager.stopAllStreams();
         logger.info('All streams stopped');
         
+        // 停止录制上传扫描器（迭代 3）
+        if (uploadScanner) {
+          try {
+            uploadScanner.stop();
+            logger.info('RecordingUploadScanner stopped');
+          } catch (error) {
+            logger.error('RecordingUploadScanner 停止失败', { error: error.message });
+          }
+        }
+
         // 停止上传 Worker（迭代 2）
         if (uploadWorker) {
           try {
@@ -485,6 +530,19 @@ if (require.main === module) {
           }
         }
 
+        // 🆕 启动录制上传扫描器（迭代 3，启动 30s 后首扫 + 每小时兜底）
+        if (uploadScanner) {
+          try {
+            uploadScanner.start();
+            logger.info('✅ RecordingUploadScanner 已启动');
+          } catch (error) {
+            logger.error('❌ RecordingUploadScanner 启动失败', {
+              error: error.message,
+              stack: error.stack
+            });
+          }
+        }
+
         // 🆕 服务启动后初始化Recovery Service
         if (RecordingRecoveryService && streamManager) {
           try {
@@ -495,6 +553,10 @@ if (require.main === module) {
             
             // 🔥 保存到全局变量，供手动触发API使用
             recoveryService = new RecordingRecoveryService(streamManager, systemConfig);
+            // 🆕 迭代 3：给 Recovery 服务注入同一个 dispatcher，恢复后的文件也走上传队列
+            if (uploadDispatcher && typeof recoveryService.setFinalizeDispatcher === 'function') {
+              recoveryService.setFinalizeDispatcher(uploadDispatcher);
+            }
             recoveryService.startup();
             
             logger.info('✅ 录制文件恢复服务已启动', {

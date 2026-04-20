@@ -223,6 +223,27 @@
               </span>
             </div>
           </el-form-item>
+
+          <!-- 🆕 迭代 3：上传队列实时状态（对话框打开且上传开启时每 10s 轮询） -->
+          <el-form-item label="上传队列">
+            <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+              <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <el-tag :type="uploadQueueRunningTagType">{{ uploadQueueRunningLabel }}</el-tag>
+                <span style="font-size: 12px; color: #606266;">
+                  待传 {{ uploadQueueStatus?.queue?.pending ?? 0 }} · 上传中 {{ uploadQueueStatus?.queue?.uploading ?? 0 }}
+                </span>
+              </div>
+              <div v-if="currentUploadFileName" style="font-size: 12px; color: #409eff; word-break: break-all;">
+                📤 当前：{{ currentUploadFileName }}
+              </div>
+              <div v-if="latestUploadFailure" style="font-size: 12px; color: #f56c6c; word-break: break-all;">
+                ❌ 最近失败：{{ latestUploadFailure }}
+              </div>
+              <div style="font-size: 12px; color: #909399;">
+                成功上传后，文件名末尾会加 <code>_u</code> 标记；登录失效会暂停消费，重新扫码后自动恢复。
+              </div>
+            </div>
+          </el-form-item>
         </template>
       </template>
     </el-form>
@@ -239,7 +260,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { FolderOpened } from '@element-plus/icons-vue';
 import axios from '@/utils/axios';
@@ -690,6 +711,113 @@ async function handleValidateUploadTarget() {
 function handleClose() {
   visible.value = false;
 }
+
+// ==================== 迭代 3：上传队列实时状态轮询 ====================
+
+/**
+ * 上传队列 + Worker 的实时状态（/api/upload/queue-status 返回）
+ * 结构定义见 vps-server/src/routes/upload.js
+ */
+const uploadQueueStatus = ref(null);
+let uploadQueueTimer = null;
+
+/**
+ * 当前正在上传的文件名（取队列中第一个 uploading，截断展示）
+ */
+const currentUploadFileName = computed(() => {
+  const list = uploadQueueStatus.value?.queue?.uploadingList || [];
+  if (!list.length) return '';
+  const fullPath = list[0] || '';
+  const name = fullPath.split('/').pop() || '';
+  return name.length > 60 ? '…' + name.slice(-60) : name;
+});
+
+/**
+ * 最近一条失败摘要（文件名 + 原因 + 时间）
+ */
+const latestUploadFailure = computed(() => {
+  const arr = uploadQueueStatus.value?.queue?.recentFailures || [];
+  if (!arr.length) return '';
+  const f = arr[0];
+  const name = (f.filePath || '').split('/').pop() || '(未知文件)';
+  const short = name.length > 50 ? '…' + name.slice(-50) : name;
+  const when = f.finishedAt ? new Date(f.finishedAt).toLocaleTimeString() : '';
+  const reason = f.reason || f.error || '未知原因';
+  return `${short}（${reason}${when ? ' · ' + when : ''}）`;
+});
+
+/**
+ * 队列运行标签文案
+ */
+const uploadQueueRunningLabel = computed(() => {
+  const w = uploadQueueStatus.value?.worker;
+  if (!w) return '未启动';
+  if (w.running && !w.paused) return '运行中';
+  if (w.paused) return `已暂停（${w.lastAuthMessage || '登录失效'}）`;
+  return '已停止';
+});
+
+/**
+ * 队列运行标签颜色
+ */
+const uploadQueueRunningTagType = computed(() => {
+  const w = uploadQueueStatus.value?.worker;
+  if (!w || !w.running) return 'info';
+  if (w.paused) return 'warning';
+  return 'success';
+});
+
+/**
+ * 拉取一次队列状态
+ * 静默失败：网络抖动/服务重启时不弹出错误框，避免打扰管理员
+ */
+async function fetchUploadQueueStatus() {
+  try {
+    const resp = await axios.get('/api/upload/queue-status');
+    if (resp.data?.status === 'success') {
+      uploadQueueStatus.value = resp.data.data;
+    }
+  } catch (err) {
+    // 静默忽略
+  }
+}
+
+/**
+ * 启动轮询（幂等：重复调不会叠加定时器）
+ */
+function startPollingUploadQueue() {
+  if (uploadQueueTimer) return;
+  fetchUploadQueueStatus();
+  uploadQueueTimer = setInterval(fetchUploadQueueStatus, 10000);
+}
+
+/**
+ * 停止轮询并清理展示缓存
+ */
+function stopPollingUploadQueue() {
+  if (uploadQueueTimer) {
+    clearInterval(uploadQueueTimer);
+    uploadQueueTimer = null;
+  }
+  uploadQueueStatus.value = null;
+}
+
+// 对话框打开 + 上传开关启用时才轮询；关闭或关闭上传时立即停止
+watch(
+  () => [props.modelValue, form.value && form.value.recordConfig && form.value.recordConfig.upload && form.value.recordConfig.upload.enabled],
+  ([visibleNow, uploadOn]) => {
+    if (visibleNow && uploadOn) {
+      startPollingUploadQueue();
+    } else {
+      stopPollingUploadQueue();
+    }
+  }
+);
+
+// 组件卸载时兵底清理定时器，避免异步泄漏
+onUnmounted(() => {
+  stopPollingUploadQueue();
+});
 </script>
 
 <style scoped>

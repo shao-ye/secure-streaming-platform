@@ -31,10 +31,58 @@ class RecordingRecoveryService {
       recordingsPath: process.env.RECORDINGS_PATH || '/srv/filebrowser/yoyo-k'
     };
     
+    // 🆕 文件最终化调度器（迭代 3：恢复后的文件也触发自动上传）
+    // 由 app.js 调 setFinalizeDispatcher(...) 注入；未注入时所有 dispatch 会被忽略
+    this.finalizeDispatcher = null;
+
     logger.info('RecordingRecoveryService initialized', {
       scanRecentHours: this.config.scanRecentHours,
       recordingsPath: this.config.recordingsPath
     });
+  }
+
+  /**
+   * 注入文件最终化调度器（迭代 3）
+   *
+   * 和 SimpleStreamManager 的符号一致，app.js 启动时注入。
+   * Recovery Service 会一批处理历史文件，一次可能产生数十个 dispatch，
+   * 依靠 UploadQueueService 的去重 + Worker 的 15s 节流避免洪峰。
+   *
+   * @param {Object|null} dispatcher FileFinalizeDispatcher 实例
+   */
+  setFinalizeDispatcher(dispatcher) {
+    this.finalizeDispatcher = dispatcher || null;
+    if (dispatcher) {
+      logger.info('RecordingRecoveryService 已注入 FileFinalizeDispatcher');
+    }
+  }
+
+  /**
+   * 安全调用 dispatcher.onFinalize
+   *
+   * 行为与 SimpleStreamManager._safeFinalizeDispatch 一致：未注入直接 return，
+   * 任何异常吃掉不押塞主流程。
+   *
+   * @param {string} filePath 改名完成后的文件绝对路径
+   * @param {string} channelId 频道 ID
+   */
+  _safeFinalizeDispatch(filePath, channelId) {
+    try {
+      if (!this.finalizeDispatcher || typeof this.finalizeDispatcher.onFinalize !== 'function') {
+        return;
+      }
+      if (!channelId) {
+        logger.warn('RecoveryService dispatch 时 channelId 缺失，跳过', { filePath });
+        return;
+      }
+      this.finalizeDispatcher.onFinalize(filePath, channelId);
+    } catch (err) {
+      logger.warn('RecoveryService 派发 onFinalize 失败（已吞）', {
+        filePath,
+        channelId,
+        error: err && err.message
+      });
+    }
   }
 
   // ==================== 启动入口 ====================
@@ -458,6 +506,9 @@ class RecordingRecoveryService {
           logger.info('🔄 Converting temp file to standard MP4 (old format)...');
           await this.streamManager.convertSegmentToStandardMp4(file.path, newPath);
           logger.info('✅ Temp file converted and renamed (old format)', { from: path.basename(file.path), to: newFileName });
+
+          // 🆕 迭代 3：旧格式恢复后派发自动上传事件
+          this._safeFinalizeDispatch(newPath, file.channel && file.channel.id);
         } else {
           logger.warn(`⚠️ Target file already exists: ${newFileName}`);
         }
@@ -525,6 +576,9 @@ class RecordingRecoveryService {
         logger.info('🔄 Converting temp file to standard MP4...');
         await this.streamManager.convertSegmentToStandardMp4(file.path, newPath);
         logger.info('✅ Temp file converted and renamed', { from: path.basename(file.path), to: newFileName });
+
+        // 🆕 迭代 3：新格式恢复后派发自动上传事件
+        this._safeFinalizeDispatch(newPath, file.channel && file.channel.id);
       } else {
         logger.warn(`⚠️ Target file already exists: ${newFileName}`);
       }
@@ -548,6 +602,9 @@ class RecordingRecoveryService {
       if (!fs.existsSync(newPath)) {
         fs.renameSync(file.path, newPath);
         logger.info('End time fixed', { from: path.basename(file.path), to: newFileName });
+
+        // 🆕 迭代 3：修正结束时间后派发自动上传事件
+        this._safeFinalizeDispatch(newPath, file.channel && file.channel.id);
       }
     } catch (error) {
       logger.error('Fix end time failed', { file: file.path, error: error.message });

@@ -647,6 +647,41 @@ async function handleRequest(request, env, ctx) {
       });
     }
 
+    // 🆕 录制文件自动上传队列接口（迭代 3）
+    // 透传 /api/upload/* 到 VPS，前端轮询 queue-status、手动 enqueue / resume worker 都走这里
+    if (path.startsWith('/api/upload/')) {
+      try {
+        const vpsUrl = `${env.VPS_API_URL}${path}${url.search}`;
+        const vpsHeaders = {
+          'X-API-Key': env.VPS_API_KEY
+        };
+        const requestInit = { method, headers: vpsHeaders };
+        if (method !== 'GET' && method !== 'HEAD') {
+          // 透传 body（JSON）与 Content-Type
+          vpsHeaders['Content-Type'] = request.headers.get('Content-Type') || 'application/json';
+          requestInit.body = await request.text();
+        }
+        const vpsResponse = await fetch(vpsUrl, requestInit);
+        const bodyText = await vpsResponse.text();
+        const respHeaders = new Headers({
+          'Content-Type': vpsResponse.headers.get('Content-Type') || 'application/json'
+        });
+        Object.entries(corsHeaders).forEach(([key, value]) => respHeaders.set(key, value));
+        return new Response(bodyText, {
+          status: vpsResponse.status,
+          headers: respHeaders
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '调用 VPS 上传接口失败: ' + error.message
+        }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
     // 🆕 视频清理配置API路由
     // GET /api/admin/cleanup/config - 获取清理配置
     if (path === '/api/admin/cleanup/config' && method === 'GET') {
