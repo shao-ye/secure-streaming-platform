@@ -300,20 +300,30 @@ class HybridUploader {
   async streamPutFile(filePath, uploadUrl, fileSize) {
     const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
 
-    // 🆕 超时保护：idle 60s 无数据流动 + 总时长 30min 双重 abort
-    // 背景：移动云 OSS 偶发把 TCP 连接保持 ESTABLISHED 但完全不吃数据，
-    // 老版代码无超时，会让 CloudUploadWorker 主循环永久阻塞在本 fetch
-    const IDLE_TIMEOUT_MS = 60_000;          // 60s 无 data 事件即判定为卡死
-    const TOTAL_TIMEOUT_MS = 30 * 60_000;    // 单个文件最长 30min（GB 级大文件兜底）
+    // 🆕 超时保护：三道防线
+    //   1) idle 超时：60s 内 stream 一次 'data' 都没触发（连接完全哑掉）
+    //   2) stall 检测：30s 内上传字节增量 < 1MB（TCP backpressure 导致的病态低速）
+    //   3) 总时长：30min 硬上限（兜底）
+    //
+    // 为什么需要 stall 检测：
+    //   stream.on('data') 触发的是"从磁盘读出"，而非"网络发送成功"。当对端以
+    //   极慢速度（例如 10 KB/s）吃数据时，Node 的可读流会持续被拉取，'data'
+    //   事件不断触发，idle timer 永远不会超时；但 600MB 文件会传几个小时。
+    //   stall detector 直接用 uploaded 字节增量判断真实吞吐是否合理。
+    const IDLE_TIMEOUT_MS = 60_000;           // 60s 无 'data' 事件
+    const STALL_INTERVAL_MS = 30_000;         // 每 30s 检查一次进度
+    const STALL_MIN_BYTES = 1 * 1024 * 1024;  // 30s 至少 1MB，否则算 stall（~33 KB/s）
+    const TOTAL_TIMEOUT_MS = 30 * 60_000;     // 单文件最长 30min
     const abortCtrl = new AbortController();
     let idleTimer = null;
+    let stallTimer = null;
     let totalTimer = null;
     let abortReason = '';
 
     const resetIdleTimer = () => {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
-        abortReason = `PUT idle 超过 ${IDLE_TIMEOUT_MS / 1000}s 无数据流动`;
+        abortReason = `PUT idle 超过 ${IDLE_TIMEOUT_MS / 1000}s 无 data 事件`;
         console.error(`[Hybrid] ${abortReason}，abort 连接`);
         abortCtrl.abort();
       }, IDLE_TIMEOUT_MS);
@@ -329,7 +339,7 @@ class HybridUploader {
     let lastLogPercent = 0;
     const onProgress = this.onProgress;
     stream.on('data', (chunk) => {
-      // 🆕 每收到一块数据就重置 idle 计时器，保证只要还在传就不会被误杀
+      // 每收到一块数据就重置 idle 计时器，处理"完全无 data 事件"场景
       resetIdleTimer();
       uploaded += chunk.length;
       const percent = fileSize > 0 ? Math.floor((uploaded / fileSize) * 100) : 0;
@@ -341,6 +351,29 @@ class HybridUploader {
         try { onProgress({ phase: 'put', uploaded, total: fileSize, percent }); } catch (err) { /* 忽略进度回调异常 */ }
       }
     });
+
+    // 🆕 stall detector：独立定时器按 30s 节拍检查实际吞吐量
+    // 首次触发给 STALL_INTERVAL_MS × 2 的宽限（第一个 30s 窗口允许 0 字节，
+    // 防止 TLS 握手 + 服务端建立 part session 的冷启动被误杀）
+    let lastCheckBytes = 0;
+    let isFirstCheck = true;
+    stallTimer = setInterval(() => {
+      const delta = uploaded - lastCheckBytes;
+      if (isFirstCheck) {
+        // 给 fetch 首次发送数据一个宽限期
+        isFirstCheck = false;
+        lastCheckBytes = uploaded;
+        console.log(`[Hybrid] PUT stall 检测：首个窗口 ${(delta / 1024).toFixed(1)} KB（宽限，不触发 abort）`);
+        return;
+      }
+      if (delta < STALL_MIN_BYTES) {
+        abortReason = `PUT stall：最近 ${STALL_INTERVAL_MS / 1000}s 仅传输 ${(delta / 1024).toFixed(1)} KB（< ${STALL_MIN_BYTES / 1024 / 1024} MB），判定为网络阻塞`;
+        console.error(`[Hybrid] ${abortReason}，abort 连接`);
+        abortCtrl.abort();
+        return;
+      }
+      lastCheckBytes = uploaded;
+    }, STALL_INTERVAL_MS);
 
     // 开启 idle 计时（在 fetch 开始前就启动，防止连接握手阶段就卡住）
     resetIdleTimer();
@@ -365,6 +398,7 @@ class HybridUploader {
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
       if (totalTimer) clearTimeout(totalTimer);
+      if (stallTimer) clearInterval(stallTimer);
       // 确保文件流被关闭，避免文件描述符泄漏
       if (!stream.destroyed) stream.destroy();
     }
