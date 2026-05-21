@@ -984,9 +984,10 @@ const detectConnectionModeFromUrl = (url, previousMode = null) => {
 const fetchConnectionMode = async () => {
   try {
     debugLog('手动获取连接模式信息 (响应头检测)')
-    const response = await fetch(props.hlsUrl, { 
-      method: 'HEAD',  // 只获取头信息，不下载内容
-      cache: 'no-cache'
+    const response = await fetch(buildRecoverableHlsUrl(props.hlsUrl), {
+      // 代理链路对HEAD兼容性不稳定，使用GET读取轻量级m3u8清单来避免浏览器控制台404噪音
+      method: 'GET',
+      cache: 'no-store'
     })
     
     const routeVia = response.headers.get('x-route-via')
