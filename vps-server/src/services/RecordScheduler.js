@@ -26,9 +26,13 @@ class RecordScheduler {
     this.isRunning = false;
     this.healthCheckTimer = null;
     this.healthCheckIntervalMs = 60000;
+    this.recordingOutputStaleMs = parseInt(process.env.RECORDING_OUTPUT_STALE_MS, 10) > 0
+      ? parseInt(process.env.RECORDING_OUTPUT_STALE_MS, 10)
+      : 120000;
     
     logger.info('📼 RecordScheduler initialized', {
-      workersApiUrl: this.workersApiUrl
+      workersApiUrl: this.workersApiUrl,
+      recordingOutputStaleMs: this.recordingOutputStaleMs
     });
   }
   
@@ -209,9 +213,19 @@ class RecordScheduler {
 
       const currentStatus = recordingStatusMap.get(channelId);
       const isHealthyRecording = currentStatus?.isActive && currentStatus?.isRecording;
+      let recoveryReason = 'recording_status_inactive';
+      let outputHealth = null;
 
       if (isHealthyRecording) {
-        continue;
+        outputHealth = this.streamManager.getRecordingOutputHealth(channelId, {
+          maxStaleMs: this.recordingOutputStaleMs
+        });
+
+        if (outputHealth.healthy) {
+          continue;
+        }
+
+        recoveryReason = outputHealth.reason;
       }
 
       if (this.recoveryLocks.has(channelId)) {
@@ -223,9 +237,11 @@ class RecordScheduler {
       try {
         logger.warn('Detected interrupted recording, attempting recovery', {
           channelId,
+          reason: recoveryReason,
           hasRecordingMarker: !!currentStatus,
           isActive: currentStatus?.isActive || false,
-          isRecording: currentStatus?.isRecording || false
+          isRecording: currentStatus?.isRecording || false,
+          outputHealth
         });
 
         await this.streamManager.disableRecording(channelId);

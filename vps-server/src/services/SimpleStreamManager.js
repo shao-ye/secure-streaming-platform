@@ -627,6 +627,10 @@ class SimpleStreamManager {
     ffmpegProcess.on('exit', (code, signal) => {
       logger.info('FFmpeg process exited', { channelId, code, signal });
       this.activeStreams.delete(channelId);
+      this.channelHeartbeats.delete(channelId);
+      this.cleanupChannelHLS(channelId).catch((error) => {
+        logger.warn('Failed to cleanup HLS after FFmpeg exit', { channelId, error: error.message });
+      });
     });
 
     // 监听stderr输出
@@ -1302,7 +1306,7 @@ class SimpleStreamManager {
 
   /**
    * 处理录制进程异常退出后的文件收尾
-   * 保留录制标记给调度器做自动恢复，同时尽量把当前录制文件改成可识别的正式文件名
+   * 清理录制状态并尽量把当前录制文件改成可识别的正式文件名
    * @param {string} channelId - 频道ID
    * @param {Object} recordConfig - 录制配置
    * @param {string} recordingPath - 当前录制路径
@@ -1528,10 +1532,14 @@ class SimpleStreamManager {
     ffmpegProcess.on('exit', (code, signal) => {
       logger.info('FFmpeg process exited', { channelId, code, signal });
       this.activeStreams.delete(channelId);
+      this.channelHeartbeats.delete(channelId);
+      this.recordingChannels.delete(channelId);
+      this.recordingConfigs.delete(channelId);
 
       if (recordConfig) {
         setImmediate(() => {
           this.handleUnexpectedRecordingExit(channelId, recordConfig, recordingPath, code, signal)
+            .then(() => this.cleanupChannelHLS(channelId))
             .catch((error) => {
               logger.error('Unexpected recording exit cleanup failed', {
                 channelId,
@@ -1958,6 +1966,194 @@ class SimpleStreamManager {
         error: error.message,
         stack: error.stack
       });
+    }
+  }
+
+  /**
+   * 获取录制输出健康状态
+   *
+   * 核心判断：
+   * 1. 进程和录制标记存在，只代表 FFmpeg 没退出
+   * 2. 若 HLS 播放列表和当前录制临时文件长期不更新，说明 FFmpeg 可能假活
+   * 3. 返回详细检查结果，供 RecordScheduler 决定是否重启录制
+   *
+   * @param {string} channelId - 频道ID
+   * @param {Object} options - 检查选项
+   * @param {number} options.maxStaleMs - 允许输出文件不更新的最大时长
+   * @returns {Object} 输出健康状态
+   */
+  getRecordingOutputHealth(channelId, options = {}) {
+    const maxStaleMs = parseInt(options.maxStaleMs, 10) > 0
+      ? parseInt(options.maxStaleMs, 10)
+      : 120000;
+    const now = Date.now();
+    const streamInfo = this.activeStreams.get(channelId);
+
+    if (!streamInfo) {
+      return {
+        healthy: false,
+        reason: 'no_active_stream',
+        maxStaleMs,
+        checks: []
+      };
+    }
+
+    if (!streamInfo.isRecording) {
+      return {
+        healthy: false,
+        reason: 'stream_not_recording',
+        maxStaleMs,
+        checks: []
+      };
+    }
+
+    const checks = [];
+    const hlsPlaylistPath = path.join(this.hlsOutputDir, channelId, 'playlist.m3u8');
+    checks.push(this.getFileFreshness(hlsPlaylistPath, now, maxStaleMs, 'hls_playlist'));
+
+    const recordingFreshness = this.getRecordingFileFreshness(streamInfo.recordingPath, now, maxStaleMs);
+    if (recordingFreshness) {
+      checks.push(recordingFreshness);
+    }
+
+    const existingChecks = checks.filter(check => check.exists);
+    const healthy = existingChecks.length > 0 && existingChecks.some(check => check.fresh);
+
+    return {
+      healthy,
+      reason: healthy ? 'output_fresh' : 'recording_output_stale',
+      maxStaleMs,
+      checks
+    };
+  }
+
+  /**
+   * 获取单个文件的新鲜度
+   *
+   * @param {string} filePath - 文件路径
+   * @param {number} now - 当前时间戳
+   * @param {number} maxStaleMs - 最大允许陈旧时间
+   * @param {string} type - 检查类型
+   * @returns {Object} 文件新鲜度结果
+   */
+  getFileFreshness(filePath, now, maxStaleMs, type) {
+    try {
+      if (!filePath || !fs.existsSync(filePath)) {
+        return {
+          type,
+          path: filePath || null,
+          exists: false,
+          fresh: false,
+          ageMs: null,
+          size: null,
+          mtime: null
+        };
+      }
+
+      const stat = fs.statSync(filePath);
+      const ageMs = now - stat.mtimeMs;
+
+      return {
+        type,
+        path: filePath,
+        exists: true,
+        fresh: ageMs <= maxStaleMs,
+        ageMs: Math.max(0, Math.round(ageMs)),
+        size: stat.size,
+        mtime: stat.mtime.toISOString()
+      };
+    } catch (error) {
+      return {
+        type,
+        path: filePath || null,
+        exists: false,
+        fresh: false,
+        ageMs: null,
+        size: null,
+        mtime: null,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * 获取当前录制文件的新鲜度
+   *
+   * 分段录制路径包含 %03d 模板，需要扫描同目录下匹配模板的最新临时文件；
+   * 单文件录制则直接检查 recordingPath。
+   *
+   * @param {string} recordingPath - 录制路径或分段模板路径
+   * @param {number} now - 当前时间戳
+   * @param {number} maxStaleMs - 最大允许陈旧时间
+   * @returns {Object|null} 录制文件新鲜度结果
+   */
+  getRecordingFileFreshness(recordingPath, now, maxStaleMs) {
+    if (!recordingPath) {
+      return null;
+    }
+
+    if (!recordingPath.includes('%')) {
+      return this.getFileFreshness(recordingPath, now, maxStaleMs, 'recording_file');
+    }
+
+    try {
+      const recordDir = path.dirname(recordingPath);
+      const templateName = path.basename(recordingPath);
+      const percentIndex = templateName.indexOf('%');
+      const prefix = templateName.slice(0, percentIndex);
+      const suffix = templateName.slice(percentIndex).replace(/^%0?\d*d/, '');
+
+      if (!fs.existsSync(recordDir)) {
+        return {
+          type: 'recording_segment',
+          path: recordDir,
+          exists: false,
+          fresh: false,
+          ageMs: null,
+          size: null,
+          mtime: null
+        };
+      }
+
+      const matchedFiles = fs.readdirSync(recordDir)
+        .filter(file => file.startsWith(prefix) && file.endsWith(suffix))
+        .map(file => path.join(recordDir, file))
+        .filter(filePath => {
+          try {
+            return fs.statSync(filePath).isFile();
+          } catch {
+            return false;
+          }
+        });
+
+      if (matchedFiles.length === 0) {
+        return {
+          type: 'recording_segment',
+          path: recordingPath,
+          exists: false,
+          fresh: false,
+          ageMs: null,
+          size: null,
+          mtime: null
+        };
+      }
+
+      const newestFile = matchedFiles
+        .map(filePath => ({ filePath, stat: fs.statSync(filePath) }))
+        .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)[0];
+
+      return this.getFileFreshness(newestFile.filePath, now, maxStaleMs, 'recording_segment');
+    } catch (error) {
+      return {
+        type: 'recording_segment',
+        path: recordingPath,
+        exists: false,
+        fresh: false,
+        ageMs: null,
+        size: null,
+        mtime: null,
+        error: error.message
+      };
     }
   }
 
