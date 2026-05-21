@@ -51,6 +51,10 @@
           @loadstart="handleLoadStart"
           @loadeddata="handleLoadedData"
           @canplay="handleCanPlay"
+          @playing="handlePlaying"
+          @timeupdate="handleTimeUpdate"
+          @waiting="handleWaiting"
+          @stalled="handleStalled"
           @ended="handleEnded"
           @error="handleError"
           @click="handleVideoClick"
@@ -260,12 +264,23 @@ const loadingMessage = ref('正在连接视频流...')
 const loadingSubMessage = ref('准备播放器...')
 const loadingTime = ref(0)
 const loadingTimerRef = ref(null)
+const connectionMode = ref('')
 
 // 双维度路由状态
 const frontendPath = ref('')
 const backendPath = ref('')
 const vpsProxyName = ref('')
 const responseTime = ref('')
+let playbackMonitorTimer = null
+let lastObservedVideoTime = 0
+let lastPlaybackProgressAt = Date.now()
+let lastHlsActivityAt = Date.now()
+let autoRecoveryInProgress = false
+let lastAutoRecoveryAt = 0
+const PLAYBACK_MONITOR_INTERVAL_MS = 5000
+const PLAYBACK_STALE_THRESHOLD_MS = 25000
+const HLS_ACTIVITY_STALE_THRESHOLD_MS = 35000
+const AUTO_RECOVERY_COOLDOWN_MS = 30000
 
 // 缩放相关状态
 const scale = ref(1)
@@ -349,7 +364,9 @@ const videoTransformStyle = computed(() => {
 const initHls = () => {
   if (!videoRef.value || !props.hlsUrl) return
 
-  debugLog('初始化HLS播放器:', props.hlsUrl)
+  const sourceUrl = streamsStore.currentStream?.hlsUrl || props.hlsUrl
+
+  debugLog('初始化HLS播放器:', sourceUrl)
 
   // 清理现有的HLS实例
   destroyHls()
@@ -392,17 +409,19 @@ const initHls = () => {
       requestMediaKeySystemAccessFunc: undefined,
     })
 
-    hls.value.loadSource(props.hlsUrl)
+    hls.value.loadSource(buildRecoverableHlsUrl(sourceUrl))
     hls.value.attachMedia(videoRef.value)
 
     // 监听HLS事件
     setupHlsEventListeners()
+    startPlaybackMonitor()
 
   } else if (videoRef.value.canPlayType('application/vnd.apple.mpegurl')) {
     // 原生HLS支持 (Safari)
     debugLog('使用原生HLS支持')
-    videoRef.value.src = props.hlsUrl
+    videoRef.value.src = buildRecoverableHlsUrl(sourceUrl)
     status.value = '就绪'
+    startPlaybackMonitor()
     emit('ready')
   } else {
     const errorMsg = '您的浏览器不支持HLS视频播放'
@@ -437,6 +456,7 @@ const setupHlsEventListeners = () => {
   // 清单加载完成 - 检测连接模式
   hls.value.on(Hls.Events.MANIFEST_LOADED, (event, data) => {
     debugLog('HLS清单加载完成，检测连接模式', data)
+    markHlsActivity()
     loadingMessage.value = '正在解析视频流...'
     loadingSubMessage.value = '加载播放列表'
     
@@ -478,6 +498,12 @@ const setupHlsEventListeners = () => {
     }
   })
 
+  // 直播清单刷新完成
+  hls.value.on(Hls.Events.LEVEL_LOADED, () => {
+    debugLog('HLS直播清单刷新完成')
+    markHlsActivity()
+  })
+
   // 媒体附加完成
   hls.value.on(Hls.Events.MEDIA_ATTACHED, () => {
     debugLog('媒体附加完成')
@@ -486,6 +512,7 @@ const setupHlsEventListeners = () => {
   // 片段加载开始
   hls.value.on(Hls.Events.FRAG_LOADING, () => {
     debugLog('片段加载中...')
+    markHlsActivity()
     if (loading.value) {
       loadingMessage.value = '正在加载视频数据...'
       loadingSubMessage.value = '下载视频分片'
@@ -495,6 +522,7 @@ const setupHlsEventListeners = () => {
   // 片段加载完成
   hls.value.on(Hls.Events.FRAG_LOADED, () => {
     debugLog('片段加载完成')
+    markHlsActivity()
   })
 
   // 错误处理
@@ -510,6 +538,7 @@ const setupHlsEventListeners = () => {
 
   hls.value.on(Hls.Events.BUFFER_APPENDED, () => {
     debugLog('缓冲区追加完成')
+    markHlsActivity()
   })
 }
 
@@ -590,21 +619,21 @@ const handleFatalError = (data) => {
 }
 
 // 🔥 新增：智能视频恢复函数
-const handleVideoRecovery = async () => {
-  console.log('🔄 开始智能视频恢复流程...')
+const handleVideoRecovery = async (reason = 'manual', options = {}) => {
+  console.log('🔄 开始智能视频恢复流程...', { reason })
   
   const currentStream = streamsStore.currentStream
   
   if (!currentStream) {
     console.error('❌ 无当前流信息，无法恢复')
     error.value = '无法恢复视频，请手动刷新'
-    return
+    throw new Error('无当前流信息，无法恢复')
   }
   
   try {
     const streamId = currentStream.channelId
     
-    console.log('🔄 重新请求视频流...', streamId)
+    console.log('🔄 重新请求视频流...', { streamId, reason })
     
     // 显示恢复中状态
     status.value = '恢复中'
@@ -632,9 +661,11 @@ const handleVideoRecovery = async () => {
       initHls()
     }
     
-    console.log('✅ 视频自动恢复成功')
+    console.log('✅ 视频自动恢复成功', { reason })
     
-    ElMessage.success('视频已自动恢复')
+    if (!options.silent) {
+      ElMessage.success('视频已自动恢复')
+    }
     
   } catch (error) {
     console.error('❌ 视频自动恢复失败:', error)
@@ -642,7 +673,139 @@ const handleVideoRecovery = async () => {
     error.value = '视频加载失败，请点击重新加载'
     status.value = '错误'
     
-    ElMessage.error('视频恢复失败，请手动刷新')
+    if (!options.silent) {
+      ElMessage.error('视频恢复失败，请手动刷新')
+    }
+    throw error
+  }
+}
+
+// 构造可恢复的HLS地址
+const buildRecoverableHlsUrl = (url) => {
+  if (!url) return url
+  try {
+    const parsedUrl = new URL(url, window.location.href)
+    parsedUrl.searchParams.set('_recover', Date.now().toString())
+    return parsedUrl.toString()
+  } catch (error) {
+    const separator = url.includes('?') ? '&' : '?'
+    return `${url}${separator}_recover=${Date.now()}`
+  }
+}
+
+// 标记HLS活动时间
+const markHlsActivity = () => {
+  lastHlsActivityAt = Date.now()
+}
+
+// 标记播放进度更新时间
+const markPlaybackProgress = () => {
+  const video = videoRef.value
+  if (!video) return
+  lastObservedVideoTime = video.currentTime || 0
+  lastPlaybackProgressAt = Date.now()
+}
+
+// 启动播放健康监控
+const startPlaybackMonitor = () => {
+  stopPlaybackMonitor()
+  markHlsActivity()
+  markPlaybackProgress()
+  playbackMonitorTimer = setInterval(checkPlaybackHealth, PLAYBACK_MONITOR_INTERVAL_MS)
+}
+
+// 停止播放健康监控
+const stopPlaybackMonitor = () => {
+  if (playbackMonitorTimer) {
+    clearInterval(playbackMonitorTimer)
+    playbackMonitorTimer = null
+  }
+}
+
+// 检查播放是否卡住
+const checkPlaybackHealth = () => {
+  const video = videoRef.value
+  if (!video || !props.hlsUrl || document.hidden || props.isSwitching || autoRecoveryInProgress) {
+    return
+  }
+
+  const now = Date.now()
+
+  if (video.ended) {
+    triggerAutoVideoRecovery('live_stream_ended', {
+      playbackStaleMs: now - lastPlaybackProgressAt,
+      hlsActivityStaleMs: now - lastHlsActivityAt,
+      readyState: video.readyState,
+      currentTime: video.currentTime || 0
+    })
+    return
+  }
+
+  if (video.paused) {
+    markPlaybackProgress()
+    return
+  }
+
+  const currentTime = video.currentTime || 0
+  const playbackAdvanced = Math.abs(currentTime - lastObservedVideoTime) > 0.25
+  const playbackStaleMs = now - lastPlaybackProgressAt
+  const hlsActivityStaleMs = now - lastHlsActivityAt
+  const monitorableStatus = ['播放中', '加载中', '已加载', '就绪'].includes(status.value)
+  const hlsStale = monitorableStatus && hlsActivityStaleMs >= HLS_ACTIVITY_STALE_THRESHOLD_MS
+
+  if (hlsStale) {
+    triggerAutoVideoRecovery('hls_activity_stale', {
+      playbackStaleMs,
+      hlsActivityStaleMs,
+      readyState: video.readyState,
+      currentTime
+    })
+    return
+  }
+
+  if (playbackAdvanced) {
+    markPlaybackProgress()
+    return
+  }
+
+  const playbackStale = monitorableStatus && playbackStaleMs >= PLAYBACK_STALE_THRESHOLD_MS
+  const bufferStalled = video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && playbackStaleMs >= 15000
+
+  if (playbackStale || bufferStalled) {
+    triggerAutoVideoRecovery('playback_stale', {
+      playbackStaleMs,
+      hlsActivityStaleMs,
+      readyState: video.readyState,
+      currentTime
+    })
+  }
+}
+
+// 触发自动恢复
+const triggerAutoVideoRecovery = async (reason, metrics = {}) => {
+  const now = Date.now()
+  if (autoRecoveryInProgress || now - lastAutoRecoveryAt < AUTO_RECOVERY_COOLDOWN_MS) {
+    return
+  }
+
+  autoRecoveryInProgress = true
+  lastAutoRecoveryAt = now
+  status.value = '恢复中'
+  loadingMessage.value = '检测到画面卡住，正在自动恢复...'
+  loadingSubMessage.value = '重新加载播放列表'
+  warnLog('检测到播放停滞，触发自动恢复:', { reason, metrics })
+
+  try {
+    await handleVideoRecovery(reason, { silent: true })
+    markHlsActivity()
+    markPlaybackProgress()
+    ElMessage.info('检测到画面卡住，已自动恢复')
+  } catch (error) {
+    errorLog('自动恢复失败:', error)
+    error.value = '视频自动恢复失败，请点击重新加载'
+    status.value = '错误'
+  } finally {
+    autoRecoveryInProgress = false
   }
 }
 
@@ -669,11 +832,14 @@ const retryPlayback = () => {
 
 const destroyHls = () => {
   debugLog('开始销毁HLS实例')
+  stopPlaybackMonitor()
   
   if (hls.value) {
     try {
       // 🔥 关键修复：移除所有事件监听器
       hls.value.off(Hls.Events.MANIFEST_PARSED)
+      hls.value.off(Hls.Events.MANIFEST_LOADED)
+      hls.value.off(Hls.Events.LEVEL_LOADED)
       hls.value.off(Hls.Events.MEDIA_ATTACHED)
       hls.value.off(Hls.Events.FRAG_LOADING)
       hls.value.off(Hls.Events.FRAG_LOADED)
@@ -877,8 +1043,40 @@ const handleLoadedData = () => {
 const handleCanPlay = () => {
   loading.value = false
   status.value = '播放中'
+  markPlaybackProgress()
   debugLog('视频可以播放')
   emit('playing')
+}
+
+// 处理播放开始事件
+const handlePlaying = () => {
+  loading.value = false
+  status.value = '播放中'
+  markPlaybackProgress()
+  markHlsActivity()
+  debugLog('视频正在播放')
+}
+
+// 处理播放时间更新事件
+const handleTimeUpdate = () => {
+  markPlaybackProgress()
+}
+
+// 处理视频等待缓冲事件
+const handleWaiting = () => {
+  debugLog('视频等待缓冲')
+  if (!autoRecoveryInProgress) {
+    status.value = '加载中'
+  }
+}
+
+// 处理浏览器检测到播放停滞事件
+const handleStalled = () => {
+  warnLog('浏览器检测到视频播放停滞')
+  triggerAutoVideoRecovery('video_stalled_event', {
+    readyState: videoRef.value?.readyState || 0,
+    currentTime: videoRef.value?.currentTime || 0
+  })
 }
 
 const handleError = (event) => {
