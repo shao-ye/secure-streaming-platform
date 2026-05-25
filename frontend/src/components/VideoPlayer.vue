@@ -281,10 +281,13 @@ let visualSampleCanvas = null
 let visualBlackFrameStreak = 0
 let lastVisualBlackRecoveryAt = 0
 let lastViewportResetAt = 0
+let lastRecoverableChannelId = ''
+let autoRecoveryRetryTimer = null
 const PLAYBACK_MONITOR_INTERVAL_MS = 5000
 const PLAYBACK_STALE_THRESHOLD_MS = 25000
 const HLS_ACTIVITY_STALE_THRESHOLD_MS = 35000
 const AUTO_RECOVERY_COOLDOWN_MS = 30000
+const AUTO_RECOVERY_RETRY_DELAY_MS = 10000
 const VISUAL_BLACK_FRAME_STREAK_THRESHOLD = 4
 const VISUAL_BLACK_FRAME_BRIGHTNESS_THRESHOLD = 8
 const VISUAL_BLACK_FRAME_DARK_RATIO_THRESHOLD = 0.995
@@ -375,6 +378,9 @@ const initHls = () => {
   if (!videoRef.value || !props.hlsUrl) return
 
   const sourceUrl = streamsStore.currentStream?.hlsUrl || props.hlsUrl
+  if (streamsStore.currentStream?.channelId) {
+    lastRecoverableChannelId = streamsStore.currentStream.channelId
+  }
 
   debugLog('初始化HLS播放器:', sourceUrl)
 
@@ -448,6 +454,8 @@ const setupHlsEventListeners = () => {
   // 清单解析完成
   hls.value.on(Hls.Events.MANIFEST_PARSED, () => {
     debugLog('HLS清单解析完成')
+    clearAutoRecoveryRetry()
+    retryCount.value = 0
     status.value = '就绪'
     loadingMessage.value = '加载完成'
     loadingSubMessage.value = '准备播放...'
@@ -466,6 +474,8 @@ const setupHlsEventListeners = () => {
   // 清单加载完成 - 检测连接模式
   hls.value.on(Hls.Events.MANIFEST_LOADED, (event, data) => {
     debugLog('HLS清单加载完成，检测连接模式', data)
+    clearAutoRecoveryRetry()
+    retryCount.value = 0
     markHlsActivity()
     loadingMessage.value = '正在解析视频流...'
     loadingSubMessage.value = '加载播放列表'
@@ -582,7 +592,10 @@ const handleNetworkError = (data) => {
   if (is404Error) {
     // 404错误：HLS文件不存在，可能是VPS清理了转码进程
     errorLog('🚨 检测到HLS文件404错误，尝试智能恢复...')
-    handleVideoRecovery()
+    triggerAutoVideoRecovery('hls_404_error', {
+      details: data.details,
+      responseCode: data.response?.code
+    })
   } else {
     // 其他网络错误，尝试重试
     const errorMsg = '网络错误，无法加载视频流'
@@ -634,14 +647,15 @@ const handleVideoRecovery = async (reason = 'manual', options = {}) => {
   
   const currentStream = streamsStore.currentStream
   
-  if (!currentStream) {
+  const streamId = currentStream?.channelId || lastRecoverableChannelId
+  if (!streamId) {
     console.error('❌ 无当前流信息，无法恢复')
     error.value = '无法恢复视频，请手动刷新'
     throw new Error('无当前流信息，无法恢复')
   }
   
   try {
-    const streamId = currentStream.channelId
+    lastRecoverableChannelId = streamId
     
     console.log('🔄 重新请求视频流...', { streamId, reason })
     
@@ -660,6 +674,7 @@ const handleVideoRecovery = async (reason = 'manual', options = {}) => {
     
     // 🔥 关键修复：使用forceReset参数重新播放
     await streamsStore.playStream(streamId, true)
+    retryCount.value = 0
     
     // 🔥 关键修复：等待Vue响应式更新DOM
     await nextTick()
@@ -714,6 +729,37 @@ const markPlaybackProgress = () => {
   if (!video) return
   lastObservedVideoTime = video.currentTime || 0
   lastPlaybackProgressAt = Date.now()
+}
+
+// 判断播放器是否已经进入无可播放数据的终止态
+const isTerminalPlaybackError = (video) => {
+  if (status.value !== '错误') return false
+  if (!video) return true
+
+  return video.readyState === HTMLMediaElement.HAVE_NOTHING ||
+    video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE ||
+    (!hls.value && !video.currentSrc)
+}
+
+// 安排错误态兜底恢复，避免一次瞬时网络失败后永久停在错误页
+const scheduleAutoRecoveryRetry = (reason, metrics = {}) => {
+  if (autoRecoveryRetryTimer) {
+    return
+  }
+
+  warnLog('播放器进入错误态，安排兜底自动恢复:', { reason, metrics })
+  autoRecoveryRetryTimer = setTimeout(() => {
+    autoRecoveryRetryTimer = null
+    triggerAutoVideoRecovery(reason, metrics, { bypassCooldown: true })
+  }, AUTO_RECOVERY_RETRY_DELAY_MS)
+}
+
+// 清理待执行的兜底恢复，避免播放器已恢复后再次误触发
+const clearAutoRecoveryRetry = () => {
+  if (autoRecoveryRetryTimer) {
+    clearTimeout(autoRecoveryRetryTimer)
+    autoRecoveryRetryTimer = null
+  }
 }
 
 // 检测视频元素是否被缩放/拖拽到视口外
@@ -804,16 +850,33 @@ const stopPlaybackMonitor = () => {
     clearInterval(playbackMonitorTimer)
     playbackMonitorTimer = null
   }
+  clearAutoRecoveryRetry()
 }
 
 // 检查播放是否卡住
 const checkPlaybackHealth = () => {
   const video = videoRef.value
-  if (!video || !props.hlsUrl || document.hidden || props.isSwitching || autoRecoveryInProgress) {
+  if (!video || document.hidden || props.isSwitching || autoRecoveryInProgress) {
+    return
+  }
+
+  if (!props.hlsUrl && !lastRecoverableChannelId) {
     return
   }
 
   const now = Date.now()
+
+  if (isTerminalPlaybackError(video)) {
+    scheduleAutoRecoveryRetry('terminal_error_state', {
+      playbackStaleMs: now - lastPlaybackProgressAt,
+      hlsActivityStaleMs: now - lastHlsActivityAt,
+      readyState: video.readyState,
+      networkState: video.networkState,
+      currentTime: video.currentTime || 0,
+      retryCount: retryCount.value
+    })
+    return
+  }
 
   if (video.ended) {
     triggerAutoVideoRecovery('live_stream_ended', {
@@ -893,9 +956,9 @@ const checkPlaybackHealth = () => {
 }
 
 // 触发自动恢复
-const triggerAutoVideoRecovery = async (reason, metrics = {}) => {
+const triggerAutoVideoRecovery = async (reason, metrics = {}, options = {}) => {
   const now = Date.now()
-  if (autoRecoveryInProgress || now - lastAutoRecoveryAt < AUTO_RECOVERY_COOLDOWN_MS) {
+  if (autoRecoveryInProgress || (!options.bypassCooldown && now - lastAutoRecoveryAt < AUTO_RECOVERY_COOLDOWN_MS)) {
     return
   }
 
@@ -908,6 +971,7 @@ const triggerAutoVideoRecovery = async (reason, metrics = {}) => {
 
   try {
     await handleVideoRecovery(reason, { silent: true })
+    retryCount.value = 0
     markHlsActivity()
     markPlaybackProgress()
     ElMessage.info('检测到画面卡住，已自动恢复')
@@ -915,6 +979,10 @@ const triggerAutoVideoRecovery = async (reason, metrics = {}) => {
     errorLog('自动恢复失败:', error)
     error.value = '视频自动恢复失败，请点击重新加载'
     status.value = '错误'
+    scheduleAutoRecoveryRetry('auto_recovery_failed_retry', {
+      reason,
+      retryCount: retryCount.value
+    })
   } finally {
     autoRecoveryInProgress = false
   }
