@@ -277,10 +277,20 @@ let lastPlaybackProgressAt = Date.now()
 let lastHlsActivityAt = Date.now()
 let autoRecoveryInProgress = false
 let lastAutoRecoveryAt = 0
+let visualSampleCanvas = null
+let visualBlackFrameStreak = 0
+let lastVisualBlackRecoveryAt = 0
+let lastViewportResetAt = 0
 const PLAYBACK_MONITOR_INTERVAL_MS = 5000
 const PLAYBACK_STALE_THRESHOLD_MS = 25000
 const HLS_ACTIVITY_STALE_THRESHOLD_MS = 35000
 const AUTO_RECOVERY_COOLDOWN_MS = 30000
+const VISUAL_BLACK_FRAME_STREAK_THRESHOLD = 4
+const VISUAL_BLACK_FRAME_BRIGHTNESS_THRESHOLD = 8
+const VISUAL_BLACK_FRAME_DARK_RATIO_THRESHOLD = 0.995
+const VISUAL_BLACK_RECOVERY_COOLDOWN_MS = 120000
+const VIEWPORT_RESET_COOLDOWN_MS = 10000
+const MIN_VISIBLE_VIDEO_RATIO = 0.2
 
 // 缩放相关状态
 const scale = ref(1)
@@ -706,6 +716,80 @@ const markPlaybackProgress = () => {
   lastPlaybackProgressAt = Date.now()
 }
 
+// 检测视频元素是否被缩放/拖拽到视口外
+const isVideoMostlyOutOfViewport = () => {
+  const video = videoRef.value
+  const container = containerRef.value
+  if (!video || !container) return false
+  if (!isCustomFullscreen.value && scale.value <= 1 && videoRotation.value === 0) return false
+
+  const videoRect = video.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  const visibleWidth = Math.max(0, Math.min(videoRect.right, containerRect.right) - Math.max(videoRect.left, containerRect.left))
+  const visibleHeight = Math.max(0, Math.min(videoRect.bottom, containerRect.bottom) - Math.max(videoRect.top, containerRect.top))
+  const videoArea = Math.max(1, videoRect.width * videoRect.height)
+  const visibleRatio = (visibleWidth * visibleHeight) / videoArea
+
+  return visibleRatio < MIN_VISIBLE_VIDEO_RATIO
+}
+
+// 自动复位不可见的全屏/缩放画面
+const resetInvisibleVideoViewport = (now) => {
+  if (!isVideoMostlyOutOfViewport() || now - lastViewportResetAt < VIEWPORT_RESET_COOLDOWN_MS) {
+    return false
+  }
+
+  lastViewportResetAt = now
+  resetZoom()
+  videoRotation.value = 0
+  showControls.value = true
+  warnLog('检测到视频画面被移出视口，已自动复位')
+  ElMessage.info('检测到画面偏移，已自动复位')
+  return true
+}
+
+// 采样当前视频帧，识别播放器仍在走时但画面近似纯黑的异常
+const sampleVisualFrame = (video) => {
+  if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) {
+    return null
+  }
+
+  try {
+    if (!visualSampleCanvas) {
+      visualSampleCanvas = document.createElement('canvas')
+      visualSampleCanvas.width = 64
+      visualSampleCanvas.height = 36
+    }
+
+    const context = visualSampleCanvas.getContext('2d', { willReadFrequently: true })
+    context.drawImage(video, 0, 0, visualSampleCanvas.width, visualSampleCanvas.height)
+    const frame = context.getImageData(0, 0, visualSampleCanvas.width, visualSampleCanvas.height).data
+    let totalBrightness = 0
+    let darkPixels = 0
+    const pixelCount = frame.length / 4
+
+    for (let index = 0; index < frame.length; index += 4) {
+      const brightness = (frame[index] + frame[index + 1] + frame[index + 2]) / 3
+      totalBrightness += brightness
+      if (brightness <= VISUAL_BLACK_FRAME_BRIGHTNESS_THRESHOLD) {
+        darkPixels++
+      }
+    }
+
+    const avgBrightness = totalBrightness / pixelCount
+    const darkRatio = darkPixels / pixelCount
+
+    return {
+      avgBrightness,
+      darkRatio,
+      isBlackFrame: avgBrightness <= VISUAL_BLACK_FRAME_BRIGHTNESS_THRESHOLD && darkRatio >= VISUAL_BLACK_FRAME_DARK_RATIO_THRESHOLD
+    }
+  } catch (error) {
+    debugLog('视频画面采样失败:', error)
+    return null
+  }
+}
+
 // 启动播放健康监控
 const startPlaybackMonitor = () => {
   stopPlaybackMonitor()
@@ -753,12 +837,39 @@ const checkPlaybackHealth = () => {
   const monitorableStatus = ['播放中', '加载中', '已加载', '就绪'].includes(status.value)
   const hlsStale = monitorableStatus && hlsActivityStaleMs >= HLS_ACTIVITY_STALE_THRESHOLD_MS
 
+  if (monitorableStatus && resetInvisibleVideoViewport(now)) {
+    visualBlackFrameStreak = 0
+    markPlaybackProgress()
+    return
+  }
+
   if (hlsStale) {
     triggerAutoVideoRecovery('hls_activity_stale', {
       playbackStaleMs,
       hlsActivityStaleMs,
       readyState: video.readyState,
       currentTime
+    })
+    return
+  }
+
+  const visualFrame = monitorableStatus ? sampleVisualFrame(video) : null
+  if (visualFrame?.isBlackFrame && currentTime > 5 && now - lastVisualBlackRecoveryAt >= VISUAL_BLACK_RECOVERY_COOLDOWN_MS) {
+    visualBlackFrameStreak++
+  } else if (visualFrame && !visualFrame.isBlackFrame) {
+    visualBlackFrameStreak = 0
+  }
+
+  if (visualBlackFrameStreak >= VISUAL_BLACK_FRAME_STREAK_THRESHOLD) {
+    lastVisualBlackRecoveryAt = now
+    visualBlackFrameStreak = 0
+    triggerAutoVideoRecovery('visual_black_frame', {
+      playbackStaleMs,
+      hlsActivityStaleMs,
+      readyState: video.readyState,
+      currentTime,
+      avgBrightness: visualFrame.avgBrightness,
+      darkRatio: visualFrame.darkRatio
     })
     return
   }
@@ -833,6 +944,7 @@ const retryPlayback = () => {
 const destroyHls = () => {
   debugLog('开始销毁HLS实例')
   stopPlaybackMonitor()
+  visualBlackFrameStreak = 0
   
   if (hls.value) {
     try {
