@@ -8,7 +8,10 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     ChannelConfigDialog: typeof import('./src/components/admin/ChannelConfigDialog.vue')['default']
+    CloudDriveFolderPicker: typeof import('./src/components/admin/CloudDriveFolderPicker.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
+    ElBreadcrumb: typeof import('element-plus/es')['ElBreadcrumb']
+    ElBreadcrumbItem: typeof import('element-plus/es')['ElBreadcrumbItem']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElButtonGroup: typeof import('element-plus/es')['ElButtonGroup']
     ElCard: typeof import('element-plus/es')['ElCard']

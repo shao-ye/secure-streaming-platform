@@ -162,6 +162,72 @@
       </el-col>
     </el-row>
 
+    <!-- 上传 Worker 控制面板（录制视频上传到 139 云盘） -->
+    <el-row :gutter="20" class="upload-worker-panel" style="margin-bottom: 15px;">
+      <el-col :span="24">
+        <el-card shadow="never" style="padding: 10px;">
+          <div class="worker-panel-layout">
+            <!-- 左侧：状态 + 统计 -->
+            <div class="worker-panel-info">
+              <span style="font-weight: 600; margin-right: 12px;">上传队列:</span>
+              <el-tag :type="uploadWorkerRunningTagType" size="small">
+                {{ uploadWorkerRunningLabel }}
+              </el-tag>
+              <span class="worker-metrics" v-if="uploadWorkerStatus">
+                待传 <b>{{ uploadWorkerStatus?.queue?.pending ?? 0 }}</b>
+                · 上传中 <b>{{ uploadWorkerStatus?.queue?.uploading ?? 0 }}</b>
+                · 累计成功 <b style="color: #67c23a;">{{ uploadWorkerStatus?.worker?.stats?.totalSuccess ?? 0 }}</b>
+                · 累计失败 <b style="color: #e6a23c;">{{ uploadWorkerStatus?.worker?.stats?.totalFailed ?? 0 }}</b>
+              </span>
+            </div>
+
+            <!-- 右侧：操作按钮 -->
+            <div class="worker-panel-actions">
+              <el-button
+                v-if="canPauseUploadWorker"
+                size="small"
+                type="warning"
+                @click="pauseUploadWorker"
+                :loading="loading.uploadWorker"
+              >
+                暂停消费
+              </el-button>
+              <el-button
+                v-if="canResumeUploadWorker"
+                size="small"
+                type="success"
+                @click="resumeUploadWorker"
+                :loading="loading.uploadWorker"
+              >
+                恢复消费
+              </el-button>
+              <el-button
+                size="small"
+                :icon="Refresh"
+                @click="fetchUploadQueueStatus"
+                :loading="loading.uploadWorker"
+              >
+                刷新
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 当前任务 + 最近失败（有内容才展示） -->
+          <div class="worker-panel-extra" v-if="uploadWorkerCurrentFile || uploadWorkerLatestFailure">
+            <div v-if="uploadWorkerCurrentFile" class="worker-panel-current">
+              📤 当前：{{ uploadWorkerCurrentFile }}
+              <span v-if="uploadWorkerAttemptText" style="color: #e6a23c; margin-left: 6px;">
+                {{ uploadWorkerAttemptText }}
+              </span>
+            </div>
+            <div v-if="uploadWorkerLatestFailure" class="worker-panel-failure">
+              ❌ 最近失败：{{ uploadWorkerLatestFailure }}
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- 详细信息 -->
     <el-row :gutter="20">
       <!-- 缓存统计 -->
@@ -453,7 +519,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CircleCheck,
@@ -528,7 +594,89 @@ const loading = reactive({
   diagnostics: false,
   logs: false,
   traffic: false,
-  loginLogs: false
+  loginLogs: false,
+  uploadWorker: false
+})
+
+// 录制视频上传 Worker 实时状态（/api/upload/queue-status 返回）
+// 数据结构参见 vps-server/src/routes/upload.js
+const uploadWorkerStatus = ref(null)
+
+/**
+ * Worker 运行标签颜色
+ * - 未启动 / 未知 → info（灰）
+ * - 已暂停 → warning（黄）
+ * - 运行中 → success（绿）
+ */
+const uploadWorkerRunningTagType = computed(() => {
+  const w = uploadWorkerStatus.value?.worker
+  if (!w || !w.running) return 'info'
+  if (w.paused) return 'warning'
+  return 'success'
+})
+
+/**
+ * Worker 运行标签文案
+ * 登录失效暂停时附带原因，方便管理员识别
+ */
+const uploadWorkerRunningLabel = computed(() => {
+  const w = uploadWorkerStatus.value?.worker
+  if (!w) return '未启动'
+  if (!w.running) return '已停止'
+  if (w.paused) {
+    const reason = w.lastAuthMessage || '手动暂停'
+    return `已暂停（${reason}）`
+  }
+  return '运行中'
+})
+
+/**
+ * "暂停消费"按钮是否可用：运行中且未暂停才显示
+ */
+const canPauseUploadWorker = computed(() => {
+  const w = uploadWorkerStatus.value?.worker
+  return !!(w && w.running && !w.paused)
+})
+
+/**
+ * "恢复消费"按钮是否可用：已暂停才显示
+ */
+const canResumeUploadWorker = computed(() => {
+  const w = uploadWorkerStatus.value?.worker
+  return !!(w && w.paused)
+})
+
+/**
+ * 当前正在上传的文件名（路径最后一段，超长截断避免撑破面板）
+ */
+const uploadWorkerCurrentFile = computed(() => {
+  const task = uploadWorkerStatus.value?.worker?.stats?.currentTask
+  if (!task || !task.filePath) return ''
+  const name = task.filePath.split('/').pop() || ''
+  return name.length > 60 ? '…' + name.slice(-60) : name
+})
+
+/**
+ * 当前任务重试次数提示（第 1 次不提示，≥ 2 才提示，减少正常情况干扰）
+ */
+const uploadWorkerAttemptText = computed(() => {
+  const task = uploadWorkerStatus.value?.worker?.stats?.currentTask
+  if (!task || !task.attempt || task.attempt <= 1) return ''
+  return `第 ${task.attempt} 次重试`
+})
+
+/**
+ * 最近一条失败摘要：文件名 + 失败原因 + 时间
+ */
+const uploadWorkerLatestFailure = computed(() => {
+  const arr = uploadWorkerStatus.value?.queue?.recentFailures || []
+  if (!arr.length) return ''
+  const f = arr[0]
+  const name = (f.filePath || '').split('/').pop() || '(未知文件)'
+  const short = name.length > 50 ? '…' + name.slice(-50) : name
+  const when = f.finishedAt ? new Date(f.finishedAt).toLocaleTimeString() : ''
+  const reason = f.reason || f.error || '未知原因'
+  return `${short}（${reason}${when ? ' · ' + when : ''}）`
 })
 
 // 定时器
@@ -774,6 +922,93 @@ const refreshTrafficStats = async () => {
   }
 }
 
+/**
+ * 拉取上传 Worker + 队列状态（/api/upload/queue-status）
+ * 静默失败：网络抖动 / 服务重启时不弹错误框，避免打扰管理员
+ */
+const fetchUploadQueueStatus = async () => {
+  loading.uploadWorker = true
+  try {
+    const resp = await axios.get('/api/upload/queue-status')
+    if (resp.data?.status === 'success') {
+      uploadWorkerStatus.value = resp.data.data
+    }
+  } catch (err) {
+    // 静默忽略，避免 30s 定时轮询刷出大量错误提示
+    debugLog('获取上传队列状态失败（已忽略）', err && err.message)
+  } finally {
+    loading.uploadWorker = false
+  }
+}
+
+/**
+ * 暂停上传 Worker 消费
+ * 确认对话框 → POST /api/upload/worker/pause → 立即刷新状态
+ * 典型场景：上游链路持续失败、需要静默期做变更
+ */
+const pauseUploadWorker = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '确认暂停上传队列消费？\n\n已经在上传中的任务会自然结束；后续 Worker 不再从队列取新任务，直到恢复。',
+      '暂停上传 Worker',
+      {
+        confirmButtonText: '确定暂停',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    loading.uploadWorker = true
+    const resp = await axios.post('/api/upload/worker/pause', {
+      reason: 'admin_ui_pause'
+    })
+    if (resp.data?.status === 'success') {
+      uploadWorkerStatus.value = {
+        ...(uploadWorkerStatus.value || {}),
+        worker: resp.data.data
+      }
+      ElMessage.success('上传 Worker 已暂停')
+      // 立即刷新完整状态，拿最新队列计数
+      await fetchUploadQueueStatus()
+    } else {
+      ElMessage.warning(resp.data?.message || '暂停失败')
+    }
+  } catch (err) {
+    // ElMessageBox 取消会 throw 'cancel'，此时不视为错误
+    if (err !== 'cancel') {
+      errorLog('暂停上传 Worker 失败:', err)
+      ElMessage.error('暂停失败：' + (err.response?.data?.message || err.message))
+    }
+  } finally {
+    loading.uploadWorker = false
+  }
+}
+
+/**
+ * 恢复上传 Worker 消费
+ * 无需二次确认（恢复是无害操作，登录失效场景会自动再次暂停）
+ */
+const resumeUploadWorker = async () => {
+  loading.uploadWorker = true
+  try {
+    const resp = await axios.post('/api/upload/worker/resume')
+    if (resp.data?.status === 'success') {
+      uploadWorkerStatus.value = {
+        ...(uploadWorkerStatus.value || {}),
+        worker: resp.data.data
+      }
+      ElMessage.success('上传 Worker 已恢复')
+      await fetchUploadQueueStatus()
+    } else {
+      ElMessage.warning(resp.data?.message || '恢复失败')
+    }
+  } catch (err) {
+    errorLog('恢复上传 Worker 失败:', err)
+    ElMessage.error('恢复失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    loading.uploadWorker = false
+  }
+}
+
 // 刷新登录日志
 const refreshLoginLogs = async () => {
   loading.loginLogs = true
@@ -819,7 +1054,8 @@ const initData = async () => {
     runDiagnostics(),
     refreshLogs(),
     refreshTrafficStats(),
-    refreshLoginLogs()
+    refreshLoginLogs(),
+    fetchUploadQueueStatus()
   ])
 }
 
@@ -828,6 +1064,8 @@ const startAutoRefresh = () => {
   statusTimer = setInterval(() => {
     refreshSystemStatus()
     refreshCacheStats()
+    // 同节拍刷新上传 Worker 状态，省定时器资源
+    fetchUploadQueueStatus()
   }, 30000) // 30秒刷新一次
 }
 
@@ -904,6 +1142,65 @@ onUnmounted(() => {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* 上传 Worker 控制面板 */
+.upload-worker-panel {
+  margin-bottom: 15px;
+}
+
+.worker-panel-layout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.worker-panel-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.worker-panel-info .worker-metrics {
+  font-size: 12px;
+  color: #606266;
+}
+
+.worker-panel-info .worker-metrics b {
+  font-weight: 600;
+  color: #303133;
+}
+
+.worker-panel-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.worker-panel-extra {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #ebeef5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.worker-panel-current {
+  font-size: 12px;
+  color: #409eff;
+  word-break: break-all;
+}
+
+.worker-panel-failure {
+  font-size: 12px;
+  color: #f56c6c;
+  word-break: break-all;
 }
 
 .card-header {
@@ -1044,6 +1341,22 @@ onUnmounted(() => {
   .button-group span {
     margin-bottom: 8px;
     text-align: center;
+  }
+
+  /* 上传 Worker 面板移动端：上下堆叠，按钮组撑满 */
+  .worker-panel-layout {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .worker-panel-actions {
+    justify-content: stretch;
+  }
+
+  .worker-panel-actions .el-button {
+    flex: 1;
+    margin: 0;
   }
 
   /* 卡片布局移动端优化 - 每行1个 */

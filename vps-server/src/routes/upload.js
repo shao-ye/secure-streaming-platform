@@ -8,6 +8,7 @@ const logger = require('../utils/logger');
  * 路由列表：
  *   POST /api/upload/enqueue        手动入队（测试/运维）
  *   GET  /api/upload/queue-status   查看队列 + Worker 状态
+ *   POST /api/upload/worker/pause   运维手动暂停 Worker 消费（例如上游链路异常、临时止损）
  *   POST /api/upload/worker/resume  登录恢复后手动让 Worker 继续消费
  *
  * 依赖：
@@ -156,6 +157,47 @@ router.get('/queue-status', (req, res) => {
     });
   } catch (error) {
     logger.error('查询上传队列状态失败', { error: error.message });
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+/**
+ * POST /api/upload/worker/pause
+ * 运维手动暂停 Worker 消费（不影响当前正在上传中的单个任务，只是循环取不到新任务）
+ * 幂等：Worker 已暂停时调用也安全
+ *
+ * 请求体（可选）：
+ *   { "reason": "manual_ops" }   // 用于审计日志，不影响业务
+ *
+ * 典型使用场景：
+ *   - 上游 139 链路持续失败，临时止损避免日志风暴 / QPS 消耗
+ *   - 需要静默期做变更（如切换账号、调整 VPS 位置）
+ */
+router.post('/worker/pause', (req, res) => {
+  try {
+    const worker = getWorker(req);
+    if (!worker) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'CloudUploadWorker 未启动',
+        code: 'WORKER_NOT_READY'
+      });
+    }
+    // 审计日志记录调用者信息（若 authMiddleware 注入了请求方身份）
+    const reason = (req.body && typeof req.body.reason === 'string' && req.body.reason.trim())
+      || 'manual_ops';
+    worker.pause(reason);
+    logger.warn('[API] Worker 已手动暂停', {
+      reason,
+      ip: req.ip,
+      forwardedFor: req.headers['x-forwarded-for'] || null
+    });
+    return res.status(200).json({
+      status: 'success',
+      data: worker.getStatus()
+    });
+  } catch (error) {
+    logger.error('暂停上传 Worker 失败', { error: error.message });
     return res.status(500).json({ status: 'error', message: error.message });
   }
 });
