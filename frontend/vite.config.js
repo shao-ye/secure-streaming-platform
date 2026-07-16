@@ -34,7 +34,7 @@ export default defineConfig(({ command, mode }) => {
        */
       VitePWA({
         registerType: 'autoUpdate', // 有新版本时自动更新 Service Worker
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
+        includeAssets: ['favicon.ico', 'apple-touch-icon-v2.png'],
         manifest: {
           name: 'YOYO流媒体平台',
           short_name: 'YOYO',
@@ -46,11 +46,13 @@ export default defineConfig(({ command, mode }) => {
           orientation: 'portrait',
           start_url: '/',
           scope: '/',
+          // 图标文件名带版本号(-v2):更换图标时改文件名可绕过手机端 HTTP 缓存
+          // (Pages 对 png 返回 max-age=14400),并让 Chrome 检测到 manifest 变化触发 WebAPK 更新
           icons: [
-            { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-            { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+            { src: 'pwa-192x192-v2.png', sizes: '192x192', type: 'image/png' },
+            { src: 'pwa-512x512-v2.png', sizes: '512x512', type: 'image/png' },
             // maskable 图标:安卓自适应图标(圆形/圆角方形)裁剪时不丢失内容
-            { src: 'pwa-maskable-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+            { src: 'pwa-maskable-512x512-v2.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
           ],
         },
         workbox: {
