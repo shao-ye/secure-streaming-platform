@@ -682,6 +682,70 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
+    // 🆕 内部透传 139 接口：让 139 看到来源 IP 是 Cloudflare edge，以求分到不同 OSS 节点
+    //
+    // 背景：VPS 在美国，139 LB 按源 IP 粘滞到内蒙古节点，跨洲带宽仅 20-30 KB/s。
+    // 通过 Worker 出境调 file/create，可能分到海岸节点（广州/深圳等），再由 VPS 直连 PUT。
+    //
+    // 鉴权：X-Internal-Key 必须等于 VPS_API_KEY（仅 VPS 可调）
+    // 目标：X-Target-Url 必须以 https://group.yun.139.com/ 开头（白名单）
+    // 行为：原样透传 body + 业务 headers（mcloud-sign / authorization / mcloud-skey 等），
+    //       把 139 响应回传给 VPS
+    if (path === '/internal/139-proxy' && method === 'POST') {
+      try {
+        const clientKey = request.headers.get('X-Internal-Key');
+        if (!clientKey || clientKey !== env.VPS_API_KEY) {
+          return new Response(JSON.stringify({ status: 'error', message: 'Unauthorized' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+          });
+        }
+        const targetUrl = request.headers.get('X-Target-Url');
+        if (!targetUrl || !targetUrl.startsWith('https://group.yun.139.com/')) {
+          return new Response(JSON.stringify({ status: 'error', message: 'Invalid X-Target-Url (must start with https://group.yun.139.com/)' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+          });
+        }
+
+        // 透传业务 headers，剥除：内部鉴权头、Cloudflare 自动注入头、Host、长度头
+        const outHeaders = new Headers();
+        for (const [k, v] of request.headers) {
+          const lower = k.toLowerCase();
+          if (lower === 'x-internal-key' || lower === 'x-target-url') continue;
+          if (lower === 'host' || lower.startsWith('cf-')) continue;
+          if (lower === 'x-forwarded-for' || lower === 'x-real-ip' || lower === 'x-forwarded-proto') continue;
+          if (lower === 'content-length') continue; // 由底层重新计算
+          outHeaders.set(k, v);
+        }
+
+        const bodyText = await request.text();
+        const targetResp = await fetch(targetUrl, {
+          method: 'POST',
+          headers: outHeaders,
+          body: bodyText
+        });
+
+        // 流式透传响应 body，保留原始 headers（含 Content-Encoding: gzip）
+        // 关键：不能用 await targetResp.text() 再返回，否则会把 gzip 原始字节当文本返回
+        const respHeaders = new Headers(targetResp.headers);
+        respHeaders.set('X-139-Proxy', '1');
+        Object.entries(corsHeaders).forEach(([key, value]) => respHeaders.set(key, value));
+        return new Response(targetResp.body, {
+          status: targetResp.status,
+          headers: respHeaders
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({
+          status: 'error',
+          message: '139 proxy failed: ' + err.message
+        }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
+        });
+      }
+    }
+
     // 🆕 视频清理配置API路由
     // GET /api/admin/cleanup/config - 获取清理配置
     if (path === '/api/admin/cleanup/config' && method === 'GET') {
