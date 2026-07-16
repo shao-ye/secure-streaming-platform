@@ -53,7 +53,7 @@ module.exports = {
 
       // 高级配置
       node_args: [
-        '--max-old-space-size=256', // 限制老生代内存为256MB
+        '--max-old-space-size=512', // 限制老生代内存为512MB（机器2.2G内存，500M时PM2优雅重启兜底）
         '--optimize-for-size' // 优化内存使用
       ],
 
@@ -66,8 +66,8 @@ module.exports = {
       // 自动保存进程状态
       autorestart: true,
 
-      // cron重启（可选，每天凌晨3点重启）
-      // cron_restart: '0 3 * * *'
+      // cron重启：服务器时区(美国中部)14:00 ≈ 北京时间凌晨3-4点，每日重启缓解内存缓慢增长
+      cron_restart: '0 14 * * *'
     }
   ],
 
