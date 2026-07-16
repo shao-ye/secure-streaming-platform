@@ -174,4 +174,4 @@ pm2 restart ecosystem.config.js
 
 如有问题，请查看 [`docs/`](./docs/) 目录中的详细文档。
 
-如需业务或技术支持，可发送邮件至：[shaoye@262777.xyz](mailto:shaoye@262777.xyz)
+如需业务或技术支持，可发送邮件至：[shaoye@shaoyeai.com](mailto:shaoye@shaoyeai.com)
