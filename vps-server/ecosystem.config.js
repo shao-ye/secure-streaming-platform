@@ -13,7 +13,8 @@ module.exports = {
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: 3000
+        PORT: 3000,
+        TZ: 'Asia/Shanghai' // 固定录制恢复等本地时间逻辑的时区
       },
 
       // 自动重启配置
@@ -48,7 +49,8 @@ module.exports = {
       health_check_fatal_exceptions: true,
 
       // 进程配置
-      kill_timeout: 5000, // 5秒杀死超时
+      // 允许先退出录制 FFmpeg、等待写入结束再完成有界重封装；超时失败保留 temp 供恢复。
+      kill_timeout: 180000,
       listen_timeout: 3000, // 3秒监听超时
 
       // 高级配置
@@ -66,8 +68,9 @@ module.exports = {
       // 自动保存进程状态
       autorestart: true,
 
-      // cron重启：服务器时区(美国中部)14:00 ≈ 北京时间凌晨3-4点，每日重启缓解内存缓慢增长
-      cron_restart: '0 14 * * *'
+      // 部署脚本的 systemd 为 PM2 设置 Asia/Shanghai；每日北京时间凌晨3点维护，避开录制时段。
+      // PM2 的 cron 使用守护进程时区，不能仅靠上面的应用 TZ 环境变量改变。
+      cron_restart: '0 3 * * *'
     }
   ],
 

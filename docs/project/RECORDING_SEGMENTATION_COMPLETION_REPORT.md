@@ -1,10 +1,29 @@
 # 🎉 录制分段功能实施完成报告
 
-**版本**: V2.8 | **日期**: 2025-10-29 | **状态**: ✅ 全部完成
+**历史版本**: V2.8 | **原报告日期**: 2025-10-29 | **原报告状态**: ✅ 全部完成
+**现行规则核对**: 2026-10-19 | **代码基线**: `66e5339`
+
+本文兼顾历史报告与现行行为说明：下文执行耗时、提交、部署状态、已勾选验收及完成总结均保留原报告含义，**不表示本次已重新部署或验收**。功能和命名段落已按本地代码修订；本次仅做静态核对，未核验线上设置或实际录像。
+
+### 现行规则与原报告的主要差异
+
+| 项目 | 当前实现 |
+|---|---|
+| 全局分段配置 | 默认关闭，默认 60 分钟，范围 **3–240 分钟**；KV 键为 `system:cleanup:config` |
+| 配置生效 | 下次启动录制时读取，正在运行的录制会话不即时切换 |
+| 临时文件 | 增加本次路径生成时刻：`{频道名}_{频道ID}_{YYYYMMDD}_{HHMMSS}_temp_%03d.mp4`，编号从 `000` 开始 |
+| 已完成分段 | FFmpeg 打开新段后约 2 秒处理上一段，使用 `renameCompletedSegment()` |
+| 剩余文件收尾 | `disableRecording()` 和 FFmpeg `exit` 回调经 `renameFinalSegment()` / 单文件改名处理 |
+| 时间来源 | 正常路径按会话开始时间、段编号与配置时长推算；恢复 temp 时才按 `mtime - 视频时长` 反推开始时间 |
+| 重封装 | 分段通常先 `-c copy -movflags faststart`，但失败 / 进程错误 / 超时存在直接改名降级 |
+| 单文件模式 | 开始即使用正式格式，末尾最初为计划结束时间；正式名本身不能证明录制已完成 |
+| 上传成功标记 | 通常 `_u.mp4`，同名冲突时 `_u_<毫秒时间戳>.mp4` |
+
+完整规则和代码入口见 [录制分段与命名规范](RECORDING_SEGMENTATION_DESIGN.md)；本报告不替代其时间和跨日边界说明。
 
 ---
 
-## 📋 执行概览
+## 📋 历史执行概览（2025-10-29，保留原记录）
 
 | 阶段 | 状态 | 完成时间 | 耗时 |
 |------|------|---------|------|
@@ -17,14 +36,14 @@
 
 ---
 
-## 🎯 核心功能实现
+## 🎯 核心功能实现（按当前代码修订）
 
 ### 1. 前端UI（SystemSettingsDialog.vue）
 
 **新增功能**：
 - ✅ 录制分段配置区域
 - ✅ 启用/禁用开关（`segmentEnabled`）
-- ✅ 分段时长输入（10-240分钟，默认60）
+- 分段时长输入：3–240 分钟，默认 60；分段开关默认关闭
 - ✅ 快捷设置按钮（30分钟、1小时、2小时）
 - ✅ 完整的表单验证和说明文本
 
@@ -35,7 +54,7 @@ https://yoyo.your-domain.com → 管理后台 → 右上角"设置"按钮
 
 ### 2. Workers API扩展
 
-**GET /api/admin/cleanup/config**：
+**GET /api/admin/cleanup/config 历史响应示例**（此例为已开启的设置值，不是默认值）：
 ```json
 {
   "status": "success",
@@ -51,58 +70,21 @@ https://yoyo.your-domain.com → 管理后台 → 右上角"设置"按钮
 
 **PUT /api/admin/cleanup/config**：
 - ✅ 接受 `segmentEnabled` 和 `segmentDuration` 参数
-- ✅ 参数验证：`segmentDuration` 必须在 10-240 之间
+- 参数验证：`segmentDuration` 必须在 3–240 之间，单位为分钟
 - ✅ 向后兼容：旧配置自动添加默认值
-- ✅ KV持久化存储
+- KV 持久化存储：`system:cleanup:config`；保存后下次启动录制读取
 
 ### 3. VPS录制逻辑改造
 
-**RecordScheduler.js**：
-```javascript
-// 🆕 新增方法
-async fetchSystemSettings() {
-  // 从Workers API获取分段配置
-  const response = await fetch(`${this.workersApiUrl}/api/admin/cleanup/config`);
-  return {
-    segmentEnabled: data.segmentEnabled || false,
-    segmentDuration: data.segmentDuration || 60
-  };
-}
-
-async startRecording(config) {
-  // 合并系统设置
-  const systemSettings = await this.fetchSystemSettings();
-  const fullConfig = { ...config, ...systemSettings };
-  await this.streamManager.enableRecording(channelId, fullConfig);
-}
-```
+**RecordScheduler.js**：`fetchSystemSettings()` 获取全局配置；`startRecording(config)` 合并后调用 `enableRecording(config.channelId, fullConfig)`。请求失败时分段设置回退为 `false / 60`。当前方法签名是两个参数，不是早期实施文档中的四参数形式。
 
 **SimpleStreamManager.js**：
-```javascript
-// 🆕 支持分段录制
-async spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath, recordConfig) {
-  if (recordConfig.segmentEnabled) {
-    // 分段录制
-    ffmpegArgs.push(
-      '-f', 'segment',
-      '-segment_time', segmentSeconds,
-      '-segment_format', 'mp4',
-      '-reset_timestamps', '1',
-      recordingPath  // {名称}_{ID}_{日期}_temp_%03d.mp4
-    );
-  } else {
-    // 单文件录制
-    ffmpegArgs.push('-f', 'mp4', recordingPath);
-  }
-}
 
-// 🆕 重命名分段文件
-async renameSegmentFiles(channelId, recordConfig) {
-  // 查找临时文件：*_temp_*.mp4
-  // 计算每段时间
-  // 重命名为：{名称}_{ID}_{日期}_{开始}_to_{结束}.mp4
-}
-```
+- `generateRecordingPath(channelId, channelName, recordConfig)` 生成含本次路径生成时刻的临时名，或单文件的正式格式名。
+- `spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath, recordConfig, videoFilter = null)` 选择分段 / 单文件输出，均使用 fragmented MP4 录制参数。
+- `renameCompletedSegment(channelId, segmentIndex, recordConfig)` 处理正常切换后上一段；`renameFinalSegment(channelId, recordConfig)` 处理当前日期目录的剩余 temp 文件。
+- `handleUnexpectedRecordingExit(...)` 由 FFmpeg `exit` 回调调用，尝试执行分段或单文件收尾；该回调并不限定异常退出码。
+- 当前代码不再有旧示例中的 `renameSegmentFiles()`。
 
 ---
 
@@ -112,12 +94,12 @@ async renameSegmentFiles(channelId, recordConfig) {
 
 **临时文件**（录制时）：
 ```
-二楼教室2_stream_gkg5hknc_20251029_temp_001.mp4
-二楼教室2_stream_gkg5hknc_20251029_temp_002.mp4
-二楼教室2_stream_gkg5hknc_20251029_temp_003.mp4
+示例教室2_stream_example2_20251029_073000_temp_000.mp4
+示例教室2_stream_example2_20251029_073000_temp_001.mp4
+示例教室2_stream_example2_20251029_073000_temp_002.mp4
 ```
 
-**正式文件**（录制结束后自动重命名）：
+**正式文件**（切换或收尾时生成；以下为 60 分钟分段的理想示例，实际收尾时刻可能略晚）：
 ```
 二楼教室2_stream_gkg5hknc_20251029_073000_to_083000.mp4
 二楼教室2_stream_gkg5hknc_20251029_083000_to_093000.mp4
@@ -130,20 +112,23 @@ async renameSegmentFiles(channelId, recordConfig) {
 二楼教室2_stream_gkg5hknc_20251029_074000_to_172500.mp4
 ```
 
-✅ **命名规则100%延续现有格式**，确保向后兼容！
+单文件名在开始录制时已经存在，最初的 `172500` 来自计划结束时间；停止或退出收尾时才尝试替换为处理时的北京时间。因此，不能把 `_to_HHMMSS.mp4` 格式等同于“录制已完成”。
+
+正式格式仍为 `{频道名}_{频道ID}_{YYYYMMDD}_{开始HHMMSS}_to_{结束HHMMSS}.mp4`。上传成功后，本地文件通常变为 `..._u.mp4`；目标同名时加 `_u_<毫秒时间戳>.mp4`。
 
 ---
 
 ## 🔧 技术实现细节
 
-### FFmpeg命令对比
+### FFmpeg 输出参数对比（仅为简化示例，完整参数见当前代码）
 
 **单文件录制**：
 ```bash
 ffmpeg -i rtmp://input \
   -f hls ... /hls/playlist.m3u8 \
-  -c:v copy -c:a copy \
+  -c:v libx264 -preset ultrafast -an \
   -f mp4 \
+  -movflags +frag_keyframe+empty_moov+default_base_moof \
   /path/二楼教室2_stream_gkg5hknc_20251029_074000_to_172500.mp4
 ```
 
@@ -151,29 +136,29 @@ ffmpeg -i rtmp://input \
 ```bash
 ffmpeg -i rtmp://input \
   -f hls ... /hls/playlist.m3u8 \
-  -c:v copy -c:a copy \
+  -c:v libx264 -preset ultrafast -an \
   -f segment \
   -segment_time 3600 \
   -segment_format mp4 \
+  -segment_format_options movflags=+frag_keyframe+empty_moov+default_base_moof \
   -reset_timestamps 1 \
-  /path/二楼教室2_stream_gkg5hknc_20251029_temp_%03d.mp4
+  /path/示例教室2_stream_example2_20251029_073000_temp_%03d.mp4
 ```
 
-### 两步法重命名流程
+### 当前最终化与恢复流程
 
-1. **录制阶段**：FFmpeg输出临时文件（`_temp_%03d.mp4`）
-2. **结束触发**：
-   - 定时任务自动停止
-   - 手动停止录制
-   - 进程异常中断
-3. **重命名阶段**：调用 `renameSegmentFiles()` 方法
-   - 扫描临时文件
-   - 根据 `sessionStartTime` 计算每段时间
-   - 重命名为正式文件名（`_HHMMSS_to_HHMMSS.mp4`）
+1. **录制阶段**：分段模式输出带本次开始时刻的 `_temp_%03d.mp4`，起始编号 `000`；FFmpeg 按配置时长和可用关键帧切换。
+2. **正常切换**：stderr 检测到开始写第 `N` 段，若 `N > 0`，约 2 秒后由 `renameCompletedSegment()` 处理 `N - 1` 段。段开始 = `sessionStartTime + 编号 × 配置时长`，段结束 = 段开始 + 配置时长。
+3. **停止 / 进程退出收尾**：`renameFinalSegment()` 等待 2 秒，扫描处理时的北京时间日期目录内剩余 temp。新格式从临时名取会话开始时刻，旧格式回退到配置，再按编号推算开始；全部剩余文件使用此次收尾处理时刻作为结束时间，而非逐个读取实际视频时长。
+4. **重封装**：`convertSegmentToStandardMp4()` 使用 `-c copy -movflags faststart`，成功删除原临时文件；失败、进程错误或 60 秒超时可能直接改名。因此正式文件不一定已成功转为标准 MP4，也不等于已通过播放验证。
+5. **服务启动自动恢复**：`runRecoveryWithSizeCheck()` 只查 temp，间隔 30 秒比较大小，处理不再增长的文件。`renameTempFile()` 使用 `mtime` 为结束时间、`mtime - 探测视频时长` 为开始时间，不沿用正常切换的时间推算；恢复格式化使用环境本地时间，不保证与正常路径的显式 UTC+8 一致。
+6. **手动恢复**：`runRecovery()` 保留 `fixEndTime()` 路径，可按 mtime 修正正式文件的结束时间；它不是启动自动恢复的默认步骤。
+
+`disableRecording()` 当前先尝试改名，再停止或重启 FFmpeg；不能把两秒等待解释为已经确认进程结束。日期目录、同秒时间来源及跨日限制详见主规范。
 
 ---
 
-## 📦 代码提交记录
+## 📦 历史代码提交记录（保留原报告）
 
 ### Git提交历史
 
@@ -185,7 +170,7 @@ ffmpeg -i rtmp://input \
    - RecordScheduler.js
    - SimpleStreamManager.js
 
-### 部署状态
+### 历史部署状态（未在 2026-10-19 重新核验）
 
 | 组件 | 版本/ID | 状态 |
 |------|---------|------|
@@ -195,7 +180,7 @@ ffmpeg -i rtmp://input \
 
 ---
 
-## ✅ 验证清单
+## ✅ 历史验证清单（原报告勾选，非本次验证）
 
 ### 前端UI验证
 - [x] 录制分段配置区域正常显示
@@ -227,7 +212,7 @@ ffmpeg -i rtmp://input \
 
 ---
 
-## 🎓 用户使用指南
+## 🎓 用户使用指南（按当前代码修订）
 
 ### 启用分段录制
 
@@ -242,14 +227,14 @@ ffmpeg -i rtmp://input \
    - 点击"保存"
 
 3. **观察录制效果**
-   - 录制时生成临时文件：`*_temp_001.mp4`
-   - 录制结束自动重命名：`*_073000_to_083000.mp4`
+   - 录制时生成含本次开始时刻的临时文件：`*_<HHMMSS>_temp_000.mp4`
+   - 新段开始约 2 秒后处理上一段，停止 / 退出时处理剩余文件：`*_073000_to_083000.mp4`
    - 每段文件独立存储，可单独下载/删除
 
 ### 关闭分段录制
 
 - 在系统设置中关闭"启用录制分段"开关
-- 保存后恢复单文件录制模式
+- 保存后，下次启动录制恢复单文件模式
 - 现有录制会话不受影响，下次启动生效
 
 ---
@@ -263,8 +248,8 @@ ffmpeg -i rtmp://input \
 
 2. **✅ 灵活可配置**
    - 全局统一配置，简单易用
-   - 支持10-240分钟任意时长
-   - 实时生效，无需重启服务
+   - 支持 3–240 分钟的分段时长
+   - 下次启动录制时读取，无需为配置变更重启整个服务
 
 3. **✅ 文件管理友好**
    - 独立文件便于查找和管理
@@ -286,7 +271,7 @@ ffmpeg -i rtmp://input \
 
 ---
 
-## 🎉 项目完成总结
+## 🎉 历史项目完成总结（2025-10-29 原文，非本次结果）
 
 **功能状态**: ✅ **100%完成并部署**
 

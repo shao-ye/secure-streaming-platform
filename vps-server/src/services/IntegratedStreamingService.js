@@ -310,9 +310,8 @@ class IntegratedStreamingService {
       // 2. 等待客户端确认或超时
       await this.waitForSourceChangeConfirmation(channelId, 30000);
 
-      // 3. 重启流媒体转码
-      await this.simpleStreamManager.stopChannel(channelId);
-      await this.simpleStreamManager.startWatching(channelId, newSource);
+      // 3. 在同一频道锁内切换源地址，保留正在执行的录制模式与配置。
+      await this.simpleStreamManager.restartChannel(channelId, newSource);
 
       logger.info('RTMP源变更处理完成:', { channelId, newSource });
 

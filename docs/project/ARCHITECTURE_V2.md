@@ -545,7 +545,7 @@ env.YOYO_USERS.get(`user:${username}`)
 env.YOYO_USERS.put(`user:${username}`, userData)
 
 // 系统配置
-env.YOYO_CHANNELS.get('system:cleanup_config')
+env.YOYO_CHANNELS.get('system:cleanup:config')
 env.YOYO_CHANNELS.get('system:channel_index')
 
 ✅ Cloudflare分担：
@@ -1592,7 +1592,7 @@ class RecordScheduler {
 
 ### 5.3 SimpleStreamManager录制支持
 
-**扩展功能**: 在原有转码管理基础上添加录制能力
+**扩展功能**: 在原有转码管理基础上添加录制能力。下方仅保留结构示意；录制参数、命名和收尾的现行规则以 §5.4～§5.5 为准。
 
 ```javascript
 class SimpleStreamManager {
@@ -1619,8 +1619,8 @@ class SimpleStreamManager {
       '-f', 'hls', '-hls_time', '2', '-hls_list_size', '6',
       'playlist.m3u8',
       
-      // MP4录制输出（copy编码，零损耗）
-      '-c:v', 'copy', '-f', 'mp4', '-y',
+      // MP4录制输出（当前使用libx264；封装参数见§5.5）
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-an', '-f', 'mp4', '-y',
       recordingPath
     ];
   }
@@ -1641,191 +1641,92 @@ class SimpleStreamManager {
 
 ### 5.4 文件命名方案
 
-**混合命名**: channelName + channelId + 时间信息
+**现行核对**：2026-10-19，代码基线 `66e5339`。录制分段与命名的主规范见 [RECORDING_SEGMENTATION_DESIGN.md](RECORDING_SEGMENTATION_DESIGN.md)。本节描述仓库代码行为，不代表已核验线上配置或所有历史文件。
 
-```javascript
-generateRecordingPath(channelId, channelName, recordConfig) {
-  const dateStr = '20251028';          // YYYYMMDD
-  const startTimeStr = '074000';       // HHMMSS
-  const endTimeStr = '172500';         // HHMMSS
-  
-  // 格式: {频道名}_{频道ID}_{日期}_{开始时间}_to_{结束时间}.mp4
-  const filename = `${channelName}_${channelId}_${dateStr}_${startTimeStr}_to_${endTimeStr}.mp4`;
-  
-  // 路径: /var/www/recordings/{channelId}/{YYYYMMDD}/filename.mp4
-  return path.join(basePath, channelId, dateStr, filename);
-}
+正式文件保持以下格式，时间字段为六位 `HHMMSS`：
+
+```text
+{频道名}_{频道ID}_{YYYYMMDD}_{段开始时间}_to_{段结束时间}.mp4
 ```
 
-**示例文件名**:
-```
-/var/www/recordings/stream_ensxma2g/20251028/
-  二楼教室1_stream_ensxma2g_20251028_074000_to_172500.mp4
+路径为 `{storagePath}/{channelId}/{YYYYMMDD}/文件名`；未传 `storagePath` 时使用流管理器的录制根目录。正常录制路径与时间计算显式使用北京时间（UTC+8），恢复服务的时区处理另见 §6.4。
+
+| 场景 | 初始文件名与时间来源 |
+| --- | --- |
+| 单文件录制 | 启动时直接生成正式格式；开始时间取生成路径时的当前时间，结束时间先用配置的 `endTime`（秒补 `00`） |
+| 分段录制 | 使用 `{频道名}_{频道ID}_{日期}_{会话HHMMSS}_temp_%03d.mp4`，序号从 `000` 开始；日期和会话时间取生成路径时的当前时间 |
+| 单文件收尾 | `renameRecordingWithActualEndTime` 等待 2 秒后，把文件名结束字段改为当次处理的当前北京时间；不是从视频内容读取结束时间 |
+
+例如，5 分钟分段的正常命名示意如下；它表达代码计算出的时间，不能当作对媒体实际起止边界的精确测量：
+
+```text
+录制中：示例教室1_stream_example1_20251030_074000_temp_000.mp4
+完成段：示例教室1_stream_example1_20251030_074000_to_074500.mp4
 ```
 
-**优势**:
-- ✅ 可读性好：包含中文频道名
-- ✅ 唯一性强：包含频道ID避免冲突
-- ✅ 信息完整：包含日期和时间段
-- ✅ UTF-8支持：现代系统原生支持中文文件名
+频道 ID 用于区分频道；秒级会话时间降低同日重新录制时重名的风险，但没有“永不冲突”的保证。具体时间推算和边界见下节。
 
 ### 5.5 录制分段功能
 
-**版本**: V2.5 (2025-10-30)  
-**文档**: `doc/RECORDING_SEGMENTATION_IMPLEMENTATION.md`  
-**状态**: ✅ 已部署
+#### 全局配置与切分方式
 
-#### 核心概念
+分段参数由系统设置统一管理，KV 键是 `system:cleanup:config`。`segmentEnabled` 默认 `false`，`segmentDuration` 默认 `60` 分钟；当前前端输入和 Worker 保存校验的范围都是 **3～240 分钟**。`RecordScheduler.fetchSystemSettings()` 读取后，将参数合并进频道录制配置并传给 `enableRecording`；`sessionStartTime` 由流管理器保存。已有录制进程收到配置更新时不会立即重启，所以这里的全局设置不能解释为当前 FFmpeg 会立即改变切分时长。
 
-1. **分段是可选的** - 通过系统设置全局控制，默认关闭
-2. **两步法实现** - 录制时用临时名，停止后重命名为正式名
-3. **文件命名延续现有规范** - `{名称}_{ID}_{日期}_{开始}_to_{结束}.mp4`
-4. **不影响观看** - HLS和MP4并行输出，互不干扰
+```json
+{
+  "segmentEnabled": false,
+  "segmentDuration": 60
+}
+```
 
-#### FFmpeg分段参数
+同一 FFmpeg 进程同时输出 HLS 和录制文件；当前录制视频使用 `libx264` / `ultrafast`，并用 `-an` 禁用音频。分段参数如下，`-c copy` 用在完成段的后续重新封装，不是这里的录制视频编码参数。
 
-**单文件模式**（默认）:
 ```javascript
-// 完整录制时段输出为单个MP4文件
+// SimpleStreamManager.spawnFFmpegWithRecording 的分段输出参数
+const segmentSeconds = (recordConfig.segmentDuration || 60) * 60;
 ffmpegArgs.push(
-  '-c:v', 'copy',
-  '-an',                    // 禁用音频（避免编码兼容性问题）
-  '-f', 'mp4',
+  '-f', 'segment',
+  '-segment_time', segmentSeconds.toString(),
+  '-segment_format', 'mp4',
+  '-segment_format_options', 'movflags=+frag_keyframe+empty_moov+default_base_moof',
+  '-reset_timestamps', '1',
   '-y',
   recordingPath
 );
 ```
 
-**分段模式**（启用时）:
-```javascript
-// 按时间分段，自动切分多个MP4文件
-const segmentSeconds = recordConfig.segmentDuration * 60;  // 转为秒
-const tempFilename = `${channelName}_${channelId}_${dateStr}_temp_%03d.mp4`;
+单文件输出使用 `-f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof`。分段按配置时长交给 FFmpeg segment muxer 切换，实际文件边界受关键帧和流时间戳影响；代码未用每段实际时长校准正常命名。
 
-ffmpegArgs.push(
-  '-c:v', 'copy',
-  '-an',
-  '-f', 'segment',                      // 使用segment muxer
-  '-segment_time', segmentSeconds,      // 分段时长（秒）
-  '-segment_format', 'mp4',             // 输出格式
-  '-reset_timestamps', '1',             // 每段重置时间戳
-  '-y',
-  tempFilename                          // 使用%03d模式命名
-);
+#### 收尾触发与时间算法
+
+| 触发场景 | 当前调用与规则 |
+| --- | --- |
+| 录制中切换分段 | stderr 检测到 `Opening ..._temp_NNN.mp4`，且序号大于 0 时，延迟 2 秒调用 `renameCompletedSegment` 处理上一段 |
+| 禁用录制 | `disableRecording` 先调用 `renameFinalSegment`（分段）或 `renameRecordingWithActualEndTime`（单文件），然后清理录制状态、停止进程或重启为仅观看输出 |
+| FFmpeg `exit` 事件 | 有闭包中的录制配置时，通过 `setImmediate` 调用 `handleUnexpectedRecordingExit`，再复用相同收尾函数；当前事件处理没有按退出码区分正常退出和异常退出 |
+| 服务启动或手动恢复 | `RecordingRecoveryService` 另行扫描历史文件，使用 mtime 与视频时长算法，见 §6.4 |
+
+**普通完成段**：`renameCompletedSegment` 使用以下公式，不调用 ffprobe：
+
+```text
+段开始 = recordConfig.sessionStartTime + 段序号 × 配置分段时长
+段结束 = 段开始 + 配置分段时长
 ```
 
-#### 临时文件命名
+**停止流程中的剩余 temp**：`renameFinalSegment` 等待 2 秒后，扫描该频道“处理当天”目录下所有 `_temp_*.mp4`，不只匹配当前会话。新格式从文件名提取会话 `HHMMSS` 和段序号，旧格式回退到配置中的 `sessionStartTime`；段开始仍按序号乘时长推算。此次扫描的所有剩余 temp 都使用同一个扫描时刻作为结束时间。因此，若先前分段未及时收尾，不能将它们的结束字段解释为各自真实的结束时间。
 
-**录制时使用临时名**（包含`_temp_`标记）:
-```
-二楼教室1_stream_ensxma2g_20251030_temp_000.mp4
-二楼教室1_stream_ensxma2g_20251030_temp_001.mp4
-二楼教室1_stream_ensxma2g_20251030_temp_002.mp4
-```
+**文件封装**：普通完成段、最终扫尾段及恢复的 temp 都调用 `convertSegmentToStandardMp4`，通过 `-c copy -movflags faststart` 重新封装为标准 MP4；成功后删除 temp。失败、进程错误或超时分支有直接重命名的降级处理，所以正式文件名本身不证明标准 MP4 转换成功。单文件的正常收尾是直接改名。完成后的文件还会进入最终化事件派发流程，是否上传由上传配置决定。
 
-**重命名为正式名**（包含实际时间段）:
-```
-二楼教室1_stream_ensxma2g_20251030_074000_to_074500.mp4
-二楼教室1_stream_ensxma2g_20251030_074500_to_075000.mp4
-二楼教室1_stream_ensxma2g_20251030_075000_to_075230.mp4
-```
+#### 当前实现的静态边界
 
-#### 重命名逻辑
+以下是代码结构能确认的条件性风险，尚未以线上文件或运行日志证明已触发：
 
-```javascript
-async renameSegmentFiles(channelId, recordConfig) {
-  // 等待2秒确保FFmpeg完成文件写入
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  
-  const outputDir = path.join(recordConfig.storagePath, channelId, dateStr);
-  const tempFiles = fs.readdirSync(outputDir)
-    .filter(f => f.includes('_temp_') && f.endsWith('.mp4'))
-    .sort();
-  
-  const sessionStart = new Date(recordConfig.sessionStartTime);
-  const segmentDurationMs = recordConfig.segmentDuration * 60 * 1000;
-  
-  for (let i = 0; i < tempFiles.length; i++) {
-    const startTime = new Date(sessionStart.getTime() + i * segmentDurationMs);
-    const endTime = (i === tempFiles.length - 1) 
-      ? new Date()  // 最后一段使用实际停止时间
-      : new Date(startTime.getTime() + segmentDurationMs);
-    
-    const startTimeStr = moment(startTime).format('HHmmss');
-    const endTimeStr = moment(endTime).format('HHmmss');
-    
-    const finalFilename = `${recordConfig.channelName}_${channelId}_${dateStr}_${startTimeStr}_to_${endTimeStr}.mp4`;
-    const finalPath = path.join(outputDir, finalFilename);
-    
-    fs.renameSync(tempPath, finalPath);
-    logger.info(`Renamed segment: ${tempFiles[i]} → ${finalFilename}`);
-  }
-}
-```
+1. **会话时间存在两次取值**：`enableRecording` 保存 `sessionStartTime` 后，`generateRecordingPath` 重新取当前时间；已有直播流会在两者之间等待停止旧进程。实时收尾却用前者重建 temp 路径。若两次取时跨秒，可能找不到实际临时文件，继而留待最终扫尾或恢复处理。
+2. **跨日目录未统一**：FFmpeg 输出路径按启动日期固定，实时改名与最终扫尾却重新取处理当天日期；跨北京时间午夜可能查找不同日期目录。不能承诺跨日录制会自动切到新日期目录并正确收尾。
+3. **正常停止先收尾后停进程**：`disableRecording` 并未先等待 FFmpeg 退出；2 秒延迟也不是进程已停止的证明。文档应称“停止流程中的收尾”，不能称“确认停止后才改名”。
+4. **命名时间不是媒体测量结果**：普通段使用配置时长，遗留段使用扫尾时刻，秒级命名也未实现排他创建。文件名不能单独证明精确时长、文件完整或绝不覆盖。
 
-**触发时机**: 在`disableRecording`方法中，停止录制前执行重命名
-
-#### 系统配置管理
-
-**KV存储**（`system:cleanup_config`键）:
-```json
-{
-  "enabled": true,
-  "retentionDays": 2,
-  "segmentEnabled": false,    // 🆕 分段开关（全局）
-  "segmentDuration": 60,      // 🆕 分段时长（分钟）
-  "updatedAt": "2025-10-30T02:00:00Z"
-}
-```
-
-**RecordScheduler集成**:
-```javascript
-async startRecording(config) {
-  // 获取系统设置
-  const systemSettings = await this.fetchSystemSettings();
-  
-  // 合并到录制配置
-  const fullConfig = {
-    ...config,
-    segmentEnabled: systemSettings.segmentEnabled,
-    segmentDuration: systemSettings.segmentDuration,
-    sessionStartTime: Date.now()  // 记录录制开始时间
-  };
-  
-  await this.streamManager.enableRecording(config.channelId, fullConfig);
-}
-```
-
-**前端SystemSettingsDialog**:
-```vue
-<el-divider content-position="left">录制分段配置</el-divider>
-
-<el-form-item label="启用录制分段">
-  <el-switch v-model="form.segmentEnabled" />
-  <div class="form-tip">
-    启用后，长时间录制将自动分割为多个文件，便于管理和查看
-  </div>
-</el-form-item>
-
-<el-form-item label="分段时长" v-if="form.segmentEnabled">
-  <el-input-number v-model="form.segmentDuration" :min="10" :max="240" />
-  <span style="margin-left: 10px;">分钟</span>
-  <div style="margin-top: 10px;">
-    <el-button size="small" @click="form.segmentDuration = 30">30分钟</el-button>
-    <el-button size="small" @click="form.segmentDuration = 60">1小时</el-button>
-    <el-button size="small" @click="form.segmentDuration = 120">2小时</el-button>
-  </div>
-</el-form-item>
-```
-
-#### 优势与特性
-
-- ✅ **灵活控制**: 全局开关，可随时启用/禁用分段
-- ✅ **自动分割**: FFmpeg自动按时长切分，无需手动干预
-- ✅ **精确时间**: 文件名包含实际录制时间段
-- ✅ **最后一段**: 自动处理最后一段的实际结束时间
-- ✅ **零影响**: 不影响HLS观看和单文件模式
-- ✅ **易管理**: 分段文件便于后续查看和传输
+以上仅修正文档描述，不代表这些实现边界已在本次修改中修复。
 
 ### 5.6 KV存储结构
 
@@ -1932,12 +1833,13 @@ async startRecording(config) {
 ## 🛡️ 录制文件防损坏与修复系统
 
 **版本**: V2.8 (2025-10-30)  
-**文档**: `doc/RECORDING_RECOVERY_IMPLEMENTATION.md`  
-**状态**: ✅ 已部署
+**现行规则**: [RECORDING_SEGMENTATION_DESIGN.md](RECORDING_SEGMENTATION_DESIGN.md) 与本节 §6.3～§6.4（2026-10-19，`66e5339`）
+
+**历史状态**: 原文记录为已部署；本次只核对仓库代码，未重新验收生产环境。
 
 ### 6.1 功能概述
 
-**设计理念**: 双重保护机制，确保录制文件在程序崩溃时不丢失、不损坏
+**设计理念**: 通过 fragmented MP4 与恢复扫描降低异常中断后的文件不可用风险；不保证所有崩溃场景都能保全完整文件。
 
 **核心问题**:
 1. ❌ **文件名冲突**: 旧temp文件命名缺少时间戳，重启后被覆盖
@@ -1945,13 +1847,13 @@ async startRecording(config) {
 3. ❌ **历史文件丢失**: 未正式命名的temp文件无法识别
 
 **解决方案**:
-1. ✅ **Fragmented MP4**: FFmpeg参数优化，确保崩溃后可播放
-2. ✅ **文件名唯一性**: temp文件包含开始时间戳，避免冲突
+1. ✅ **Fragmented MP4**: 录制时分片封装，尽量保留已写入的片段
+2. ✅ **降低重名风险**: temp 文件包含秒级会话时间，边界见 §5.5
 3. ✅ **自动修复服务**: 启动时扫描并修复历史temp文件
 
 ### 6.2 Fragmented MP4技术
 
-**功能**: 让MP4文件在未完全写入时仍可播放
+**功能**: 让已写入的 fragment 有机会在异常中断后继续使用；可播放范围需要以具体文件验证。
 
 **FFmpeg参数配置**:
 ```javascript
@@ -1964,8 +1866,8 @@ const ffmpegArgs = [
   '-f', 'hls', '-hls_time', '2',
   'playlist.m3u8',
   
-  // 🆕 MP4录制输出（Fragmented MP4）
-  '-c:v', 'copy',
+  // 单文件MP4录制输出（当前编码与封装方式；分段参数见§5.5）
+  '-c:v', 'libx264', '-preset', 'ultrafast', '-an',
   '-movflags', '+frag_keyframe+empty_moov+default_base_moof',  // 关键参数
   '-f', 'mp4', '-y',
   recordingPath
@@ -1984,198 +1886,68 @@ const ffmpegArgs = [
 
 Fragmented MP4结构:
   [元数据moov] → [数据fragment1] → [数据fragment2] → ...
-  ✅ moov已在开头，即使崩溃，已写入的fragment可播放
+  moov位于开头，便于保留已写入的fragment；实际可播放范围仍需验证
 ```
 
-**验证效果**:
+**历史验证样例（保留原数值，不作为当前验收证据）**:
 ```bash
 # 崩溃前：5.3M, 98秒
 # 程序崩溃...
 # 崩溃后：6.4M, 116秒 ✅ 文件增长且可播放
 
 ffprobe -v error -show_entries format=duration file.mp4
-# 输出：116.160000  ← 成功读取时长，证明文件完整可播放
+# 输出：116.160000  ← 可读取时长；单凭这一结果不能证明文件完整可播放
 ```
 
 ### 6.3 文件名唯一性改进
 
-**问题根因**: 旧格式缺少开始时间，导致文件名冲突
+旧格式 `{频道名}_{频道ID}_{日期}_temp_XXX.mp4` 不含会话时间，同日再次录制容易复用临时路径。当前 `generateRecordingPath` 已增加生成路径时的会话 `HHMMSS`：
 
-**旧格式** (❌ 有冲突风险):
-```
-频道名_频道ID_日期_temp_XXX.mp4
-二楼教室2_stream_gkg5hknc_20251030_temp_000.mp4
-  ↑ 每次录制都生成相同文件名，重启后被覆盖！
-```
-
-**新格式** (✅ 唯一标识):
 ```javascript
-// SimpleStreamManager.js - generateRecordingPath()
-if (recordConfig.segmentEnabled) {
-  // 🆕 包含开始时间（timeStr）确保唯一性
-  const filename = `${channelName}_${channelId}_${dateStr}_${timeStr}_temp_%03d.mp4`;
-  //                                                         ^^^^^^^^ 新增：开始时间
-  return path.join(basePath, channelId, dateStr, filename);
-}
+// 秒级会话时间降低同日重新启动时的重名风险
+const filename = `${channelName}_${channelId}_${dateStr}_${timeStr}_temp_%03d.mp4`;
+return path.join(basePath, channelId, dateStr, filename);
 ```
 
-**实际效果**:
+```text
+示例教室2_stream_example2_20251030_143511_temp_000.mp4
+示例教室2_stream_example2_20251030_144442_temp_000.mp4
 ```
-新格式temp文件:
-  二楼教室2_stream_gkg5hknc_20251030_143511_temp_000.mp4  ← 14:35:11开始
-  二楼教室2_stream_gkg5hknc_20251030_144442_temp_000.mp4  ← 14:44:42开始
-  二楼教室2_stream_gkg5hknc_20251030_150922_temp_000.mp4  ← 15:09:22开始
-  ✅ 每次录制生成唯一文件名，永不冲突
 
-修复后正式文件:
-  二楼教室2_stream_gkg5hknc_20251030_143511_to_014434.mp4
-  二楼教室2_stream_gkg5hknc_20251030_144442_to_015335.mp4
-  二楼教室2_stream_gkg5hknc_20251030_150922_to_021934.mp4
-```
+这两次启动时间不同，临时路径也不同；但当前时间精度仅到秒，FFmpeg 输出带 `-y`，因此不提供绝不重名或覆盖的保证。实时收尾仍依赖 `sessionStartTime` 重建路径，两次取时和跨日目录风险详见 §5.5。
 
 ### 6.4 RecordingRecoveryService（自动修复服务）
 
-**功能**: 服务启动时自动扫描并修复历史temp文件
+**现行核对**：2026-10-19，代码基线 `66e5339`。启动恢复和手动 API 使用不同入口，不能将两者的筛选条件混为一谈。
 
-**核心架构**:
+| 入口 | 筛选与执行规则 |
+| --- | --- |
+| `startup()` → `runRecoveryWithSizeCheck()` | 服务启动后延迟 5 秒，调用 `findTempFiles` 记录 temp 大小；存在候选时再等待 30 秒，仅处理前后大小相等的文件。该入口不另加“频道未录制”和“mtime 已满 30 秒”的筛选 |
+| 管理 API → `runRecovery()` | 调用 `findFilesNeedingRecovery`，不等待 30 秒。对 temp 要求 `Date.now() - mtimeMs >= 30 秒`，且频道没有标记为录制中的活动流；此外还有对预设结束时间文件的检查分支 |
+
+两个扫描器都读取频道的 `storagePath`，仅扫描每个频道最近 **3 个** `YYYYMMDD` 日期目录，并用文件 mtime 过滤扫描窗口；窗口默认 **48 小时**，由恢复服务配置决定。不是扫描根目录下所有日期的全部历史文件。大小相等是当前启动入口采用的判断条件，不能当作已确认 FFmpeg 关闭文件的证明。
+
+**temp 重命名算法**：新旧临时格式都取文件 `mtimeMs` 作为结束时刻，再减去 ffprobe 返回的时长估算开始时刻：
+
+```text
+估算结束 = 文件 mtime
+估算开始 = 文件 mtime - ffprobe 视频时长
+正式文件 = 原文件名中的频道部分 + 原日期 + 估算开始HHMMSS_to_估算结束HHMMSS.mp4
+```
+
 ```javascript
-// services/RecordingRecoveryService.js
-class RecordingRecoveryService {
-  constructor(streamManager, systemConfig) {
-    this.streamManager = streamManager;
-    this.config = {
-      enabled: true,
-      delayStart: 5000,  // 延迟5秒启动
-      scanRecentHours: systemConfig.recoveryScanHours || 48,  // 扫描48小时内
-      recordingsPath: process.env.RECORDINGS_PATH || '/srv/filebrowser/yoyo-k'
-    };
-  }
-  
-  async startup() {
-    // 延迟5秒后启动（确保主服务稳定）
-    setTimeout(() => {
-      this.runRecovery().catch(err => 
-        logger.error('Recovery failed', { error: err.message })
-      );
-    }, this.config.delayStart);
-  }
-}
+// RecordingRecoveryService.renameTempFile 的时间来源
+const duration = await this.getVideoDuration(file.path);
+const stat = fs.statSync(file.path);
+const fileEndTime = new Date(stat.mtimeMs);
+const fileStartTime = new Date(fileEndTime.getTime() - duration * 1000);
 ```
 
-**工作流程**:
-```
-1. 服务启动
-   ↓
-2. 延迟5秒
-   ↓
-3. 扫描录制目录（默认48小时内）
-   ↓
-4. 识别temp文件
-   ↓
-5. 提取开始时间（从文件名）
-   ↓
-6. 使用ffprobe获取视频时长
-   ↓
-7. 计算实际结束时间（文件修改时间）
-   ↓
-8. 重命名为正式格式
-```
+新格式还会把估算开始时刻与文件名中的会话时间比较，差异大于 60 秒时记警告；这只是诊断信息，后续段的会话时间本就不等于该段开始时间。目标正式路径已存在时跳过；否则调用 `convertSegmentToStandardMp4`，执行重新封装与降级改名，并在成功路径派发文件最终化事件。
 
-**文件识别逻辑**:
-```javascript
-async findFilesNeedingRecovery() {
-  const files = [];
-  const channels = await this.getRecordingChannels();
-  
-  for (const channel of channels) {
-    // 扫描频道录制目录
-    const channelDir = path.join(this.config.recordingsPath, channel.id);
-    
-    // 遍历日期目录（YYYYMMDD）
-    const dateFiles = this.getRecentDateFiles(channelDir, scanRecentHours);
-    
-    for (const filePath of dateFiles) {
-      const fileName = path.basename(filePath);
-      
-      // 🔍 识别temp文件
-      if (fileName.includes('_temp_')) {
-        logger.info(`📦 Found temp file: ${fileName}`);
-        files.push({ path: filePath, type: 'temp', channel });
-      }
-    }
-  }
-  
-  return files;
-}
-```
+**时区与证据边界**：恢复服务的 `formatTime` 调用 `getHours/getMinutes/getSeconds`，文件名时间的校验也使用 `new Date(year, month, day, ...)`，两者依赖 Node 进程本地时区。它没有像正常录制路径那样显式转换到 UTC+8；只有运行时本地时区一致，才能预期两种路径输出相同的时区语义。恢复文件名中的日期仍沿用原文件名日期，不按反推开始时刻重新选择目录或日期。
 
-**重命名逻辑** (v2.0 - 基于mtime优化):
-```javascript
-async renameTempFile(file) {
-  // 匹配新格式：频道名_频道ID_日期_时间_temp_XXX.mp4
-  const match = path.basename(file.path)
-    .match(/(.+)_(.+)_(\d{8})_(\d{6})_temp_(\d{3})\.mp4$/);
-  
-  if (match) {
-    const [, channelName, channelId, date, startTimeFromName] = match;
-    
-    // 🔥 核心改进：使用文件修改时间(mtime)作为结束时间
-    // 原因：录制时持续写入文件，mtime不断更新，程序终止后mtime就是实际结束时间
-    const stat = fs.statSync(file.path);
-    const fileEndTime = new Date(stat.mtimeMs);
-    
-    // 获取视频实际时长
-    const duration = await this.getVideoDuration(file.path);
-    
-    // 反推开始时间 = 结束时间 - 视频时长
-    const calculatedStartTime = new Date(fileEndTime.getTime() - duration * 1000);
-    
-    // 🔍 验证：与文件名中的开始时间对比（检测异常）
-    const year = parseInt(date.substr(0, 4));
-    const month = parseInt(date.substr(4, 2)) - 1;
-    const day = parseInt(date.substr(6, 2));
-    const nameStartHour = parseInt(startTimeFromName.substr(0, 2));
-    const nameStartMin = parseInt(startTimeFromName.substr(2, 2));
-    const nameStartSec = parseInt(startTimeFromName.substr(4, 2));
-    const nameStartTime = new Date(year, month, day, nameStartHour, nameStartMin, nameStartSec);
-    
-    const timeDiff = Math.abs(calculatedStartTime.getTime() - nameStartTime.getTime()) / 1000;
-    if (timeDiff > 60) {
-      logger.warn('⚠️ Start time mismatch detected', {
-        file: path.basename(file.path),
-        nameStartTime: startTimeFromName,
-        calculatedStartTime: this.formatTime(calculatedStartTime),
-        diffSeconds: Math.round(timeDiff),
-        reason: 'Possible recording overtime or file corruption'
-      });
-    }
-    
-    // ✅ 使用计算出的时间（基于可靠的mtime）
-    const startTime = this.formatTime(calculatedStartTime);
-    const endTime = this.formatTime(fileEndTime);
-    
-    // 生成正式文件名
-    const newFileName = 
-      `${channelName}_${channelId}_${date}_${startTime}_to_${endTime}.mp4`;
-    const newPath = path.join(path.dirname(file.path), newFileName);
-    
-    // 🔥 转换为标准MP4（防止播放问题）
-    await this.streamManager.convertSegmentToStandardMp4(file.path, newPath);
-    
-    logger.info('✅ Temp file converted and renamed', { 
-      from: path.basename(file.path), 
-      to: newFileName 
-    });
-  }
-}
-```
-
-**技术优势**:
-- ✅ **更可靠的时间来源**: mtime由操作系统维护，比ffprobe解析更准确
-- ✅ **适用损坏文件**: 文件不完整时ffprobe可能返回错误时长，但mtime仍然准确
-- ✅ **统一处理逻辑**: 新旧格式都使用mtime策略
-- ✅ **异常检测**: 时间差异>60秒会记录警告，便于发现录制bug
-- ✅ **不影响正常录制**: 只修改启动时的修复逻辑，不影响运行中的分段重命名
+mtime 只能作为当前实现采用的估算来源：复制、修复或外部写入可能改变它，ffprobe 时长也可能异常。不能据此宣称恢复后的起止时间必然精确，或已证明损坏文件完整可播放。
 
 ### 6.5 服务集成
 
@@ -2204,7 +1976,7 @@ app.listen(PORT, '0.0.0.0', () => {
     };
     
     const recoveryService = new RecordingRecoveryService(streamManager, systemConfig);
-    recoveryService.startup();  // 延迟5秒后开始扫描
+    recoveryService.startup();  // 延迟5秒扫描，存在候选时再等待30秒比较大小
     
     logger.info('✅ 录制文件恢复服务已启动', {
       scanRecentHours: systemConfig.recoveryScanHours,
@@ -2219,6 +1991,8 @@ app.listen(PORT, '0.0.0.0', () => {
 - ✅ 必须在`app.listen()`回调中初始化（服务已启动）
 
 ### 6.6 生产环境验证
+
+> 以下保留历史日志、文件名和原测试结果。它们没有在 2026-10-19 重新执行，不能据此证明当前版本的时区、命名、可播放性或防覆盖行为；尤其日志中异常起止时间不作为正确命名示范。
 
 **测试场景**: 服务重启，修复6个历史temp文件
 
@@ -2287,15 +2061,15 @@ app.listen(PORT, '0.0.0.0', () => {
 ### 6.7 技术亮点
 
 **1. 双重保护机制**
-- ✅ **防损坏**: Fragmented MP4确保崩溃后可播放
-- ✅ **防覆盖**: 文件名包含时间戳，永不冲突
+- **异常中断保护**: Fragmented MP4 尽量保留已写入片段，完整性仍需检查文件
+- **降低重名概率**: 秒级会话时间区分多数重新启动场景，不保证绝不覆盖
 - ✅ **自动修复**: 历史temp文件自动识别和重命名
 
-**2. 可靠的时间计算（v2.0优化）**
-- ✅ **mtime作为结束时间**: 文件修改时间由操作系统维护，比ffprobe更可靠
-- ✅ **反推开始时间**: 结束时间 - 视频时长 = 开始时间
+**2. 恢复时间估算（当前实现）**
+- **结束时间来源**: 取文件 mtime，可能受外部修改影响
+- **开始时间公式**: mtime - ffprobe 视频时长，属于估算
 - ✅ **时间差异检测**: 与文件名时间对比，差异>60秒时记录警告
-- ✅ **适用损坏文件**: 即使文件不完整，mtime仍然准确
+- **时区依赖**: 恢复时间采用进程本地时区；与正常录制显式 UTC+8 的实现不同
 
 **3. 零人工干预**
 - 服务启动自动扫描
@@ -2306,14 +2080,14 @@ app.listen(PORT, '0.0.0.0', () => {
 **4. 容错设计**
 - 扫描失败不影响主服务
 - 单个文件修复失败不影响其他文件
-- 正在使用的文件自动跳过
+- 自动入口按 30 秒大小比较筛选；手动入口对 temp 检查 mtime 年龄与频道状态，均不能替代文件关闭证明
 - 详细日志便于问题定位
 - 异常时间差异自动记录警告
 
 **5. 性能优化**
 - 延迟5秒启动（避免影响主服务）
-- 仅扫描最近48小时（可配置）
-- 异步执行（`setImmediate`避免阻塞）
+- 仅扫描每频道最近 3 个日期目录，再按 mtime 过滤默认 48 小时的窗口
+- 启动入口额外等待 30 秒比较大小；每次执行完成即结束
 - 单次扫描完成即退出（非持续服务）
 
 ### 6.8 配置管理
@@ -2340,17 +2114,19 @@ RECOVERY_SCAN_HOURS=48                    # 扫描时长（小时）
 </el-form-item>
 ```
 
-**KV存储** (`system:cleanup_config`):
+**KV存储** (`system:cleanup:config`):
 ```json
 {
   "enabled": true,
   "retentionDays": 2,
   "segmentEnabled": false,
   "segmentDuration": 60,
-  "recoveryScanHours": 48,  // 🆕 修复扫描时长
+  "recoveryScanHours": 48,
   "updatedAt": "2025-10-30T08:00:00Z"
 }
 ```
+
+当前 `app.js` 初始化恢复服务时传入 `RECOVERY_SCAN_HOURS` 环境变量（未提供时为 48）；此处展示 KV 中的同名配置不表示启动恢复已从 KV 读取该值。实际扫描范围还受最近 3 个日期目录限制。
 
 ### 6.9 部署注意事项
 
@@ -2909,7 +2685,7 @@ ffmpeg -i rtmp://... \
 
 1. **VPS 服务器端** (`vps-transcoder-api/.env`)
    ```bash
-   API_SECRET_KEY=<API_SECRET_KEY>
+   API_SECRET_KEY=YOUR_VPS_API_KEY
    ```
    - 用途：VPS 认证中间件验证 `X-API-Key` 请求头
    - 代码位置：`src/middleware/auth.js` (line 76)
@@ -2918,7 +2694,7 @@ ffmpeg -i rtmp://... \
 2. **Cloudflare Workers** (`cloudflare-worker/wrangler.toml`)
    ```toml
    [env.production.vars]
-   VPS_API_KEY = "<API_SECRET_KEY>"
+   VPS_API_KEY = "YOUR_VPS_API_KEY"
    ```
    - 用途：Workers 调用 VPS API 时使用
    - 代码使用：`headers: { 'X-API-Key': env.VPS_API_KEY }`
@@ -3155,24 +2931,21 @@ VPS Nginx日志验证（segment882.ts）:
 ### V2.7 (2025-10-30)
 **录制分段功能上线 - 支持长时间录制自动切分**
 
-**核心功能**:
-- ✅ **录制分段**: 按时长自动切分MP4文件（可配置10-240分钟）
-- ✅ **全局开关**: 系统设置中统一控制，默认关闭
-- ✅ **两步命名**: 录制时用临时名（_temp_），停止后重命名为正式名
-- ✅ **精确时间**: 文件名包含实际录制时间段（开始_to_结束）
-- ✅ **智能重命名**: 自动处理最后一段的实际结束时间
-- ✅ **零影响**: 不影响HLS观看和单文件模式
+> 此版本标题保留历史时间。以下摘要在 2026-10-19 对照 `66e5339` 更新；旧部署日期和历史样例不作为当前环境的验收证据。完整规则见 [RECORDING_SEGMENTATION_DESIGN.md](RECORDING_SEGMENTATION_DESIGN.md)。
 
-**技术实现**:
-- FFmpeg segment muxer：自动按时长切分
-- RecordScheduler集成：从系统配置获取分段参数
-- SimpleStreamManager：实现重命名逻辑
-- SystemSettingsDialog：前端分段配置界面
+**当前对应行为**:
 
-**文件示例**:
-```
-录制中：二楼教室1_stream_xxx_20251030_temp_000.mp4
-停止后：二楼教室1_stream_xxx_20251030_103000_to_104000.mp4
+- 分段全局默认关闭，默认时长 60 分钟；前端与 Worker 配置范围为 3～240 分钟，KV 键为 `system:cleanup:config`。
+- FFmpeg segment 输出带会话时间的 `_HHMMSS_temp_XXX.mp4`；检测到下一段打开后延迟 2 秒处理上一段，停止流程和 `exit` 事件另有收尾。
+- 普通段按会话开始时间、段序号和配置时长推算命名；最终扫尾的所有遗留 temp 使用当次扫尾时间作为结束字段，不能视为精确媒体边界。
+- 分段先写 fragmented MP4，收尾以 `-c copy -movflags faststart` 重新封装，异常分支有直接改名降级。
+- 启动恢复延迟 5 秒并比较 30 秒前后的文件大小；手动恢复入口使用 temp 的 mtime 年龄和频道录制状态筛选。恢复时间按 mtime 减视频时长估算，并使用进程本地时区。
+- 同秒重名、会话两次取时、跨日目录及先收尾后停进程的边界仍以 §5.5 为准，本次只更新文档。
+
+**命名示意（非当前运行结果）**:
+```text
+录制中：示例教室1_stream_xxx_20251030_103000_temp_000.mp4
+完成后：示例教室1_stream_xxx_20251030_103000_to_104000.mp4
 ```
 
 ### V2.6 (2025-10-29)

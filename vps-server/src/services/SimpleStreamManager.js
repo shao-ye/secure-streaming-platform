@@ -4,6 +4,8 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
 const config = require('../../config');
+const { randomUUID } = require('crypto');
+const SegmentFinalizer = require('./recording/SegmentFinalizer');
 
 const execAsync = promisify(exec);
 
@@ -57,6 +59,12 @@ class SimpleStreamManager {
     // 同时看到 activeStreams 为空、各自 spawn 一个 ffmpeg 造成重复录制
     // Map<channelId, Promise>，保存当前频道正在执行的锁端 Promise
     this.channelLocks = new Map();
+    this.lastRecordingStarts = new Map();
+    this.destroying = false;
+    this.segmentFinalizer = new SegmentFinalizer({
+      ffmpegPath: this.ffmpegPath,
+      ffprobePath: process.env.FFPROBE_PATH
+    });
 
     // 🆕 文件最终化调度器（迭代 3：录制文件改名成功后触发自动上传）
     // 由 app.js 调 setFinalizeDispatcher(...) 注入；未注入时保持 null
@@ -123,6 +131,146 @@ class SimpleStreamManager {
         }
       });
     };
+  }
+
+  /** 在统一频道锁内执行操作；回调只能调用不重复加锁的内部方法。 */
+  async withChannelLock(channelId, operation) {
+    if (this.ready) await this.ready;
+    const release = await this._acquireChannelLock(channelId);
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  /** 判断频道是否正在启动、停止或等待串行操作，供健康检查避开过渡状态。 */
+  isChannelTransitioning(channelId) {
+    const state = this.activeStreams.get(channelId)?.state;
+    return this.channelLocks.has(channelId) || state === 'starting' || state === 'stopping';
+  }
+
+  /** 判断进程是否仍属于当前会话，防止旧进程的回调影响后继会话。 */
+  _ownsStream(info) {
+    return this.activeStreams.get(info.channelId) === info;
+  }
+
+  /** 配置未知时沿用现有滤镜，只有有效的显式比例才代表配置变更。 */
+  _resolveVideoFilter(channelConfig, existing) {
+    if (!['original', '4:3', '16:9'].includes(channelConfig?.videoAspectRatio)) {
+      return existing?.videoFilter ?? null;
+    }
+    return this.getVideoFilter(channelConfig);
+  }
+
+  /** 在 spawn 前登记会话；调用方必须持有频道锁并已完成上一会话的收尾。 */
+  _registerStream(channelId, rtmpUrl, videoFilter, recording = {}) {
+    if (this.destroying) throw new Error('Stream manager is shutting down');
+    if (this.activeStreams.has(channelId)) throw new Error('Previous stream has not been stopped');
+    const info = {
+      channelId, rtmpUrl, videoFilter,
+      sessionId: randomUUID(),
+      hlsUrl: `${this.vpsBaseDomain}/hls/${channelId}/playlist.m3u8`,
+      startTime: Date.now(),
+      process: null,
+      state: 'starting',
+      closed: false,
+      exitSeen: false,
+      expectedStop: false,
+      segmentQueue: Promise.resolve(),
+      lastOpenedSegment: -1,
+      ...recording
+    };
+    this.activeStreams.set(channelId, info);
+    if (info.isRecording) this.recordingChannels.add(channelId);
+    return info;
+  }
+
+  /** 绑定进程归属和关闭屏障；close 后才允许封装，退出回调不直接清理频道资源。 */
+  _attachProcessLifecycle(info, child) {
+    info.process = child;
+    info.spawnedAt = Date.now();
+    info.closePromise = new Promise(resolve => {
+      child.once('close', (code, signal) => {
+        info.closed = true;
+        info.exitSeen = true;
+        info.stoppedAt = info.stoppedAt || Date.now();
+        if (!info.expectedStop) info.state = 'failed';
+        resolve({ code, signal });
+        // 不在事件回调内改共享 Map；串行收尾还会再次检查会话身份。
+        if (!info.expectedStop) {
+          this.withChannelLock(info.channelId, () => this._finishStreamLocked(info))
+            .catch(error => logger.error('Failed to finalize exited stream', {
+              channelId: info.channelId, sessionId: info.sessionId, error: error.message
+            }));
+        }
+      });
+    });
+    child.once('error', error => {
+      info.spawnError = error;
+      info.state = 'failed';
+      logger.error('FFmpeg process error', { channelId: info.channelId, sessionId: info.sessionId, error: error.message });
+    });
+    child.once('exit', (code, signal) => {
+      info.exitSeen = true;
+      info.stoppedAt = Date.now();
+      if (!info.expectedStop) info.state = 'failed';
+      logger.info('FFmpeg process exited', { channelId: info.channelId, sessionId: info.sessionId, pid: child.pid, code, signal });
+    });
+  }
+
+  /** 已关闭会话的唯一收尾入口；只处理本会话文件，且绝不清理后继会话的 HLS。 */
+  async _finishStreamLocked(info) {
+    if (!info.closed) throw new Error('Cannot finalize a stream that is still writing');
+    if (info.finalizePromise) return info.finalizePromise;
+    info.finalizePromise = (async () => {
+      info.state = 'stopping';
+      try {
+        await info.segmentQueue;
+        if (info.isRecording) {
+          if (info.recordConfig.segmentEnabled) {
+            await this.renameFinalSegment(info.channelId, info.recordConfig, info.recordingPath, info.stoppedAt);
+          } else {
+            await this.renameRecordingWithActualEndTime(info.recordingPath, info.stoppedAt);
+          }
+        }
+      } catch (error) {
+        // 保留未成功封装的 temp，允许使用独立的新路径继续录制。
+        logger.error('Recording finalization failed; original files retained', {
+          channelId: info.channelId, sessionId: info.sessionId, error: error.message
+        });
+      } finally {
+        try {
+          if (this._ownsStream(info)) await this.cleanupChannelHLS(info.channelId, info);
+        } finally {
+          // 文件系统清理失败也不能让已关闭的会话永久占据状态；下次启动会重试目录清理。
+          if (this._ownsStream(info)) {
+            this.activeStreams.delete(info.channelId);
+            this.recordingChannels.delete(info.channelId);
+          }
+          info.state = 'stopped';
+        }
+      }
+    })();
+    return info.finalizePromise;
+  }
+
+  /** 在频道锁内停止并收尾当前会话；不清除录制意图，供重启和健康恢复复用。 */
+  async _stopStreamLocked(channelId) {
+    const info = this.activeStreams.get(channelId);
+    if (!info) return;
+    info.expectedStop = true;
+    info.state = 'stopping';
+    try {
+      await this.stopFFmpegProcess(channelId, info);
+      await this._finishStreamLocked(info);
+    } catch (error) {
+      // 有界停止失败后，迟到的 close 仍必须触发收尾，不能永远停在 stopping。
+      info.expectedStop = false;
+      if (!info.closed) info.state = 'failed';
+      else if (!info.finalizePromise) await this._finishStreamLocked(info);
+      throw error;
+    }
   }
 
   /**
@@ -295,61 +443,33 @@ class SimpleStreamManager {
    * @returns {Object} 观看结果
    */
   async startWatching(channelId, rtmpUrl, channelConfig = null) {
-    // 🛡️ 申请频道级串行锁，避免与 enableRecording 并发重复 spawn ffmpeg
-    const release = await this._acquireChannelLock(channelId);
-    // 🆕 为每个频道生成独立的滤镜（作为局部变量）
-    const videoFilter = this.getVideoFilter(channelConfig);
-    logger.info('Video filter for channel', { 
-      channelId, 
-      aspectRatio: channelConfig?.videoAspectRatio || 'original',
-      filter: videoFilter || 'none'
+    return this.withChannelLock(channelId, async () => {
+      this.channelHeartbeats.set(channelId, Date.now());
+      return this._startWatchingLocked(channelId, rtmpUrl, channelConfig);
     });
-    try {
-      // 检查频道是否已在处理
-      const existingChannel = this.activeStreams.get(channelId);
-      if (existingChannel) {
-        // 检查RTMP地址是否变更
-        if (existingChannel.rtmpUrl !== rtmpUrl) {
-          logger.info('RTMP URL changed for channel, restarting process', { 
-            channelId, 
-            oldRtmp: existingChannel.rtmpUrl, 
-            newRtmp: rtmpUrl 
-          });
-          
-          // RTMP地址变更，停止旧进程并启动新进程
-          await this.stopFFmpegProcess(channelId);
-          return await this.startNewStream(channelId, rtmpUrl, videoFilter);
-        }
-        
-        // RTMP地址未变更，检查视频比例是否变更
-        const oldFilter = existingChannel.videoFilter;
-        const newFilter = videoFilter;
-        if (oldFilter !== newFilter) {
-          logger.info('Video filter changed for channel, restarting process', { 
-            channelId, 
-            oldFilter: oldFilter || 'none', 
-            newFilter: newFilter || 'none'
-          });
-          
-          // 视频比例变更，停止旧进程并启动新进程
-          await this.stopFFmpegProcess(channelId);
-          return await this.startNewStream(channelId, rtmpUrl, videoFilter);
-        }
-        
-        logger.debug('Channel already active, returning existing stream', { channelId });
-        return existingChannel.hlsUrl;
-      }
-      
-      // 频道未在处理，启动新的FFmpeg进程
-      return await this.startNewStream(channelId, rtmpUrl, videoFilter);
-      
-    } catch (error) {
-      logger.error('Failed to start watching', { channelId, rtmpUrl, error: error.message });
-      throw error;
-    } finally {
-      // 🛡️ 释放频道锁
-      release();
+  }
+
+  /** 在锁内复用或切换观看进程；参数变更始终保留录制意图。 */
+  async _startWatchingLocked(channelId, rtmpUrl, channelConfig, forceRestart = false) {
+    if (this.destroying) throw new Error('Stream manager is shutting down');
+    const existing = this.activeStreams.get(channelId);
+    const videoFilter = this._resolveVideoFilter(channelConfig, existing || this.recordingConfigs.get(channelId));
+    const recordingConfig = this.recordingConfigs.get(channelId) || existing?.recordConfig;
+    if (existing && !forceRestart && !existing.exitSeen && !existing.closed &&
+        ['recording', 'running'].includes(existing.state) &&
+        existing.rtmpUrl === rtmpUrl && existing.videoFilter === videoFilter) {
+      return existing.hlsUrl;
     }
+    await this._stopStreamLocked(channelId);
+    if (recordingConfig) {
+      return this.startStreamWithRecording(channelId, rtmpUrl, recordingConfig, videoFilter);
+    }
+    return this.startNewStream(channelId, rtmpUrl, videoFilter);
+  }
+
+  /** 手动重启频道时同样保持录制模式，避免 stop/start 两个独立操作之间插入恢复任务。 */
+  async restartChannel(channelId, rtmpUrl, channelConfig = null) {
+    return this.withChannelLock(channelId, () => this._startWatchingLocked(channelId, rtmpUrl, channelConfig, true));
   }
 
   /**
@@ -360,29 +480,15 @@ class SimpleStreamManager {
    * @returns {string} HLS播放地址
    */
   async startNewStream(channelId, rtmpUrl, videoFilter = null) {
-    const processInfo = {
-      channelId: channelId,
-      rtmpUrl: rtmpUrl,
-      hlsUrl: `${this.vpsBaseDomain}/hls/${channelId}/playlist.m3u8`,
-      startTime: Date.now(),
-      process: null,
-      videoFilter: videoFilter  // 🆕 保存当前滤镜
-    };
-    
+    await this.cleanupChannelHLS(channelId);
+    const info = this._registerStream(channelId, rtmpUrl, videoFilter);
     try {
-      // 启动FFmpeg进程
-      processInfo.process = await this.spawnFFmpegProcess(channelId, rtmpUrl, videoFilter);
-      
-      // 保存进程信息
-      this.activeStreams.set(channelId, processInfo);
-      
-      // 设置心跳
-      this.channelHeartbeats.set(channelId, Date.now());
-      
-      logger.info('Started new FFmpeg process', { channelId, rtmpUrl });
-      return processInfo.hlsUrl;
+      await this.spawnFFmpegProcess(channelId, rtmpUrl, videoFilter, info);
+      info.state = 'running';
+      logger.info('Started new FFmpeg process', { channelId, sessionId: info.sessionId });
+      return info.hlsUrl;
     } catch (error) {
-      logger.error('Failed to start FFmpeg process', { channelId, rtmpUrl, error: error.message });
+      await this._stopStreamLocked(channelId);
       throw error;
     }
   }
@@ -415,8 +521,10 @@ class SimpleStreamManager {
    * 定期清理超时的频道
    */
   startCleanupTimer() {
-    setInterval(() => {
-      this.cleanupIdleChannels();
+    if (this.destroying) return;
+    this.cleanupTimer = setInterval(() => {
+      if (this.destroying) return;
+      this.cleanupIdleChannels().catch(error => logger.error('Idle cleanup failed', { error: error.message }));
       this.cleanupStaleSessions(); // 🆕 同时清理过期会话
     }, this.CLEANUP_INTERVAL);
   }
@@ -456,7 +564,7 @@ class SimpleStreamManager {
       }
       
       // 🆕 跳过录制频道
-      if (this.recordingChannels.has(channelId)) {
+      if (this.recordingConfigs.has(channelId) || this.isChannelTransitioning(channelId)) {
         continue;
       }
       
@@ -466,8 +574,7 @@ class SimpleStreamManager {
           idleTime: now - lastHeartbeat 
         });
         
-        await this.stopChannel(channelId);
-        this.channelHeartbeats.delete(channelId);
+        await this.stopChannel(channelId, { onlyIfIdle: true });
       }
     }
   }
@@ -476,58 +583,48 @@ class SimpleStreamManager {
    * 停止频道转码进程
    * @param {string} channelId - 频道ID
    */
-  async stopChannel(channelId) {
-    const processInfo = this.activeStreams.get(channelId);
-    if (!processInfo) return;
-    
-    try {
-      // 简化逻辑：直接停止FFmpeg进程并清理
-      await this.stopFFmpegProcess(channelId);
-      
-      // 清理HLS文件
-      await this.cleanupChannelHLS(channelId);
-      
-      // 移除频道映射
-      this.activeStreams.delete(channelId);
-      
-      logger.info('Channel stopped successfully', { channelId });
-    } catch (error) {
-      logger.error('Failed to stop channel', { channelId, error: error.message });
-    }
+  async stopChannel(channelId, options = {}) {
+    return this.withChannelLock(channelId, async () => {
+      // 空闲清理必须拿锁后复核，防止排队期间刚启动的录制被过期检查停止。
+      if (options.onlyIfIdle && (this.recordingConfigs.has(channelId) || this.preloadChannels.has(channelId) ||
+          Date.now() - (this.channelHeartbeats.get(channelId) || 0) <= this.HEARTBEAT_TIMEOUT)) return;
+      this.recordingConfigs.delete(channelId);
+      await this._stopStreamLocked(channelId);
+      this.channelHeartbeats.delete(channelId);
+      this.recordingChannels.delete(channelId);
+    });
   }
 
   /**
    * 停止FFmpeg进程
    * @param {string} channelId - 频道ID
    */
-  async stopFFmpegProcess(channelId) {
-    const processInfo = this.activeStreams.get(channelId);
-    if (!processInfo || !processInfo.process) return;
-    
-    // ✅ 如果进程正在录制，清理录制标记
-    if (processInfo.isRecording) {
-      logger.info('Cleaning up recording markers on process stop', { channelId });
-      this.recordingChannels.delete(channelId);
-      this.recordingConfigs.delete(channelId);
+  async stopFFmpegProcess(channelId, info = this.activeStreams.get(channelId)) {
+    if (!info || info.closed) return;
+    if (!info.process) {
+      info.closed = true;
+      info.exitSeen = true;
+      info.stoppedAt = Date.now();
+      return;
     }
-    
-    return new Promise((resolve) => {
-      processInfo.process.on('exit', () => {
-        logger.debug('FFmpeg process exited', { channelId });
-        resolve();
-      });
-      
-      // 发送终止信号
-      processInfo.process.kill('SIGTERM');
-      
-      // 5秒后强制杀死
-      setTimeout(() => {
-        if (!processInfo.process.killed) {
-          processInfo.process.kill('SIGKILL');
-          logger.warn('FFmpeg process force killed', { channelId });
-        }
-        resolve();
+    // ChildProcess.killed 仅表示信号已发送，不能用作进程已经退出的依据。
+    await new Promise((resolve, reject) => {
+      let forceTimer;
+      let deadlineTimer;
+      let settled = false;
+      const finish = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(forceTimer);
+        clearTimeout(deadlineTimer);
+        if (error) reject(error); else resolve();
+      };
+      info.closePromise.then(() => finish(), finish);
+      forceTimer = setTimeout(() => {
+        if (!info.closed) info.process.kill('SIGKILL');
       }, 5000);
+      deadlineTimer = setTimeout(() => finish(new Error('FFmpeg did not close after termination')), 10000);
+      if (!info.closed) info.process.kill('SIGTERM');
     });
   }
 
@@ -538,7 +635,7 @@ class SimpleStreamManager {
    * @param {string|null} videoFilter - 视频滤镜
    * @returns {Object} FFmpeg进程对象
    */
-  async spawnFFmpegProcess(channelId, rtmpUrl, videoFilter = null) {
+  async spawnFFmpegProcess(channelId, rtmpUrl, videoFilter = null, info) {
     // 创建输出目录
     const outputDir = path.join(this.hlsOutputDir, channelId);
     if (!fs.existsSync(outputDir)) {
@@ -618,22 +715,8 @@ class SimpleStreamManager {
       env: env  // 添加环境变量支持
     });
 
-    // 设置进程事件处理
-    ffmpegProcess.on('error', (error) => {
-      logger.error('FFmpeg process error', { channelId, error: error.message });
-      this.activeStreams.delete(channelId);
-    });
+    this._attachProcessLifecycle(info, ffmpegProcess);
 
-    ffmpegProcess.on('exit', (code, signal) => {
-      logger.info('FFmpeg process exited', { channelId, code, signal });
-      this.activeStreams.delete(channelId);
-      this.channelHeartbeats.delete(channelId);
-      this.cleanupChannelHLS(channelId).catch((error) => {
-        logger.warn('Failed to cleanup HLS after FFmpeg exit', { channelId, error: error.message });
-      });
-    });
-
-    // 监听stderr输出
     ffmpegProcess.stderr.on('data', (data) => {
       const output = data.toString();
       // 记录所有stderr输出，不只是错误
@@ -644,7 +727,7 @@ class SimpleStreamManager {
     });
 
     // 等待流准备就绪 - 使用30秒超时，配合简化的FFmpeg配置
-    await this.waitForStreamReady(channelId, 30000);
+    await this.waitForStreamReady(channelId, 30000, info);
 
     logger.info('FFmpeg process started successfully', { channelId, pid: ffmpegProcess.pid });
     return ffmpegProcess;
@@ -654,19 +737,13 @@ class SimpleStreamManager {
    * 清理频道HLS文件
    * @param {string} channelId - 频道ID
    */
-  async cleanupChannelHLS(channelId) {
-    try {
-      const outputDir = path.join(this.hlsOutputDir, channelId);
-      if (fs.existsSync(outputDir)) {
-        const files = fs.readdirSync(outputDir);
-        for (const file of files) {
-          fs.unlinkSync(path.join(outputDir, file));
-        }
-        fs.rmdirSync(outputDir);
-        logger.debug('Cleaned up HLS files', { channelId });
-      }
-    } catch (error) {
-      logger.warn('Failed to cleanup HLS files', { channelId, error: error.message });
+  async cleanupChannelHLS(channelId, owner = null) {
+    const current = this.activeStreams.get(channelId);
+    if (current && (current !== owner || !current.closed)) return;
+    const outputDir = path.join(this.hlsOutputDir, channelId);
+    if (fs.existsSync(outputDir)) {
+      for (const file of fs.readdirSync(outputDir)) fs.unlinkSync(path.join(outputDir, file));
+      fs.rmdirSync(outputDir);
     }
   }
 
@@ -838,93 +915,40 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    * @param {number} timeout - 超时时间（毫秒）
    */
-  async waitForStreamReady(channelId, timeout = 30000) {
+  async waitForStreamReady(channelId, timeout = 30000, info = this.activeStreams.get(channelId)) {
     const outputDir = path.join(this.hlsOutputDir, channelId);
     const playlistFile = path.join(outputDir, 'playlist.m3u8');
-
-    const startTime = Date.now();
-
-    logger.info('Waiting for stream to be ready', { channelId, timeout });
-
-    while (Date.now() - startTime < timeout) {
-      if (fs.existsSync(playlistFile)) {
-        try {
-          const content = fs.readFileSync(playlistFile, 'utf8');
-
-          // 🔥 优化：检查playlist文件是否包含有效的HLS内容
-          if (content.includes('#EXTM3U') && content.includes('#EXT-X-VERSION')) {
-            logger.info('Stream ready - valid HLS playlist detected', {
-              channelId,
-              contentLength: content.length,
-              elapsed: Date.now() - startTime
-            });
-            return;
-          }
-
-          // 检查是否有分片文件引用
-          const segments = content.match(/segment\d+\.ts/g) || [];
-
-          if (segments.length > 0) {
-            // 检查至少一个分片文件存在
-            const firstSegment = segments[0];
-            const segmentPath = path.join(outputDir, firstSegment);
-
-            if (fs.existsSync(segmentPath)) {
-              const stats = fs.statSync(segmentPath);
-              const segmentSize = stats.size;
-
-              // 分片文件应该有合理的大小（至少1KB）
-              if (segmentSize > 1024) {
-                logger.info('Stream ready with valid segments', {
-                  channelId,
-                  segmentCount: segments.length,
-                  firstSegmentSize: segmentSize,
-                  elapsed: Date.now() - startTime
-                });
-                return;
-              }
-            }
-          }
-
-          // 🔥 新增：如果playlist存在但没有分片，检查是否刚开始生成
-          if (content.includes('#EXTM3U') && content.length > 20) {
-            logger.info('Stream starting - playlist exists, waiting for segments', {
-              channelId,
-              elapsed: Date.now() - startTime
-            });
-          }
-
-        } catch (error) {
-          logger.warn('Error reading playlist file', { channelId, error: error.message });
-        }
+    const started = Date.now();
+    let previousRecording = null;
+    while (Date.now() - started < timeout) {
+      if (this.destroying || !info || !this._ownsStream(info) || info.exitSeen || info.closed || info.spawnError) {
+        throw new Error('FFmpeg exited or session changed before outputs became ready');
       }
-
-      // 🔥 优化：更频繁的检查，更快响应
+      let hlsReady = false;
+      try {
+        const playlistStat = fs.statSync(playlistFile);
+        const content = fs.readFileSync(playlistFile, 'utf8');
+        const segments = content.match(/segment\d+\.ts/g) || [];
+        hlsReady = playlistStat.mtimeMs >= info.spawnedAt && content.includes('#EXTM3U') &&
+          segments.some(name => {
+            const stat = fs.statSync(path.join(outputDir, name));
+            return stat.size > 1024 && stat.mtimeMs >= info.spawnedAt;
+          });
+      } catch { /* 写入过程中播放列表或分片尚未就绪，下一轮继续检查。 */ }
+      let recordingReady = !info.isRecording;
+      if (info.isRecording) {
+        const current = this.getRecordingFileFreshness(info.recordingPath, Date.now(), timeout);
+        if (current?.exists && current.size > 0 && Date.parse(current.mtime) >= info.spawnedAt) {
+          recordingReady = previousRecording && current.path === previousRecording.path && current.size > previousRecording.size;
+          previousRecording = current;
+        }
+        // 短分段可能一直缓冲到关闭，轮询看不到单文件增长；本会话已校验的完整视频段同样能证明录像产出。
+        recordingReady = recordingReady || info.lastVerifiedRecordingAt >= info.spawnedAt;
+      }
+      if (hlsReady && recordingReady) return;
       await new Promise(resolve => setTimeout(resolve, 200));
     }
-
-    // 🔥 增强错误信息：提供更多诊断信息
-    const diagnostics = {
-      playlistExists: fs.existsSync(playlistFile),
-      outputDirExists: fs.existsSync(outputDir),
-      outputDirContents: []
-    };
-
-    if (diagnostics.outputDirExists) {
-      try {
-        diagnostics.outputDirContents = fs.readdirSync(outputDir);
-      } catch (e) {
-        diagnostics.outputDirError = e.message;
-      }
-    }
-
-    logger.error('Stream failed to be ready within timeout', {
-      channelId,
-      timeout,
-      diagnostics
-    });
-
-    throw new Error(`Stream not ready within ${timeout}ms - diagnostics: ${JSON.stringify(diagnostics)}`);
+    throw new Error(`Stream not ready within ${timeout}ms: fresh HLS and recording growth required`);
   }
 
   /**
@@ -944,23 +968,14 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    */
   async stopWatching(channelId) {
-    logger.info('Stopping watching channel', { channelId });
-    
-    // 停止心跳
-    this.channelHeartbeats.delete(channelId);
-    
-    // 停止频道进程
-    await this.stopChannel(channelId);
-    
-    return {
-      status: 'success',
-      message: 'Stopped watching successfully',
-      data: { channelId }
-    };
+    return this.withChannelLock(channelId, async () => {
+      this.channelHeartbeats.delete(channelId);
+      if (!this.recordingConfigs.has(channelId) && !this.preloadChannels.has(channelId)) {
+        await this._stopStreamLocked(channelId);
+      }
+      return { status: 'success', data: { channelId } };
+    });
   }
-
-
-  // ===== 🆕 预加载功能 =====
 
   /**
    * 启动预加载
@@ -968,58 +983,16 @@ class SimpleStreamManager {
    * @param {string} rtmpUrl - RTMP源地址
    */
   async startPreload(channelId, rtmpUrl) {
-    try {
-      logger.info('Starting preload', { channelId });
-      
-      // 添加到预加载集合
+    return this.withChannelLock(channelId, async () => {
       this.preloadChannels.add(channelId);
-      
-      // 检查是否已经在转码
-      if (this.activeStreams.has(channelId)) {
-        const streamInfo = this.activeStreams.get(channelId);
-        
-        // 如果RTMP URL变了，需要重启
-        if (streamInfo.rtmpUrl !== rtmpUrl) {
-          logger.info('RTMP URL changed, restarting preload', { 
-            channelId, 
-            oldUrl: streamInfo.rtmpUrl, 
-            newUrl: rtmpUrl 
-          });
-          await this.stopChannel(channelId);
-        } else {
-          logger.info('Channel already transcoding, skip', { channelId });
-          return {
-            status: 'success',
-            message: 'Channel already transcoding',
-            data: { channelId, isPreload: true }
-          };
-        }
+      try {
+        await this._startWatchingLocked(channelId, rtmpUrl, null);
+        return { status: 'success', data: { channelId, isPreload: true } };
+      } catch (error) {
+        this.preloadChannels.delete(channelId);
+        throw error;
       }
-      
-      // 启动转码（复用startWatching的逻辑）
-      const result = await this.startWatching(channelId, rtmpUrl);
-      
-      // 更新心跳时间（预加载不需要心跳，但设置一个很大的值防止被清理）
-      this.channelHeartbeats.set(channelId, Date.now());
-      
-      logger.info('Preload started successfully', { channelId });
-      
-      return {
-        status: 'success',
-        message: 'Preload started',
-        data: { channelId, isPreload: true }
-      };
-    } catch (error) {
-      logger.error('Failed to start preload', { 
-        channelId, 
-        error: error.message 
-      });
-      
-      // 失败时从预加载集合中移除
-      this.preloadChannels.delete(channelId);
-      
-      throw error;
-    }
+    });
   }
 
   /**
@@ -1027,48 +1000,13 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    */
   async stopPreload(channelId) {
-    try {
-      logger.info('Stopping preload', { channelId });
-      
-      // 从预加载集合中移除
+    return this.withChannelLock(channelId, async () => {
       this.preloadChannels.delete(channelId);
-      
-      // 🔥 先移除预加载的心跳记录（避免误判为有观看者）
-      this.channelHeartbeats.delete(channelId);
-      
-      // ✅ 检查是否还在录制或有真实观看者
-      const isRecording = this.recordingChannels.has(channelId);
-      const hasViewers = this.channelHeartbeats.has(channelId);
-      
-      if (isRecording) {
-        // 还在录制，保留进程
-        logger.info('Preload stopped but recording is active, keeping process', { 
-          channelId,
-          hasViewers
-        });
-      } else if (hasViewers) {
-        // 有观看者但不录制，保留进程（普通HLS）
-        logger.info('Preload stopped but has viewers, keeping process', { channelId });
-      } else {
-        // 既不录制也无观看者，停止进程
-        logger.info('No recording or viewers, stopping channel', { channelId });
-        await this.stopChannel(channelId);
-      }
-      
-      logger.info('Preload stopped successfully', { channelId });
-      
-      return {
-        status: 'success',
-        message: 'Preload stopped',
-        data: { channelId }
-      };
-    } catch (error) {
-      logger.error('Failed to stop preload', { 
-        channelId, 
-        error: error.message 
-      });
-      throw error;
-    }
+      const lastHeartbeat = this.channelHeartbeats.get(channelId);
+      const hasViewers = lastHeartbeat && Date.now() - lastHeartbeat <= this.HEARTBEAT_TIMEOUT;
+      if (!this.recordingConfigs.has(channelId) && !hasViewers) await this._stopStreamLocked(channelId);
+      return { status: 'success', data: { channelId } };
+    });
   }
 
   /**
@@ -1106,7 +1044,8 @@ class SimpleStreamManager {
       const response = await fetch(`${this.workersApiUrl}/api/channels/${channelId}`, {
         headers: {
           'X-API-Key': apiKey
-        }
+        },
+        signal: AbortSignal.timeout(10000)
       });
       
       if (!response.ok) {
@@ -1126,101 +1065,63 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    * @param {Object} recordConfig - 录制配置（包含channelName）
    */
-  async enableRecording(channelId, recordConfig) {
-    // 🛡️ 申请频道级串行锁，避免与 startWatching 并发重复 spawn ffmpeg
-    const release = await this._acquireChannelLock(channelId);
-    try {
-      logger.info('Enabling recording', { channelId, recordConfig });
+  async enableRecording(channelId, recordConfig, options = {}) {
+    return this.withChannelLock(channelId, async () => {
+      if (options.shouldStart && !(await options.shouldStart())) return { skipped: true };
+      return this._enableRecordingLocked(channelId, recordConfig, { shouldRecover: options.shouldStart });
+    });
+  }
 
-      // 🛡️ 防重复录制：启动前先清理本频道的孤儿 ffmpeg 进程
-      // （可能来自上次服务重启后未被 SIGTERM 成功回收的旧进程）
-      await this.killOrphanFfmpegForChannel(channelId);
-      
-      // 🆕 获取频道配置（包含videoAspectRatio）
-      let channelConfig = null;
-      try {
-        const axios = require('axios');
-        const config = require('../../config');
-        const configUrl = `${config.workersApiUrl}/api/channel/${channelId}/config`;
-        const response = await axios.get(configUrl, { timeout: 3000 });
-        if (response.data.status === 'success') {
-          channelConfig = response.data.data;
-          logger.info('Fetched channel config for recording', { 
-            channelId, 
-            channelName: channelConfig.channelName,
-            videoAspectRatio: channelConfig.videoAspectRatio 
-          });
-        }
-      } catch (error) {
-        logger.warn('Failed to fetch channel config for recording, using defaults', { 
-          channelId, 
-          error: error.message 
-        });
-      }
-      
-      // 生成视频滤镜
-      const videoFilter = this.getVideoFilter(channelConfig);
-      const resolvedChannelName = this.resolveRecordingChannelName(channelId, recordConfig, channelConfig);
-      const normalizedRecordConfig = {
-        ...recordConfig,
-        channelName: resolvedChannelName
-      };
-      
-      // 检查是否已经在录制中
-      const existing = this.activeStreams.get(channelId);
-      if (existing && existing.isRecording) {
-        logger.info('Recording already active for channel', { 
-          channelId,
-          recordingPath: existing.recordingPath 
-        });
-        
-        // 更新配置但不重启进程
-        this.recordingConfigs.set(channelId, {
-          ...normalizedRecordConfig,
-          sessionStartTime: this.recordingConfigs.get(channelId)?.sessionStartTime || Date.now()
-        });
-        this.recordingChannels.add(channelId);
-        
-        return {
-          status: 'success',
-          message: 'Recording already active',
-          data: { channelId, isRecording: true, alreadyActive: true }
-        };
-      }
-      
-      // 保存录制配置
-      const configWithSession = {
-        ...normalizedRecordConfig,
-        sessionStartTime: Date.now()  // 🆕 记录会话开始时间
-      };
-      this.recordingConfigs.set(channelId, configWithSession);
-      // ❌ 不在这里手动添加标记，startStreamWithRecording会自动添加
-      
-      if (existing) {
-        // 已有进程但未录制，需要重启以添加录制输出
-        logger.info('Restarting stream with recording', { channelId });
-        await this.stopFFmpegProcess(channelId);
-        await this.startStreamWithRecording(channelId, existing.rtmpUrl, configWithSession, videoFilter);
-      } else {
-        // 无进程，启动新进程（包含录制）
-        const rtmpUrl = recordConfig.rtmpUrl || await this.fetchChannelRtmpUrl(channelId);
-        await this.startStreamWithRecording(channelId, rtmpUrl, configWithSession, videoFilter);
-      }
-      
-      return {
-        status: 'success',
-        message: 'Recording enabled',
-        data: { channelId, isRecording: true }
-      };
-    } catch (error) {
-      logger.error('Failed to enable recording', { channelId, error: error.message });
-      this.recordingChannels.delete(channelId);
-      this.recordingConfigs.delete(channelId);
-      throw error;
-    } finally {
-      // 🛡️ 释放频道锁
-      release();
+  /** 锁内启用录制；配置未知时沿用现有参数，并保证直接切换到带录制的进程。 */
+  async _enableRecordingLocked(channelId, recordConfig, options = {}) {
+    if (this.destroying) throw new Error('Stream manager is shutting down');
+    const existing = this.activeStreams.get(channelId);
+    if (!options.forceRestart && existing?.state === 'recording' && !existing.exitSeen) {
+      this.recordingConfigs.set(channelId, {
+        ...existing.recordConfig, ...recordConfig,
+        sessionStartTime: existing.recordConfig.sessionStartTime,
+        videoFilter: existing.videoFilter, rtmpUrl: existing.rtmpUrl
+      });
+      return { status: 'success', data: { channelId, isRecording: true, alreadyActive: true } };
     }
+    let channelConfig = null;
+    try {
+      const response = await require('axios').get(`${this.workersApiUrl}/api/channel/${channelId}/config`, { timeout: 3000 });
+      if (response.data?.status === 'success') channelConfig = response.data.data;
+    } catch (error) {
+      logger.warn('Recording channel config unavailable; preserving current parameters', {
+        channelId, code: error.code, httpStatus: error.response?.status
+      });
+    }
+    const previousConfig = this.recordingConfigs.get(channelId);
+    const videoFilter = this._resolveVideoFilter(channelConfig, existing || previousConfig);
+    const rtmpUrl = recordConfig.rtmpUrl || existing?.rtmpUrl || await this.fetchChannelRtmpUrl(channelId);
+    if (options.shouldRecover && !(await options.shouldRecover())) return { skipped: true };
+    const normalized = {
+      ...recordConfig, rtmpUrl, videoFilter,
+      channelName: this.resolveRecordingChannelName(channelId, recordConfig, channelConfig)
+    };
+    this.recordingConfigs.set(channelId, normalized);
+    await this._stopStreamLocked(channelId);
+    // 停止/封装可能耗时，避免跨过录制结束时刻后再次启动。
+    if (options.shouldRecover && !(await options.shouldRecover())) {
+      this.recordingConfigs.delete(channelId);
+      return { skipped: true };
+    }
+    const started = await this.startStreamWithRecording(channelId, rtmpUrl, normalized, videoFilter, options.shouldRecover);
+    if (!started) return { skipped: true };
+    return { status: 'success', data: { channelId, isRecording: true } };
+  }
+
+  /** 健康恢复在同一锁内复核状态并直接重建录制，不经过纯观看启动。 */
+  async recoverRecording(channelId, recordConfig, options = {}) {
+    return this.withChannelLock(channelId, async () => {
+      if (this.destroying || (options.shouldRecover && !(await options.shouldRecover()))) return { skipped: true };
+      const current = this.activeStreams.get(channelId);
+      if (current?.state === 'recording' && !current.exitSeen &&
+          this.getRecordingOutputHealth(channelId, options).healthy) return { skipped: true };
+      return this._enableRecordingLocked(channelId, recordConfig, { ...options, forceRestart: true });
+    });
   }
 
   /**
@@ -1228,113 +1129,21 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    */
   async disableRecording(channelId) {
-    try {
-      logger.info('Disabling recording', { channelId });
-      
+    return this.withChannelLock(channelId, async () => {
       const existing = this.activeStreams.get(channelId);
-      const oldRecordingPath = existing?.recordingPath;
-      
-      // 先获取配置（重命名文件需要）
-      const recordConfig = this.recordingConfigs.get(channelId);
-      
-      // ✅ 步骤1: 无论进程状态如何，都尝试重命名temp文件
-      if (recordConfig) {
-        logger.info('Attempting to rename temp files before cleanup', { 
-          channelId,
-          segmentEnabled: recordConfig.segmentEnabled,
-          hasProcess: !!existing
-        });
-        
-        try {
-          if (recordConfig.segmentEnabled) {
-            // 分段模式：renameFinalSegment会扫描所有temp文件
-            await this.renameFinalSegment(channelId, recordConfig);
-          } else if (oldRecordingPath) {
-            // 单文件模式：重命名为实际结束时间
-            await this.renameRecordingWithActualEndTime(oldRecordingPath);
-          }
-        } catch (renameError) {
-          logger.error('Failed to rename temp files, continuing cleanup', { 
-            channelId, 
-            error: renameError.message 
-          });
-        }
-      }
-      
-      // ✅ 步骤2: 清理录制标记
-      this.recordingChannels.delete(channelId);
       this.recordingConfigs.delete(channelId);
-      logger.info('Recording markers cleared', { channelId });
-      
-      // ✅ 步骤3: 如果进程存在且正在录制，停止进程
-      if (existing && existing.isRecording) {
-        const hasViewers = this.channelHeartbeats.has(channelId);
-        const isPreload = this.preloadChannels.has(channelId);
-        
-        if (hasViewers || isPreload) {
-          // 有观看者或预加载，重启进程移除录制
-          logger.info('Restarting stream without recording', { 
-            channelId,
-            hasViewers,
-            isPreload 
-          });
-          await this.stopFFmpegProcess(channelId);
-          await this.startWatching(channelId, existing.rtmpUrl);
-        } else {
-          // 无观看者和预加载，直接停止
-          logger.info('No viewers or preload, stopping channel', { channelId });
-          await this.stopChannel(channelId);
+      if (existing?.isRecording) {
+        // 必须先退出并关闭输出，再处理本会话文件；纯直播只在正常停录后按需恢复。
+        await this._stopStreamLocked(channelId);
+        const lastHeartbeat = this.channelHeartbeats.get(channelId);
+        const hasViewers = lastHeartbeat && Date.now() - lastHeartbeat <= this.HEARTBEAT_TIMEOUT;
+        if (!this.destroying && (hasViewers || this.preloadChannels.has(channelId))) {
+          await this.startNewStream(channelId, existing.rtmpUrl, existing.videoFilter);
         }
-      } else {
-        logger.info('Process not recording or not exists, cleanup completed', { 
-          channelId,
-          hasProcess: !!existing,
-          isRecording: existing?.isRecording || false
-        });
       }
-      
-      return {
-        status: 'success',
-        message: 'Recording disabled',
-        data: { channelId }
-      };
-    } catch (error) {
-      logger.error('Failed to disable recording', { channelId, error: error.message });
-      throw error;
-    }
-  }
-
-  /**
-   * 处理录制进程异常退出后的文件收尾
-   * 清理录制状态并尽量把当前录制文件改成可识别的正式文件名
-   * @param {string} channelId - 频道ID
-   * @param {Object} recordConfig - 录制配置
-   * @param {string} recordingPath - 当前录制路径
-   * @param {number|null} code - 退出码
-   * @param {string|null} signal - 退出信号
-   */
-  async handleUnexpectedRecordingExit(channelId, recordConfig, recordingPath, code, signal) {
-    try {
-      logger.warn('Handling unexpected recording exit', {
-        channelId,
-        code,
-        signal,
-        recordingPath,
-        segmentEnabled: !!recordConfig?.segmentEnabled
-      });
-
-      if (recordConfig?.segmentEnabled) {
-        await this.renameFinalSegment(channelId, recordConfig);
-      } else if (recordingPath) {
-        await this.renameRecordingWithActualEndTime(recordingPath);
-      }
-    } catch (error) {
-      logger.error('Failed to finalize recording after unexpected exit', {
-        channelId,
-        error: error.message,
-        stack: error.stack
-      });
-    }
+      this.recordingChannels.delete(channelId);
+      return { status: 'success', data: { channelId, isRecording: false } };
+    });
   }
 
   /**
@@ -1344,43 +1153,49 @@ class SimpleStreamManager {
    * @param {Object} recordConfig - 录制配置
    * @param {string|null} videoFilter - 视频滤镜
    */
-  async startStreamWithRecording(channelId, rtmpUrl, recordConfig, videoFilter = null) {
-    const recordingPath = this.generateRecordingPath(channelId, recordConfig.channelName, recordConfig);
-    
-    const processInfo = {
-      channelId: channelId,
-      rtmpUrl: rtmpUrl,
-      hlsUrl: `${this.vpsBaseDomain}/hls/${channelId}/playlist.m3u8`,
-      startTime: Date.now(),
-      process: null,
-      isRecording: true,
-      recordingPath: recordingPath,
-      videoFilter: videoFilter  // 🆕 保存视频滤镜
-    };
-    
+  async startStreamWithRecording(channelId, rtmpUrl, recordConfig, videoFilter = null, shouldStart) {
+    // 文件名仍保持原有秒级格式；同秒重启等待下一秒，避免 -y 覆盖上一会话文件。
+    const sessionConfig = await this._createRecordingSession(channelId, { ...recordConfig, rtmpUrl, videoFilter });
+    if (shouldStart && !(await shouldStart())) {
+      this.recordingConfigs.delete(channelId);
+      return null;
+    }
+    const recordingPath = this.generateRecordingPath(channelId, sessionConfig.channelName, sessionConfig);
+    await this.cleanupChannelHLS(channelId);
+    const info = this._registerStream(channelId, rtmpUrl, videoFilter, {
+      isRecording: true, recordingPath, recordConfig: sessionConfig
+    });
+    this.recordingConfigs.set(channelId, sessionConfig);
     try {
-      // 启动FFmpeg进程（包含录制）🆕 传递完整配置
-      processInfo.process = await this.spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath, recordConfig, videoFilter);
-      
-      // 保存进程信息
-      this.activeStreams.set(channelId, processInfo);
-      
-      // ✅ 添加录制标记（与进程状态绑定）
-      this.recordingChannels.add(channelId);
-      
-      // 设置心跳
-      this.channelHeartbeats.set(channelId, Date.now());
-      
-      logger.info('Started stream with recording', { 
-        channelId, 
-        recordingPath,
-        segmentEnabled: recordConfig.segmentEnabled,
-        segmentDuration: recordConfig.segmentDuration
-      });
-      return processInfo.hlsUrl;
+      await this.spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath, sessionConfig, videoFilter, info);
+      info.state = 'recording';
+      logger.info('Started stream with recording', { channelId, sessionId: info.sessionId, recordingPath });
+      return info.hlsUrl;
     } catch (error) {
-      logger.error('Failed to start stream with recording', { channelId, error: error.message });
+      await this._stopStreamLocked(channelId);
       throw error;
+    }
+  }
+
+  /** 为新会话固定唯一取时；会话配置保持不变，供分段回调和退出收尾共同使用。 */
+  async _createRecordingSession(channelId, recordConfig) {
+    while (true) {
+      if (this.destroying) throw new Error('Stream manager is shutting down');
+      const sessionStartTime = Date.now();
+      const sessionSecond = Math.floor(sessionStartTime / 1000);
+      const candidate = {
+        ...recordConfig, sessionStartTime,
+        segmentDuration: Number(recordConfig.segmentDuration) > 0 ? Number(recordConfig.segmentDuration) : 60
+      };
+      const filePath = this.generateRecordingPath(channelId, candidate.channelName, candidate);
+      const prefix = path.basename(filePath).replace(/_(?:temp_(?:%03d|\d+)|to_\d{6})\.mp4$/, '_');
+      const dir = path.dirname(filePath);
+      const collision = fs.existsSync(dir) && fs.readdirSync(dir).some(name => name.startsWith(prefix));
+      if (this.lastRecordingStarts.get(channelId) !== sessionSecond && !collision) {
+        this.lastRecordingStarts.set(channelId, sessionSecond);
+        return candidate;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000 - Date.now() % 1000 + 1));
     }
   }
 
@@ -1392,7 +1207,7 @@ class SimpleStreamManager {
    * @param {Object} recordConfig - 录制配置（含分段设置）🆕
    * @param {string|null} videoFilter - 视频滤镜
    */
-  async spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath, recordConfig, videoFilter = null) {
+  async spawnFFmpegWithRecording(channelId, rtmpUrl, recordingPath, recordConfig, videoFilter = null, info) {
     const outputDir = path.join(this.hlsOutputDir, channelId);
     const recordDir = path.dirname(recordingPath);
     
@@ -1468,7 +1283,8 @@ class SimpleStreamManager {
         '-f', 'segment',
         '-segment_time', segmentSeconds.toString(),
         '-segment_format', 'mp4',
-        '-segment_format_options', 'movflags=+frag_keyframe+empty_moov+default_base_moof',
+        // 及时落盘已生成的片段，避免低码率录像长期仅有文件头，无法验证产出和停流。
+        '-segment_format_options', 'movflags=+frag_keyframe+empty_moov+default_base_moof:flush_packets=1',
         '-reset_timestamps', '1',
         '-y',
         recordingPath
@@ -1482,6 +1298,7 @@ class SimpleStreamManager {
       ffmpegArgs.push(
         '-f', 'mp4',
         '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
+        '-flush_packets', '1',
         '-y',
         recordingPath
       );
@@ -1523,33 +1340,7 @@ class SimpleStreamManager {
       env: env
     });
 
-    // 设置进程事件处理
-    ffmpegProcess.on('error', (error) => {
-      logger.error('FFmpeg process error', { channelId, error: error.message });
-      this.activeStreams.delete(channelId);
-    });
-
-    ffmpegProcess.on('exit', (code, signal) => {
-      logger.info('FFmpeg process exited', { channelId, code, signal });
-      this.activeStreams.delete(channelId);
-      this.channelHeartbeats.delete(channelId);
-      this.recordingChannels.delete(channelId);
-      this.recordingConfigs.delete(channelId);
-
-      if (recordConfig) {
-        setImmediate(() => {
-          this.handleUnexpectedRecordingExit(channelId, recordConfig, recordingPath, code, signal)
-            .then(() => this.cleanupChannelHLS(channelId))
-            .catch((error) => {
-              logger.error('Unexpected recording exit cleanup failed', {
-                channelId,
-                error: error.message,
-                stack: error.stack
-              });
-            });
-        });
-      }
-    });
+    this._attachProcessLifecycle(info, ffmpegProcess);
 
     ffmpegProcess.stderr.on('data', (data) => {
       const output = data.toString();
@@ -1558,41 +1349,30 @@ class SimpleStreamManager {
         logger.error('FFmpeg error detected', { channelId, output: output.trim() });
       }
       
-      // 🆕 分段模式：监听segment切换，实时重命名已完成的分段
-      if (recordConfig && recordConfig.segmentEnabled) {
-        // 匹配FFmpeg输出: Opening 'xxx_temp_001.mp4' for writing
-        const match = output.match(/Opening '.*_temp_(\d+)\.mp4' for writing/);
-        if (match) {
-          const currentIndex = parseInt(match[1]);
-          
-          // 当检测到新segment开始时，说明上一个segment已完成
-          if (currentIndex > 0) {
-            const completedIndex = currentIndex - 1;
-            
-            logger.info('Segment switch detected, scheduling rename', { 
-              channelId, 
-              completedIndex,
-              currentIndex
-            });
-            
-            // 等待2秒后重命名（确保FFmpeg完成文件写入）
-            setTimeout(() => {
-              this.renameCompletedSegment(channelId, completedIndex, recordConfig)
-                .catch(err => {
-                  logger.error('Failed to rename completed segment', {
-                    channelId,
-                    completedIndex,
-                    error: err.message
-                  });
-                });
-            }, 2000);
+      if (recordConfig.segmentEnabled) {
+        info.stderrBuffer = ((info.stderrBuffer || '') + output).slice(-16384);
+        const matches = info.stderrBuffer.matchAll(/Opening '([^'\r\n]*_temp_(\d+)\.mp4)' for writing/g);
+        for (const match of matches) {
+          const index = Number(match[2]);
+          const expected = recordingPath.replace('%03d', String(index).padStart(3, '0'));
+          if (path.resolve(match[1]) !== path.resolve(expected) || index <= info.lastOpenedSegment) continue;
+          info.lastOpenedSegment = index;
+          if (index > 0) {
+            info.segmentQueue = info.segmentQueue
+              .then(async () => {
+                const published = await this.renameCompletedSegment(channelId, index - 1, recordConfig, recordingPath);
+                if (published) info.lastVerifiedRecordingAt = Date.now();
+              })
+              .catch(error => logger.error('Completed segment retained after finalization failure', {
+                channelId, sessionId: info.sessionId, segmentIndex: index - 1, error: error.message
+              }));
           }
         }
       }
     });
 
     // 等待流准备就绪
-    await this.waitForStreamReady(channelId, 30000);
+    await this.waitForStreamReady(channelId, 30000, info);
 
     logger.info('FFmpeg process with recording started successfully', { 
       channelId, 
@@ -1612,7 +1392,7 @@ class SimpleStreamManager {
    */
   generateRecordingPath(channelId, channelName, recordConfig) {
     // 🔧 使用北京时间（UTC+8）
-    const now = new Date();
+    const now = new Date(recordConfig.sessionStartTime || Date.now());
     const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
     
     const year = beijingTime.getUTCFullYear();
@@ -1633,10 +1413,8 @@ class SimpleStreamManager {
       return path.join(basePath, channelId, dateStr, filename);
     }
     
-    // 单文件录制：使用完整文件名
-    const [endHour, endMin] = recordConfig.endTime.split(':');
-    const endTimeStr = `${endHour}${endMin}00`;
-    const filename = `${channelName}_${channelId}_${dateStr}_${timeStr}_to_${endTimeStr}.mp4`;
+    // 单文件也必须保留临时标识，避免上传扫描器把仍在写入的录像当作正式产物。
+    const filename = `${channelName}_${channelId}_${dateStr}_${timeStr}_temp_000.mp4`;
     
     return path.join(basePath, channelId, dateStr, filename);
   }
@@ -1645,73 +1423,45 @@ class SimpleStreamManager {
    * 重命名录制文件，将结束时间改为实际停止时间
    * @param {string} oldPath - 原始文件路径
    */
-  async renameRecordingWithActualEndTime(oldPath) {
-    try {
-      // 等待2秒确保FFmpeg完成文件写入
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      if (!fs.existsSync(oldPath)) {
-        logger.warn('Recording file not found for rename', { oldPath });
-        return;
-      }
-      
-      // 获取当前北京时间作为实际结束时间
-      const now = new Date();
-      const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-      const hours = String(beijingTime.getUTCHours()).padStart(2, '0');
-      const minutes = String(beijingTime.getUTCMinutes()).padStart(2, '0');
-      const seconds = String(beijingTime.getUTCSeconds()).padStart(2, '0');
-      const actualEndTime = `${hours}${minutes}${seconds}`;
-      
-      // 解析原文件名
-      const filename = path.basename(oldPath);
-      const match = filename.match(/_to_(\d{6})\.mp4$/);
-      
-      if (!match) {
-        logger.warn('Failed to parse recording filename for rename', { filename });
-        return;
-      }
-      
-      const configuredEndTime = match[1];
-      
-      // 🔧 统一逻辑：无论定时任务还是手动关闭，都使用实际结束时间
-      // 这样文件名完全反映真实的录制时段
-      const newFilename = filename.replace(/_to_\d{6}\.mp4$/, `_to_${actualEndTime}.mp4`);
-      
-      // 如果实际时间和配置时间相同，无需重命名
-      if (actualEndTime === configuredEndTime) {
-        logger.info('Recording end time matches configured time, skip rename', {
-          filename,
-          actualEndTime
-        });
-        return;
-      }
-      
-      const newPath = path.join(path.dirname(oldPath), newFilename);
-      
-      // 重命名文件
-      fs.renameSync(oldPath, newPath);
-      
-      logger.info('Recording file renamed with actual end time', {
-        oldPath,
-        newPath,
-        configuredEndTime,
-        actualEndTime
-      });
+  async renameRecordingWithActualEndTime(oldPath, stoppedAt = Date.now()) {
+    if (!fs.existsSync(oldPath)) return;
+    const channelId = this._extractChannelIdFromPath(oldPath);
+    if (this.isRecordingFileActive(channelId, oldPath)) throw new Error('Recording file is still being written');
+    const endTime = this._formatRecordingTime(stoppedAt);
+    const newPath = oldPath.replace(/_(?:temp_000|to_\d{6})\.mp4$/, `_to_${endTime}.mp4`);
+    await this.convertSegmentToStandardMp4(oldPath, newPath);
+    this._safeFinalizeDispatch(newPath, channelId);
+  }
 
-      // 🆕 迭代 3：从路径反推 channelId 后派发文件最终化事件
-      const channelId = this._extractChannelIdFromPath(newPath);
-      if (channelId) {
-        this._safeFinalizeDispatch(newPath, channelId);
-      } else {
-        logger.warn('无法从路径反推 channelId，跳过上传触发', { newPath });
-      }
-    } catch (error) {
-      logger.error('Failed to rename recording file', {
-        oldPath,
-        error: error.message
-      });
-    }
+  /** 将绝对时间格式化为录制命名采用的北京时间 HHmmss。 */
+  _formatRecordingTime(timestamp) {
+    return new Date(timestamp + 8 * 3600000).toISOString().slice(11, 19).replace(/:/g, '');
+  }
+
+  /** 从准确的会话模板提取分段序号；不扫描其他会话或其他日期的文件。 */
+  _recordingSegmentIndex(template, filePath) {
+    if (!template || !filePath || path.resolve(path.dirname(template)) !== path.resolve(path.dirname(filePath))) return null;
+    const [prefix, suffix] = path.basename(template).split('%03d');
+    if (suffix === undefined) return null;
+    const name = path.basename(filePath);
+    if (!name.startsWith(prefix) || !name.endsWith(suffix)) return null;
+    const number = name.slice(prefix.length, name.length - suffix.length);
+    return /^\d+$/.test(number) ? Number(number) : null;
+  }
+
+  /** 识别当前仍在写入的录像，供自动恢复与安全封装共同排除活动文件。 */
+  isRecordingFileActive(channelId, filePath) {
+    const info = this.activeStreams.get(channelId);
+    if (!info?.isRecording || info.closed) return false;
+    if (!info.recordingPath.includes('%03d')) return path.resolve(info.recordingPath) === path.resolve(filePath);
+    const index = this._recordingSegmentIndex(info.recordingPath, filePath);
+    return index !== null && (info.lastOpenedSegment < 0 || index >= info.lastOpenedSegment);
+  }
+
+  /** 根据会话模板构造正式文件名；仅保留既有分段命名口径，不重定义媒体时钟。 */
+  _segmentFinalPath(recordingPath, recordConfig, index, endedAt) {
+    const start = recordConfig.sessionStartTime + index * recordConfig.segmentDuration * 60000;
+    return recordingPath.replace(/_\d{6}_temp_%03d\.mp4$/, `_${this._formatRecordingTime(start)}_to_${this._formatRecordingTime(endedAt)}.mp4`);
   }
 
   /**
@@ -1720,78 +1470,15 @@ class SimpleStreamManager {
    * @param {number} segmentIndex - 分段索引
    * @param {Object} recordConfig - 录制配置
    */
-  async renameCompletedSegment(channelId, segmentIndex, recordConfig) {
-    try {
-      const beijingNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
-      const dateStr = `${beijingNow.getUTCFullYear()}${String(beijingNow.getUTCMonth() + 1).padStart(2, '0')}${String(beijingNow.getUTCDate()).padStart(2, '0')}`;
-      
-      const basePath = recordConfig.storagePath || this.recordingBaseDir;
-      const outputDir = path.join(basePath, channelId, dateStr);
-      
-      // 计算session开始时间字符串（用于构造temp文件名）
-      const sessionStart = new Date(recordConfig.sessionStartTime + 8 * 60 * 60 * 1000);
-      const sessionStartTimeStr = `${String(sessionStart.getUTCHours()).padStart(2, '0')}${String(sessionStart.getUTCMinutes()).padStart(2, '0')}${String(sessionStart.getUTCSeconds()).padStart(2, '0')}`;
-      
-      const tempFile = `${recordConfig.channelName}_${channelId}_${dateStr}_${sessionStartTimeStr}_temp_${String(segmentIndex).padStart(3, '0')}.mp4`;
-      const tempPath = path.join(outputDir, tempFile);
-      
-      // 检查文件是否存在
-      if (!fs.existsSync(tempPath)) {
-        logger.warn('Segment file not found for rename', { channelId, tempPath });
-        return;
-      }
-      
-      // 计算该segment的时间范围
-      const segmentDurationMs = recordConfig.segmentDuration * 60 * 1000;
-      
-      const startTime = new Date(sessionStart.getTime() + segmentIndex * segmentDurationMs);
-      const endTime = new Date(startTime.getTime() + segmentDurationMs);
-      
-      const startTimeStr = `${String(startTime.getUTCHours()).padStart(2, '0')}${String(startTime.getUTCMinutes()).padStart(2, '0')}${String(startTime.getUTCSeconds()).padStart(2, '0')}`;
-      const endTimeStr = `${String(endTime.getUTCHours()).padStart(2, '0')}${String(endTime.getUTCMinutes()).padStart(2, '0')}${String(endTime.getUTCSeconds()).padStart(2, '0')}`;
-      
-      // 生成正式文件名
-      const finalFilename = `${recordConfig.channelName}_${channelId}_${dateStr}_${startTimeStr}_to_${endTimeStr}.mp4`;
-      const finalPath = path.join(outputDir, finalFilename);
-      
-      // 检查是否已重命名（避免重复）
-      if (fs.existsSync(finalPath)) {
-        logger.info('Segment already renamed, skipping', { channelId, finalFilename });
-        return;
-      }
-      
-      // 🔥 关键修复：segment完成后转换为标准MP4
-      // 
-      // 问题根因：
-      // - 录制时使用Fragmented MP4防止崩溃损坏 ✅
-      // - 但segment muxer关闭Fragmented MP4时存在BUG
-      // - 导致完成的segment文件只能播放第一个fragment（2秒）
-      //
-      // 解决方案：
-      // - 保留Fragmented MP4用于防崩溃（录制过程中）
-      // - segment完成后，自动转换为标准MP4（修复播放问题）
-      // - 使用 -c copy 避免重新编码（速度快，无质量损失）
-      await this.convertSegmentToStandardMp4(tempPath, finalPath);
-      
-      const fileSize = fs.statSync(finalPath).size;
-      logger.info('Segment converted and renamed', { 
-        channelId,
-        segmentIndex,
-        from: tempFile,
-        to: finalFilename,
-        size: `${(fileSize / 1024 / 1024).toFixed(2)}MB`
-      });
-
-      // 🆕 迭代 3：派发文件最终化事件，由 FileFinalizeDispatcher 判断是否入队上传
-      this._safeFinalizeDispatch(finalPath, channelId);
-    } catch (error) {
-      logger.error('Failed to rename completed segment', {
-        channelId,
-        segmentIndex,
-        error: error.message,
-        stack: error.stack
-      });
-    }
+  async renameCompletedSegment(channelId, segmentIndex, recordConfig, recordingPath) {
+    const template = recordingPath || this.generateRecordingPath(channelId, recordConfig.channelName, recordConfig);
+    const tempPath = template.replace('%03d', String(segmentIndex).padStart(3, '0'));
+    if (!fs.existsSync(tempPath)) return;
+    const end = recordConfig.sessionStartTime + (segmentIndex + 1) * recordConfig.segmentDuration * 60000;
+    const finalPath = this._segmentFinalPath(template, recordConfig, segmentIndex, end);
+    await this.convertSegmentToStandardMp4(tempPath, finalPath);
+    this._safeFinalizeDispatch(finalPath, channelId);
+    return finalPath;
   }
 
   /**
@@ -1800,64 +1487,9 @@ class SimpleStreamManager {
    * @param {string} outputPath - 输出文件路径（标准MP4）
    */
   async convertSegmentToStandardMp4(inputPath, outputPath) {
-    return new Promise((resolve, reject) => {
-      const ffmpegProcess = spawn(this.ffmpegPath, [
-        '-i', inputPath,
-        '-c', 'copy',              // 不重新编码，只重新封装
-        '-movflags', 'faststart',  // 转换为标准MP4（moov前置）
-        '-y',
-        outputPath
-      ]);
-
-      let stderr = '';
-      ffmpegProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      ffmpegProcess.on('close', (code) => {
-        if (code === 0 && fs.existsSync(outputPath)) {
-          // 转换成功，删除临时文件
-          fs.unlinkSync(inputPath);
-          logger.info('✅ Segment converted to standard MP4', { 
-            from: path.basename(inputPath),
-            to: path.basename(outputPath)
-          });
-          resolve();
-        } else {
-          // 转换失败，保留原文件，至少可以部分播放
-          logger.error('❌ Segment conversion failed, keeping original file', {
-            inputPath,
-            code,
-            stderr: stderr.slice(-200)
-          });
-          // 降级方案：直接重命名
-          if (fs.existsSync(inputPath)) {
-            fs.renameSync(inputPath, outputPath);
-          }
-          resolve(); // 不抛出错误，继续运行
-        }
-      });
-
-      ffmpegProcess.on('error', (error) => {
-        logger.error('FFmpeg process error during conversion', { error: error.message });
-        // 降级方案：直接重命名
-        if (fs.existsSync(inputPath) && !fs.existsSync(outputPath)) {
-          fs.renameSync(inputPath, outputPath);
-        }
-        resolve();
-      });
-
-      // 60秒超时
-      setTimeout(() => {
-        ffmpegProcess.kill('SIGTERM');
-        logger.error('Segment conversion timeout, using direct rename', { inputPath });
-        // 降级方案：直接重命名
-        if (fs.existsSync(inputPath) && !fs.existsSync(outputPath)) {
-          fs.renameSync(inputPath, outputPath);
-        }
-        resolve();
-      }, 60000);
-    });
+    const channelId = this._extractChannelIdFromPath(inputPath);
+    if (this.isRecordingFileActive(channelId, inputPath)) throw new Error('Cannot convert an active recording file');
+    return this.segmentFinalizer.finalize(inputPath, outputPath);
   }
 
   /**
@@ -1865,107 +1497,26 @@ class SimpleStreamManager {
    * @param {string} channelId - 频道ID
    * @param {Object} recordConfig - 录制配置
    */
-  async renameFinalSegment(channelId, recordConfig) {
-    try {
-      // 等待2秒确保FFmpeg完成文件写入
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const beijingNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
-      const dateStr = `${beijingNow.getUTCFullYear()}${String(beijingNow.getUTCMonth() + 1).padStart(2, '0')}${String(beijingNow.getUTCDate()).padStart(2, '0')}`;
-      
-      const basePath = recordConfig.storagePath || this.recordingBaseDir;
-      const outputDir = path.join(basePath, channelId, dateStr);
-      
-      if (!fs.existsSync(outputDir)) {
-        logger.warn('Output directory not found', { channelId, outputDir });
-        return;
-      }
-      
-      // 查找所有临时文件（只应该剩下最后一个）
-      const tempFiles = fs.readdirSync(outputDir)
-        .filter(f => f.includes('_temp_') && f.endsWith('.mp4'))
-        .sort();
-      
-      if (tempFiles.length === 0) {
-        logger.info('No temp files found (all segments already renamed)', { channelId });
-        return;
-      }
-      
-      logger.info(`Found ${tempFiles.length} temp file(s) to rename as final segment`, { channelId, tempFiles });
-      
-      const sessionStart = new Date(recordConfig.sessionStartTime + 8 * 60 * 60 * 1000);
-      const segmentDurationMs = recordConfig.segmentDuration * 60 * 1000;
-      
-      // 重命名所有剩余的临时文件（通常只有最后一个）
-      for (const tempFile of tempFiles) {
-        const tempPath = path.join(outputDir, tempFile);
-        
-        // 提取segment索引和session开始时间
-        // 新格式：频道名_频道ID_日期_时间_temp_XXX.mp4
-        const newMatch = tempFile.match(/_(\d{6})_temp_(\d+)\.mp4$/);
-        let segmentIndex, sessionStartTimeStr;
-        
-        if (newMatch) {
-          // 新格式：从文件名提取session开始时间
-          sessionStartTimeStr = newMatch[1];
-          segmentIndex = parseInt(newMatch[2]);
-        } else {
-          // 兼容旧格式：频道名_频道ID_日期_temp_XXX.mp4
-          const oldMatch = tempFile.match(/_temp_(\d+)\.mp4$/);
-          if (!oldMatch) {
-            logger.warn('Invalid temp file name format', { tempFile });
-            continue;
-          }
-          segmentIndex = parseInt(oldMatch[1]);
-          // 旧格式使用recordConfig中的sessionStartTime
-          const sessionStart = new Date(recordConfig.sessionStartTime + 8 * 60 * 60 * 1000);
-          sessionStartTimeStr = `${String(sessionStart.getUTCHours()).padStart(2, '0')}${String(sessionStart.getUTCMinutes()).padStart(2, '0')}${String(sessionStart.getUTCSeconds()).padStart(2, '0')}`;
-        }
-        
-        // 从session开始时间字符串计算该段的开始时间
-        const hours = parseInt(sessionStartTimeStr.substr(0, 2));
-        const minutes = parseInt(sessionStartTimeStr.substr(2, 2));
-        const seconds = parseInt(sessionStartTimeStr.substr(4, 2));
-        const sessionStartMs = (hours * 3600 + minutes * 60 + seconds) * 1000;
-        const segmentStartMs = sessionStartMs + segmentIndex * segmentDurationMs;
-        
-        // 计算开始时间
-        const startHours = Math.floor(segmentStartMs / 3600000) % 24;
-        const startMinutes = Math.floor((segmentStartMs % 3600000) / 60000);
-        const startSeconds = Math.floor((segmentStartMs % 60000) / 1000);
-        const startTimeStr = `${String(startHours).padStart(2, '0')}${String(startMinutes).padStart(2, '0')}${String(startSeconds).padStart(2, '0')}`;
-        
-        // 结束时间使用实际停止时间
-        const endTime = beijingNow;
-        const endTimeStr = `${String(endTime.getUTCHours()).padStart(2, '0')}${String(endTime.getUTCMinutes()).padStart(2, '0')}${String(endTime.getUTCSeconds()).padStart(2, '0')}`;
-        
-        // 生成正式文件名
-        const finalFilename = `${recordConfig.channelName}_${channelId}_${dateStr}_${startTimeStr}_to_${endTimeStr}.mp4`;
-        const finalPath = path.join(outputDir, finalFilename);
-        
-        // 🔥 关键修复：转换为标准MP4（与中间分段相同的处理）
-        await this.convertSegmentToStandardMp4(tempPath, finalPath);
-        
-        const fileSize = fs.statSync(finalPath).size;
-        logger.info('Final segment converted and renamed', { 
-          channelId,
-          segmentIndex,
-          from: tempFile,
-          to: finalFilename,
-          size: `${(fileSize / 1024 / 1024).toFixed(2)}MB`
-        });
-
-        // 🆕 迭代 3：派发文件最终化事件
+  async renameFinalSegment(channelId, recordConfig, recordingPath, stoppedAt = Date.now()) {
+    const template = recordingPath || this.generateRecordingPath(channelId, recordConfig.channelName, recordConfig);
+    const info = this.activeStreams.get(channelId);
+    if (info?.recordingPath === template && !info.closed) throw new Error('Recording must close before finalization');
+    const dir = path.dirname(template);
+    if (!fs.existsSync(dir)) return;
+    const files = fs.readdirSync(dir)
+      .map(name => ({ filePath: path.join(dir, name), index: this._recordingSegmentIndex(template, path.join(dir, name)) }))
+      .filter(file => file.index !== null)
+      .sort((a, b) => a.index - b.index);
+    for (const [position, file] of files.entries()) {
+      const isLast = position === files.length - 1;
+      const end = isLast ? stoppedAt : recordConfig.sessionStartTime + (file.index + 1) * recordConfig.segmentDuration * 60000;
+      const finalPath = this._segmentFinalPath(template, recordConfig, file.index, end);
+      try {
+        await this.convertSegmentToStandardMp4(file.filePath, finalPath);
         this._safeFinalizeDispatch(finalPath, channelId);
+      } catch (error) {
+        logger.error('Final segment retained for recovery', { channelId, filePath: file.filePath, error: error.message });
       }
-      
-      logger.info('All final segments renamed successfully', { channelId });
-    } catch (error) {
-      logger.error('Failed to rename final segment', {
-        channelId,
-        error: error.message,
-        stack: error.stack
-      });
     }
   }
 
@@ -2017,7 +1568,7 @@ class SimpleStreamManager {
     }
 
     const existingChecks = checks.filter(check => check.exists);
-    const healthy = existingChecks.length > 0 && existingChecks.some(check => check.fresh);
+    const healthy = existingChecks.length === 2 && existingChecks.every(check => check.fresh && check.size > 0);
 
     return {
       healthy,
@@ -2161,47 +1712,47 @@ class SimpleStreamManager {
    * 获取录制状态
    */
   getRecordingStatus() {
-    const recordingChannels = Array.from(this.recordingChannels).map(channelId => {
-      const streamInfo = this.activeStreams.get(channelId);
-      const config = this.recordingConfigs.get(channelId);
+    const ids = new Set([...this.recordingConfigs.keys(), ...this.recordingChannels]);
+    const channels = Array.from(ids).map(channelId => {
+      const info = this.activeStreams.get(channelId);
       return {
         channelId,
-        isActive: streamInfo ? true : false,
-        isRecording: streamInfo ? streamInfo.isRecording : false,
-        recordingPath: streamInfo ? streamInfo.recordingPath : null,
-        startedAt: streamInfo ? streamInfo.startedAt : null,
-        config: config
+        state: info?.state || 'failed',
+        sessionId: info?.sessionId || null,
+        isActive: !!info && !info.exitSeen && !info.closed,
+        isRecording: !!info?.isRecording && info.state === 'recording' && !info.exitSeen,
+        recordingPath: info?.recordingPath || null,
+        startedAt: info?.startTime || null,
+        config: this.recordingConfigs.get(channelId)
       };
     });
-    
     return {
-      totalRecordingChannels: this.recordingChannels.size,
-      activeRecordingChannels: recordingChannels.filter(c => c.isActive).length,
-      channels: recordingChannels
+      totalRecordingChannels: channels.length,
+      activeRecordingChannels: channels.filter(channel => channel.isRecording).length,
+      channels
     };
   }
 
-  /**
-   * 销毁管理器
-   */
+  /** 同步禁止新会话并关闭清理定时器，供应用在等待其他组件停止前建立关停屏障。 */
+  beginShutdown() {
+    this.destroying = true;
+    clearInterval(this.cleanupTimer);
+  }
+
+  /** 禁止新会话后等待所有写入进程关闭与收尾；失败临时文件仍保留供后续恢复。 */
   async destroy() {
-    // 停止所有转码进程
-    const stopPromises = [];
-    for (const channelId of this.activeStreams.keys()) {
-      stopPromises.push(this.stopChannel(channelId));
-    }
-    
-    await Promise.all(stopPromises);
-    
-    // 清理所有数据
-    this.activeStreams.clear();
+    this.beginShutdown();
+    const ids = new Set([...this.activeStreams.keys(), ...this.recordingConfigs.keys(), ...this.channelLocks.keys()]);
+    const results = await Promise.allSettled(Array.from(ids, channelId => this.stopChannel(channelId)));
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure) throw failure.reason;
     this.channelHeartbeats.clear();
     this.preloadChannels.clear();
     this.recordingChannels.clear();
     this.recordingConfigs.clear();
-    
     logger.info('SimpleStreamManager destroyed');
   }
+
 }
 
 module.exports = SimpleStreamManager;

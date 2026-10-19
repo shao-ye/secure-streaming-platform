@@ -21,6 +21,11 @@ class RecordingRecoveryService {
   constructor(streamManager, systemConfig = {}) {
     this.streamManager = streamManager;
     this.isRunning = false;
+    this.isStopping = false;
+    this.startupTimer = null;
+    this.sizeCheckTimer = null;
+    this.finishSizeCheck = null;
+    this.recoveryPromise = null;
     this.config = {
       enabled: true,
       delayStart: 5000,
@@ -87,12 +92,13 @@ class RecordingRecoveryService {
 
   // ==================== 启动入口 ====================
   
+  /** 调度一次启动恢复；重复调用不会产生并行扫描，关停后不再启动新恢复。 */
   async startup() {
-    if (!this.config.enabled) {
+    if (!this.config.enabled || this.isStopping) {
       logger.warn('⚠️ Recovery service disabled');
       return;
     }
-    if (this.isRunning) {
+    if (this.isRunning || this.startupTimer) {
       logger.warn('⚠️ Recovery service already running');
       return;
     }
@@ -104,12 +110,62 @@ class RecordingRecoveryService {
       recordingsPath: this.config.recordingsPath
     });
     
-    setTimeout(() => {
+    this.startupTimer = setTimeout(() => {
+      this.startupTimer = null;
       logger.info('🚀 Starting recovery service...');
       this.runRecoveryWithSizeCheck().catch(err => {
         logger.error('Recovery failed', { error: err.message, stack: err.stack });
       });
     }, this.config.delayStart);
+  }
+
+  /** 取消尚未开始的恢复和大小观察，等待正在封装的文件处理完后再允许服务退出。 */
+  async stop() {
+    this.isStopping = true;
+    if (this.startupTimer) {
+      clearTimeout(this.startupTimer);
+      this.startupTimer = null;
+    }
+    if (this.sizeCheckTimer) {
+      clearTimeout(this.sizeCheckTimer);
+      this.sizeCheckTimer = null;
+    }
+    if (this.finishSizeCheck) {
+      this.finishSizeCheck(false);
+      this.finishSizeCheck = null;
+    }
+    if (this.recoveryPromise) await this.recoveryPromise;
+  }
+
+  /** 自动与手动恢复共用单次运行门闩，避免同一批临时文件被重复转换。 */
+  _runExclusiveRecovery(run) {
+    if (this.isStopping || this.recoveryPromise) {
+      logger.info('Skipping recovery because service is stopping or a scan is already running');
+      return Promise.resolve({ status: 'skipped' });
+    }
+    this.isRunning = true;
+    const pending = Promise.resolve().then(run).finally(() => {
+      this.isRunning = false;
+      if (this.recoveryPromise === pending) this.recoveryPromise = null;
+    });
+    this.recoveryPromise = pending;
+    return pending;
+  }
+
+  /** 等待大小观察窗口；关停时可立即取消，不必空等 30 秒。 */
+  _waitForSizeObservation() {
+    return new Promise(resolve => {
+      if (this.isStopping) {
+        resolve(false);
+        return;
+      }
+      this.finishSizeCheck = resolve;
+      this.sizeCheckTimer = setTimeout(() => {
+        this.sizeCheckTimer = null;
+        this.finishSizeCheck = null;
+        resolve(true);
+      }, 30000);
+    });
   }
 
   // ==================== 主执行流程 ====================
@@ -120,7 +176,12 @@ class RecordingRecoveryService {
    * 2. 等待30秒
    * 3. 再次检查大小，未增长的文件进行修复
    */
-  async runRecoveryWithSizeCheck() {
+  runRecoveryWithSizeCheck() {
+    return this._runExclusiveRecovery(() => this._runRecoveryWithSizeCheck());
+  }
+
+  /** 执行启动恢复；扫描结果仅作候选，真正处理前还要在频道锁内复查。 */
+  async _runRecoveryWithSizeCheck() {
     this.isRunning = true;
     const startTime = Date.now();
     logger.info('🔧 Starting recording file recovery with size check...');
@@ -149,7 +210,7 @@ class RecordingRecoveryService {
 
       // Step 2: 等待30秒
       logger.info('⏳ Waiting 30 seconds to check if files are still growing...');
-      await new Promise(resolve => setTimeout(resolve, 30000));
+      if (!(await this._waitForSizeObservation())) return;
 
       // Step 3: 检查文件大小是否增长
       logger.info('🔍 Step 2: Checking if file sizes changed...');
@@ -162,7 +223,10 @@ class RecordingRecoveryService {
           
           if (currentSize === initialSize) {
             logger.info(`✅ File stopped growing: ${file.path.split('/').pop()} (${currentSize} bytes)`);
-            filesToFix.push(file);
+            filesToFix.push({
+              ...file,
+              recoverySnapshot: { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino }
+            });
           } else {
             logger.info(`⏭️ File still growing: ${file.path.split('/').pop()} (${initialSize} → ${currentSize} bytes, +${currentSize - initialSize})`);
           }
@@ -176,23 +240,17 @@ class RecordingRecoveryService {
         return;
       }
 
-      // Step 4: 重命名停止增长的文件（不修复格式，避免破坏数据）
+      // Step 4: 在频道锁内重查会话占用，再安全重封装；失败时保留原始临时文件。
       logger.info(`🔧 Step 3: Renaming ${filesToFix.length} stopped file(s)...`);
-      let renamed = 0, failed = 0;
+      let renamed = 0, failed = 0, skipped = 0;
 
       for (const file of filesToFix) {
+        if (this.isStopping) break;
         await new Promise(resolve => setImmediate(resolve));
         
         try {
-          // 🔥 关键修复：只重命名，不修复格式
-          // 
-          // 原因：
-          // 1. 原始temp文件是Fragmented MP4，虽然不是标准格式但**可以播放**
-          // 2. 重新编码会导致文件变短（FFmpeg遇到损坏部分就停止）
-          // 3. 用户反馈：修复前可以播放，修复后反而只能播放2秒
-          // 4. 结论：保留原始数据，只修复文件名
-          await this.fixFileName(file);
-          renamed++;
+          if (await this._recoverFileWithChannelLock(file, false)) renamed++;
+          else skipped++;
         } catch (error) {
           logger.error('Processing failed', { file: file.path, error: error.message });
           failed++;
@@ -202,8 +260,10 @@ class RecordingRecoveryService {
       logger.info('Recovery completed', {
         duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
         scanned: tempFiles.length,
-        fixed: filesToFix.length,
+        candidates: filesToFix.length,
+        fixed: renamed,
         renamed,
+        skipped,
         failed
       });
     } finally {
@@ -214,7 +274,12 @@ class RecordingRecoveryService {
   /**
    * 旧方法：保留用于手动触发API（不等待30秒）
    */
-  async runRecovery() {
+  runRecovery() {
+    return this._runExclusiveRecovery(() => this._runRecovery());
+  }
+
+  /** 执行手动扫描；保留其 30 秒修改时间保护和预设结束时间筛选。 */
+  async _runRecovery() {
     this.isRunning = true;
     const startTime = Date.now();
     logger.info('🔧 Starting recording file recovery (immediate mode)...');
@@ -230,17 +295,15 @@ class RecordingRecoveryService {
         return;
       }
 
-      let renamed = 0, failed = 0;
+      let renamed = 0, failed = 0, skipped = 0;
 
       for (const file of filesToFix) {
+        if (this.isStopping) break;
         await new Promise(resolve => setImmediate(resolve));
         
         try {
-          // 🔥 关键修复：只重命名，不修复格式
-          // 原因：原始temp文件虽然不是标准格式，但可以播放
-          // 重新编码反而会破坏数据（FFmpeg遇到损坏部分就停止）
-          await this.fixFileName(file);
-          renamed++;
+          if (await this._recoverFileWithChannelLock(file, true)) renamed++;
+          else skipped++;
         } catch (error) {
           logger.error('Processing failed', { file: file.path, error: error.message });
           failed++;
@@ -251,11 +314,56 @@ class RecordingRecoveryService {
         duration: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
         total: filesToFix.length,
         renamed,
+        skipped,
         failed
       });
     } finally {
       this.isRunning = false;
     }
+  }
+
+  /**
+   * 将候选复查与文件处理放在同一频道临界区，阻止新录制在检查后抢占该路径。
+   * 锁内只调用不再获取频道锁的文件最终化方法；否则会与启停流程形成同锁重入死锁。
+   */
+  async _recoverFileWithChannelLock(file, manual) {
+    const channelId = file.channel && file.channel.id;
+    if (!channelId || typeof this.streamManager.withChannelLock !== 'function'
+        || typeof this.streamManager.isRecordingFileActive !== 'function') {
+      throw new Error('Recovery requires channel lock and active recording file detection');
+    }
+
+    return this.streamManager.withChannelLock(channelId, async () => {
+      if (this.isStopping) return false;
+      const activeStream = this.streamManager.activeStreams && this.streamManager.activeStreams.get(channelId);
+      // 此处已持有频道锁，不能用“锁是否存在”推断过渡状态，否则会将自己的锁误判为占用。
+      if ((activeStream && ['starting', 'stopping'].includes(activeStream.state))
+          || this.streamManager.isRecordingFileActive(channelId, file.path)) {
+        logger.info('Skipping recovery file owned by an active recording session', { channelId, file: file.path });
+        return false;
+      }
+      if (!fs.existsSync(file.path)) return false;
+
+      const before = fs.statSync(file.path);
+      const snapshot = file.recoverySnapshot;
+      if (!before.isFile() || before.size === 0
+          || (snapshot && (before.size !== snapshot.size || before.mtimeMs !== snapshot.mtimeMs || before.ino !== snapshot.ino))) {
+        logger.info('Skipping recovery candidate changed since scan', { file: file.path });
+        return false;
+      }
+      if (manual && file.type === 'temp') {
+        const processInfo = this.streamManager.activeStreams && this.streamManager.activeStreams.get(channelId);
+        if (Date.now() - before.mtimeMs < 30000 || (processInfo && processInfo.isRecording)) return false;
+      }
+
+      // 扫描与排队期间外部写入者仍可能改变文件；锁内再次观察，不能把旧快照当作关闭证明。
+      await new Promise(resolve => setTimeout(resolve, 300));
+      if (this.isStopping || !fs.existsSync(file.path)
+          || this.streamManager.isRecordingFileActive(channelId, file.path)) return false;
+      const after = fs.statSync(file.path);
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ino !== before.ino) return false;
+      return this.fixFileName(file);
+    });
   }
 
   // ==================== 文件扫描逻辑 ====================
@@ -468,14 +576,17 @@ class RecordingRecoveryService {
 
   // ==================== 文件修复逻辑 ====================
   
+  /** 分派已经过锁内占用检查的候选；仅实际完成文件处理时返回 true。 */
   async fixFileName(file) {
     if (file.type === 'temp') {
-      await this.renameTempFile(file);
+      return this.renameTempFile(file);
     } else if (file.type === 'wrongEndTime') {
-      await this.fixEndTime(file);
+      return this.fixEndTime(file);
     }
+    return false;
   }
 
+  /** 按既有 mtime/媒体时长口径恢复临时名，安全封装失败时向上传播并保留原件。 */
   async renameTempFile(file) {
     try {
       logger.info(`🔧 Renaming temp file: ${path.basename(file.path)}`);
@@ -488,7 +599,7 @@ class RecordingRecoveryService {
         const oldMatch = path.basename(file.path).match(/(.+)_(.+)_(\d{8})_temp_(\d{3})\.mp4$/);
         if (!oldMatch) {
           logger.warn(`⚠️ File name does not match any pattern: ${path.basename(file.path)}`);
-          return;
+          return false;
         }
         
         logger.info('✅ Matched old format');
@@ -505,14 +616,16 @@ class RecordingRecoveryService {
           // 🔥 关键修复：转换为标准MP4（与新格式处理一致）
           logger.info('🔄 Converting temp file to standard MP4 (old format)...');
           await this.streamManager.convertSegmentToStandardMp4(file.path, newPath);
+          if (!fs.existsSync(newPath)) throw new Error('Recovered output was not published');
           logger.info('✅ Temp file converted and renamed (old format)', { from: path.basename(file.path), to: newFileName });
 
           // 🆕 迭代 3：旧格式恢复后派发自动上传事件
           this._safeFinalizeDispatch(newPath, file.channel && file.channel.id);
+          return true;
         } else {
           logger.warn(`⚠️ Target file already exists: ${newFileName}`);
         }
-        return;
+        return false;
       }
       
       logger.info('✅ Matched new format');
@@ -572,31 +685,36 @@ class RecordingRecoveryService {
         // 解决方案：
         // - 调用streamManager的转换方法（与分段完成逻辑一致）
         // - 使用 -c copy 避免重新编码
-        // - 转换失败时降级为直接重命名
+        // - 转换或校验失败时抛错并保留原始文件，不把直接改名当作转换成功
         logger.info('🔄 Converting temp file to standard MP4...');
         await this.streamManager.convertSegmentToStandardMp4(file.path, newPath);
+        if (!fs.existsSync(newPath)) throw new Error('Recovered output was not published');
         logger.info('✅ Temp file converted and renamed', { from: path.basename(file.path), to: newFileName });
 
         // 🆕 迭代 3：新格式恢复后派发自动上传事件
         this._safeFinalizeDispatch(newPath, file.channel && file.channel.id);
+        return true;
       } else {
         logger.warn(`⚠️ Target file already exists: ${newFileName}`);
       }
+      return false;
     } catch (error) {
       logger.error('❌ Rename temp failed', { file: file.path, error: error.message, stack: error.stack });
+      throw error;
     }
   }
 
+  /** 对手动恢复选中的非活动正式文件修正结束时间，不覆盖已存在的目标文件。 */
   async fixEndTime(file) {
     try {
       const match = path.basename(file.path).match(/_(\d{6})_to_(\d{6})\.mp4$/);
-      if (!match) return;
+      if (!match) return false;
       
       const stat = fs.statSync(file.path);
       const endTimeStr = this.formatTime(new Date(stat.mtimeMs));
       const newFileName = path.basename(file.path).replace(/_to_\d{6}\.mp4$/, `_to_${endTimeStr}.mp4`);
       
-      if (newFileName === path.basename(file.path)) return;
+      if (newFileName === path.basename(file.path)) return false;
       
       const newPath = path.join(path.dirname(file.path), newFileName);
       if (!fs.existsSync(newPath)) {
@@ -605,9 +723,12 @@ class RecordingRecoveryService {
 
         // 🆕 迭代 3：修正结束时间后派发自动上传事件
         this._safeFinalizeDispatch(newPath, file.channel && file.channel.id);
+        return true;
       }
+      return false;
     } catch (error) {
       logger.error('Fix end time failed', { file: file.path, error: error.message });
+      throw error;
     }
   }
 

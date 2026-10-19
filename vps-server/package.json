@@ -7,6 +7,7 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test": "jest",
+    "test:recording": "node --test tests/SimpleStreamManager.lifecycle.test.cjs tests/RecordScheduler.node.test.cjs tests/simple-stream-start-watching.node.test.cjs tests/RecordingRecoveryService.node.test.cjs tests/app-shutdown.node.test.cjs tests/recording/SegmentFinalizer.node.test.cjs tests/recording/SegmentFinalizer.integration.node.test.cjs",
     "test:watch": "jest --watch",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"

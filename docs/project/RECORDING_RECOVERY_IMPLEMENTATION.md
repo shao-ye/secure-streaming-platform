@@ -1,514 +1,147 @@
-# 🔧 录制文件防损坏与修复功能 - 完整实施文档
+# 录制文件恢复实现说明
 
-**版本**: v1.0 | **日期**: 2025-10-30 | **作者**: AI Assistant
+**更新日期**：2026-10-19
 
----
+**代码基线**：`66e5339`
 
-## 📖 执行纪律
+**核验范围**：当前仓库的静态代码；本次未执行部署、异常注入或目标环境验收。
 
-⚠️ **必须严格遵守**：
-1. ✅ 绝对禁止跳步 - 必须按顺序完成每个阶段
-2. ✅ 验证是强制性的 - 每个阶段必须验证通过
-3. ✅ 验证失败必须回滚 - 不能带着问题继续
-4. ✅ 每步更新进度表 - 实时标记状态
+录制分段、临时名及正常分段命名的统一说明见 [录制分段与命名规则](./RECORDING_SEGMENTATION_DESIGN.md)。本文只说明服务启动或手动触发后的遗留文件恢复，不能将这里的时间算法套用于正常分段。
 
-### 核心概念
+## 1. 当前实现入口
 
-**方案1 - Fragmented MP4（预防）**：
-- 每个关键帧（约2秒）写入一个fragment，包含完整元数据
-- 意外中断后，已写入部分仍可播放
-- 最大丢失：约2秒 | 性能开销：+1-2%文件大小
+| 职责 | 当前代码 |
+| --- | --- |
+| 加载服务、启动后初始化、手动恢复 API | [app.js](../../vps-server/src/app.js) |
+| 文件扫描、恢复筛选、恢复命名 | [RecordingRecoveryService.js](../../vps-server/src/services/RecordingRecoveryService.js) |
+| Fragmented MP4 录制参数、标准 MP4 重封装及降级 | [SimpleStreamManager.js](../../vps-server/src/services/SimpleStreamManager.js) |
 
-**方案2 - Recovery Service（修复）**：
-- 启动时扫描最近N小时的录制文件（可配置，默认48小时）
-- 自动修复文件名（主要）和格式（备用）
-- 异步执行，延迟5秒启动，不阻塞服务
-- 扫描时长通过前端系统设置配置（范围：12-168小时）
+`app.js` 在模块加载成功且 `streamManager` 存在时创建恢复服务，随后调用 `startup()`。构造器当前将 `enabled` 设为 `true`；是否在目标环境实际执行，仍需启动日志确认。
 
----
+两条入口使用不同的筛选方式：
 
-## 📊 进度追踪
+| 项目 | 启动自动恢复 | 手动恢复 |
+| --- | --- | --- |
+| 入口 | `startup()` → `runRecoveryWithSizeCheck()` | `POST /api/admin/recovery/execute` → `runRecovery()`，校验 `x-api-key` |
+| 开始时机 | `startup()` 调度后延迟 5 秒 | API 调用时开始，不执行 30 秒大小观察 |
+| 扫描方法 | `findTempFiles()`，只找临时 MP4 | `findFilesNeedingRecovery()`，检查临时 MP4，也可能检查预设结束时间的正式 MP4 |
+| 临时文件筛选 | 记录初始大小，等待 30 秒，前后大小完全相同才进入恢复 | mtime 距当前至少 30 秒，且频道没有活跃录制进程 |
+| 正在录制判断 | 按本次观察期间的文件大小变化判断 | 按文件修改时间和频道 `activeStreams.isRecording` 判断 |
 
-| 阶段 | 名称 | 状态 | 完成时间 | 验证结果 |
-|------|------|------|----------|---------|
-| 准备 | 文件备份 | ⏳ 未开始 | - | - |
-| 阶段1 | Fragmented MP4 | ⏳ 未开始 | - | - |
-| 阶段2 | Recovery Service | ⏳ 未开始 | - | - |
-| 阶段3 | 部署测试 | ⏳ 未开始 | - | - |
-| 阶段4 | 异常验证 | ⏳ 未开始 | - | - |
+自动恢复不是“文件超过 1 小时才处理”，也不是服务启动 5 秒后已经恢复完成。存在候选文件时，仅调度和大小观察就需要约 35 秒，之后还有探测、逐文件转换等时间；无候选文件时可提前结束。固定等待 10 秒或 15 秒不能作为完成条件。
 
----
+当前自动恢复只有这次启动调度，不是持续轮询。大小有变化的文件会在本次扫描中跳过；30 秒大小不变也只是当前实现采用的判断条件，不能独立证明文件未被占用。
 
-## 🎯 准备：备份文件
+## 2. 扫描配置与目录范围
 
-```powershell
-cd D:\项目文件\yoyo-kindergarten\code\secure-streaming-platform
-$ts = Get-Date -Format "yyyyMMdd_HHmmss"
-New-Item -Path "backups\recovery_$ts" -ItemType Directory -Force
-Copy-Item "vps-transcoder-api\vps-transcoder-api\src\services\SimpleStreamManager.js" "backups\recovery_$ts\"
-Copy-Item "vps-transcoder-api\vps-transcoder-api\src\app.js" "backups\recovery_$ts\"
-```
-
----
-
-## 🚀 阶段1：Fragmented MP4实施（30分钟）
-
-### 核心逻辑
-
-**问题**：普通MP4需要在文件末尾写入moov atom（元数据），程序崩溃导致文件无法播放。
-
-**解决方案**：使用Fragmented MP4，每个关键帧（约2秒）写入一个独立的fragment，每个fragment包含完整元数据。
-
-**实现原理**：
-1. 在FFmpeg参数中添加 `-movflags +frag_keyframe+empty_moov+default_base_moof`
-2. `frag_keyframe`：每个关键帧创建一个fragment
-3. `empty_moov`：在文件开头写入空的moov atom
-4. `default_base_moof`：每个fragment包含完整的moof atom
-
-**效果**：
-- 意外中断后，已写入的fragment仍可播放
-- 最大丢失约2秒（一个GOP）
-- 文件增大1-2%，CPU无增加
-
-### 1.1 修改单文件模式
-
-**文件**: `SimpleStreamManager.js`（约961-969行）
-
-**核心修改**：在FFmpeg参数中添加fragmented MP4标志
-```javascript
-'-movflags', '+frag_keyframe+empty_moov+default_base_moof',
-```
-
-### 1.2 修改分段模式
-
-**定位**: 约946-960行，分段录制配置部分
-
-**核心修改**：在 `'-segment_format', 'mp4',` 后添加
-```javascript
-'-segment_format_options', 'movflags=+frag_keyframe+empty_moov+default_base_moof',
-```
-
-### 1.3 验证阶段1
-
-```powershell
-git add vps-transcoder-api/vps-transcoder-api/src/services/SimpleStreamManager.js
-git commit -m "feat: 使用Fragmented MP4防止录制文件损坏"
-git push origin master
-ssh root@<VPS_IP> "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && chmod +x vps-simple-deploy.sh && ./vps-simple-deploy.sh"
-ssh root@<VPS_IP> "tail -50 /var/log/transcoder/pm2-out.log | grep 'fragmented MP4'"
-```
-
-**验证清单**: [ ] 日志显示 "with fragmented MP4" [ ] PM2正常运行
-
----
-
-## 🚀 阶段2：Recovery Service实施（2-3小时）
-
-### 核心逻辑
-
-**问题**：即使使用Fragmented MP4，文件格式正常，但文件名仍可能错误：
-1. **temp文件**：分段模式意外中断，temp_002.mp4未重命名
-2. **错误结束时间**：单文件模式意外中断，显示预设的23:59而非实际时间
-
-**解决方案**：启动时扫描并自动修复文件名
-
-**工作流程**：
-```
-服务启动 → 延迟5秒 → 扫描48小时内文件 → 识别问题文件 → 修复文件名/格式 → 记录日志
-```
-
-**核心功能模块**：
-
-#### 2.1.1 启动与扫描逻辑
-
-**启动策略**：
-- 延迟5秒启动（确保主服务稳定）
-- 异步执行（不阻塞服务）
-- 检测重复运行（防止冲突）
-
-**扫描范围**：
-- 扫描时长可配置（默认48小时，范围12-168小时）
-- 只扫描最近3个日期目录
-- 跳过不存在的目录
-
-**配置方式**：
-1. 前端：系统设置 → 文件恢复配置 → 恢复扫描时长
-2. 后端：从系统配置表读取 `recoveryScanHours`
-3. 实时生效：修改后重启服务生效
-
-#### 2.1.2 文件识别逻辑
-
-**识别temp文件**：
-- 文件名包含 `_temp_`
-- 修改时间超过1小时（排除正在录制的）
-
-**识别错误结束时间**：
-- 结束时间 = 配置的预设时间（如235900）
-- 实际时长与预期相差超过5分钟
-
-#### 2.1.3 文件修复逻辑
-
-**temp文件重命名**：
-```
-1. 提取：频道名、频道ID、日期、段号
-2. 获取：文件实际时长（用ffprobe）
-3. 计算：结束时间 = 文件修改时间
-        开始时间 = 结束时间 - 时长
-4. 生成：正式文件名
-5. 重命名：temp_002.mp4 → 二楼教室1_stream_xxx_20251030_090000_to_091500.mp4
-```
-
-**错误结束时间修复**：
-```
-1. 获取：文件修改时间（实际停止时间）
-2. 格式化：HHMMSS格式
-3. 替换：...to_235900.mp4 → ...to_103000.mp4
-```
-
-**格式修复**（备用）：
-- 检查文件是否可播放（用ffprobe）
-- 如果损坏，用ffmpeg重新封装（-c copy）
-- 适用于极端情况（方案1失效）
-
-### 2.1 创建RecordingRecoveryService.js
-
-**文件路径**: `vps-transcoder-api/vps-transcoder-api/src/services/RecordingRecoveryService.js`
-
-**关键代码结构**：
+`app.js` 实际传入的配置为：
 
 ```javascript
-class RecordingRecoveryService {
-  constructor(streamManager, systemConfig) {
-    this.streamManager = streamManager;
-    this.config = {
-      enabled: true,
-      delayStart: 5000,
-      // 从系统配置读取，默认48小时
-      scanRecentHours: systemConfig?.recoveryScanHours || 48
-    };
-  }
-
-  // 启动入口
-  async startup() {
-    setTimeout(() => this.runRecovery(), 5000);
-  }
-
-  // 主流程
-  async runRecovery() {
-    const filesToFix = await this.findFilesNeedingRecovery();
-    for (const file of filesToFix) {
-      const isPlayable = await this.checkFilePlayable(file.path);
-      if (!isPlayable) await this.repairFileFormat(file.path);
-      await this.fixFileName(file);
-    }
-  }
-
-  // 扫描逻辑：遍历频道 → 日期目录 → mp4文件
-  async findFilesNeedingRecovery() { /* ... */ }
-
-  // 修复逻辑：temp文件 or 错误结束时间
-  async fixFileName(file) {
-    if (file.type === 'temp') await this.renameTempFile(file);
-    else await this.fixEndTime(file);
-  }
-
-  // 工具方法
-  async getVideoDuration(filePath) { /* 用ffprobe */ }
-  async checkFilePlayable(filePath) { /* 用ffprobe */ }
-  async repairFileFormat(filePath) { /* 用ffmpeg */ }
-}
+const systemConfig = {
+  recoveryScanHours: parseInt(process.env.RECOVERY_SCAN_HOURS) || 48
+};
 ```
 
-**完整代码**见附件：`RecordingRecoveryService.js`（约250行）
+因此，当前启动路径从 `RECOVERY_SCAN_HOURS` 环境变量读取扫描小时数，缺省为 48。旧方案中“从前端系统设置接口读取 `recoveryScanHours`”的草图不代表当前启动代码。构造器注释提到的 12–168 小时范围，也不是这条启动路径已实现的数值校验。
 
-### 2.2 集成到app.js
+两条扫描路径都受以下条件限制：
 
-**文件**: `vps-transcoder-api/vps-transcoder-api/src/app.js`
+1. 优先使用 `streamManager.recordingConfigs` 中的频道和各频道 `storagePath`。仅当该集合为空时，才从录制根目录枚举名称以 `stream_` 开头的目录。
+2. 频道未提供 `storagePath` 时，使用 `RECORDINGS_PATH`；当前代码兜底值为 `/srv/filebrowser/yoyo-k`。该路径是代码默认值，不是对目标环境路径的确认。
+3. 每个频道只扫描名称为 8 位数字、按名称排序后的最近 3 个日期目录。
+4. 文件必须以 `.mp4` 结尾，且 `mtime > 当前时间 - scanRecentHours × 60 × 60 × 1000`（毫秒）。判断依据是修改时间，不是创建时间，也不是仅依据文件名日期。
+5. 自动恢复进一步要求文件名包含 `_temp_`；手动路径还可能检查正式文件。
 
-**在require部分添加**:
-```javascript
-const RecordingRecoveryService = require('./services/RecordingRecoveryService');
+扩大 `RECOVERY_SCAN_HOURS` 不会取消“最近 3 个日期目录”的限制。目录兜底扫描得到的频道没有 `recordConfig`，会跳过正式文件的预设结束时间检查。
+
+## 3. 临时文件恢复命名
+
+### 3.1 可识别格式
+
+```text
+新格式：{频道名}_{频道ID}_{YYYYMMDD}_{本次录制开始HHMMSS}_temp_XXX.mp4
+旧格式：{频道名}_{频道ID}_{YYYYMMDD}_temp_XXX.mp4
+正式名：{频道名}_{频道ID}_{YYYYMMDD}_{计算开始HHMMSS}_to_{计算结束HHMMSS}.mp4
 ```
 
-**在服务初始化部分添加**（recordScheduler之后）:
-```javascript
-// 获取系统配置
-const systemConfig = await axios.get('http://localhost:3000/api/admin/cleanup/config')
-  .then(res => res.data.data)
-  .catch(() => ({}));
+`renameTempFile()` 同时兼容这两代临时名；当前匹配正则要求段号恰好为 3 位。仅包含 `_temp_` 但不符合完整格式的文件会被扫描到，随后因无法解析而跳过。
 
-// 初始化录制恢复服务（异步执行，传入系统配置）
-const recoveryService = new RecordingRecoveryService(streamManager, systemConfig);
-recoveryService.startup();
+新格式中的开始时间用于区分录制会话，避免旧格式同日重复录制容易出现的重名问题。它不等于该会话后续每一段的实际开始时间；恢复过程也不会直接把它作为正式文件的开始时间。临时名生成和正常分段的段号含义以主规范为准。
+
+### 3.2 恢复时间算法
+
+新旧格式都使用以下算法：
+
+```text
+视频时长（秒） = ffprobe 读取 format=duration
+结束时间       = 原临时文件 mtime
+开始时间       = 结束时间 - 视频时长
+正式名日期     = 原临时文件名中的 YYYYMMDD
 ```
 
-### 2.3 前端添加配置项
+对应方法为 `renameTempFile()`、`getVideoDuration()` 和 `formatTime()`。新格式还会将计算开始时间与临时名中的会话开始时间比较，差异超过 60 秒时记录 `Start time mismatch detected`，但仍使用计算值生成正式名。段号不参与这条恢复时间计算。
 
-**文件**: `frontend/src/components/admin/SystemSettingsDialog.vue`
+恢复得到的是基于 mtime 和媒体时长的推算值。复制文件、人工修改 mtime、媒体时长解析异常都会影响结果；不能把它直接当作独立校验过的拍摄时间。跨日恢复时，代码继续沿用原文件名日期，不会按反推开始日期重新选择目录。
 
-**在form数据中添加**:
-```javascript
-const form = reactive({
-  enabled: true,
-  retentionDays: 2,
-  segmentEnabled: false,
-  segmentDuration: 60,
-  recoveryScanHours: 48  // 🆕 恢复扫描时长（小时）
-})
+### 3.3 时区与冲突处理
+
+`formatTime()` 当前使用 `Date.getHours()`、`getMinutes()`、`getSeconds()`，依赖 Node 进程所在环境的本地时区；解析临时名时间用于比较时，也使用本地 `Date` 构造器。此恢复路径没有显式转换为北京时间。需要北京时间结果时，应核对目标进程时区和样本输出，不能只因正常录制命名采用北京时间就认定恢复输出也一定一致。
+
+如果目标正式文件已经存在，恢复代码记录 `Target file already exists` 并跳过，不覆盖该正式文件，也不清除原临时文件。这种跳过不能计为已经成功恢复。
+
+## 4. 标准 MP4 重封装与降级
+
+识别为可恢复临时文件、时间探测成功且目标名不存在后，新旧格式都调用 `streamManager.convertSegmentToStandardMp4()`，这是常规步骤，不是仅在预先检测到文件损坏时才执行的备用逻辑。
+
+该方法实际启动的核心参数为：
+
+```text
+ffmpeg -i <临时文件> -c copy -movflags faststart -y <正式文件>
 ```
 
-**在模板中添加配置项**（录制分段配置之后）:
-```vue
-<el-divider content-position="left">文件恢复配置</el-divider>
+`-c copy` 表示重封装而非重新编码。正常成功分支要求 FFmpeg 退出码为 0 且输出文件存在，然后删除临时文件。转换失败、进程错误或 60 秒超时分支会尝试直接改名降级；各分支还受输入、输出文件是否存在的条件影响。生成正式名不等于标准 MP4 转换成功，也不等于播放完整性已经验证。
 
-<el-form-item label="恢复扫描时长">
-  <el-input-number 
-    v-model="form.recoveryScanHours" 
-    :min="12" 
-    :max="168"
-    style="width: 150px"
-  />
-  <span style="margin-left: 10px;">小时</span>
-  <div style="margin-top: 5px; color: #909399; font-size: 12px;">
-    启动时扫描并修复最近 {{ form.recoveryScanHours }} 小时内的录制文件
-  </div>
-  <div style="margin-top: 10px;">
-    <el-button size="small" @click="form.recoveryScanHours = 24">24小时</el-button>
-    <el-button size="small" @click="form.recoveryScanHours = 48">48小时</el-button>
-    <el-button size="small" @click="form.recoveryScanHours = 72">72小时</el-button>
-  </div>
-</el-form-item>
+`runRecoveryWithSizeCheck()` 和 `runRecovery()` 内仍有“只重命名、不修复格式”的旧注释，但实际调用链是：
+
+```text
+fixFileName(temp)
+  → renameTempFile()
+  → convertSegmentToStandardMp4()
 ```
 
-**在保存方法中添加字段**:
-```javascript
-const response = await axios.put('/api/admin/cleanup/config', {
-  enabled: form.enabled,
-  retentionDays: form.retentionDays,
-  segmentEnabled: form.segmentEnabled,
-  segmentDuration: form.segmentDuration,
-  recoveryScanHours: form.recoveryScanHours  // 🆕
-})
-```
+判断当前行为应以这条调用链为准。`checkFilePlayable()`、`repairFileFormat()` 虽仍在服务文件中，当前这两条恢复主流程没有按旧草图先调用它们。
 
-### 2.4 验证阶段2
+恢复生成正式文件后会尝试派发文件最终化事件；`app.js` 注入了调度器时，该事件可进入后续自动上传流程。恢复完成不表示云盘上传或云端核对完成。
 
-```powershell
-node -c vps-transcoder-api/vps-transcoder-api/src/services/RecordingRecoveryService.js
-git add vps-transcoder-api/vps-transcoder-api/src/services/RecordingRecoveryService.js vps-transcoder-api/vps-transcoder-api/src/app.js frontend/src/components/admin/SystemSettingsDialog.vue
-git commit -m "feat: 实现录制文件恢复服务（可配置扫描时长）"
-git push origin master
-ssh root@<VPS_IP> "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && ./vps-simple-deploy.sh"
-ssh root@<VPS_IP> "tail -100 /var/log/transcoder/pm2-out.log | grep -i recovery"
-```
+## 5. 正式文件的预设结束时间纠正
 
-**验证清单**: 
-- [ ] 日志显示 "Recovery service scheduled"
-- [ ] 5秒后显示处理结果
-- [ ] 前端系统设置中显示"文件恢复配置"
-- [ ] 可以修改恢复扫描时长（12-168小时）
+这一分支仅属于手动 `runRecovery()` 路径，启动自动恢复只扫描临时文件。
 
----
+当频道有录制配置时，手动扫描会匹配正式名末尾的 `_HHMMSS_to_HHMMSS.mp4`。结束时间等于频道预设 `endTime`，并且 `needsEndTimeCheck()` 判定需要处理时，才生成 `wrongEndTime` 候选；`fixEndTime()` 随后用文件 mtime 替换正式名结束时间，目标已存在时不改名。
 
-## 🚀 阶段3：部署测试（30分钟）
+**已知代码边界**：`parseTimeString()` 返回秒数，但 `needsEndTimeCheck()` 又将两个时间的差除以 1000，再与 ffprobe 的秒数比较。因此旧文档“实际时长与预期相差超过 5 分钟才修复”不能作为当前可靠保证。该计算还未处理跨午夜的时间差。本次仅修订文档，没有修复这些代码问题。
 
-### 测试目标
+## 6. 核验与验收
 
-验证两个核心功能是否正常工作：
-1. **Fragmented MP4**：崩溃后文件可播放
-2. **Recovery Service**：启动时自动修复文件名
+当前源代码可证明存在上述入口与计算路径，不能证明目标环境使用同一版本、目录配置正确或样本已经恢复。运行验收按 [恢复测试指南](./RECORDING_RECOVERY_TEST.md) 执行，并记录具体输入文件、mtime、媒体时长、目标文件和日志。
 
-### 3.1 测试Fragmented MP4防护
+不能仅凭 HTTP 成功返回、`Recovery completed` 汇总或“正式文件存在”判定成功：单个恢复函数会自行捕获异常，转换方法也有降级分支，需要核对本次具体文件。
 
-**测试逻辑**：
-```
-1. 开启录制（前端操作）
-2. 等待1-2分钟（生成若干fragments）
-3. 模拟程序崩溃（pm2 restart）
-4. 下载录制文件到本地
-5. 用播放器测试是否可播放
-```
+## 7. 历史方案说明
 
-**预期结果**：
-- ✅ 文件可以播放
-- ✅ 播放时长约1-2分钟（已录制的部分）
-- ✅ 画面和帧率正常
+本文原版为 2025-10-30 的 v1.0 实施计划，其进度表各阶段均为“未开始”，没有可据此认定当前环境已部署或验收通过的结果。原“部署完成”“可靠性 99.9%”“最大丢失约 2 秒”“零性能影响”等结尾声明，没有在本次静态核验中取得运行证据，不能作为当前保证。
 
-**验证命令**：
-```powershell
-# 模拟崩溃
-ssh root@<VPS_IP> "pm2 restart vps-transcoder-api"
-# 检查文件
-ssh root@<VPS_IP> "ls -lh /srv/filebrowser/yoyo-k/stream_*/$(date +%Y%m%d)/*.mp4"
-```
+本次将原实施草图和“完整代码”附录替换为实际方法入口及行为说明，避免直接复制后覆盖现有实现。以下旧内容仅作为历史设计背景，不再作为现行操作步骤：
 
-### 3.2 测试Recovery自动修复
+- `vps-transcoder-api/vps-transcoder-api/` 等旧源码路径，以及围绕旧目录的部署、提交命令。
+- 通过前端配置接口初始化恢复服务、修改时间超过 1 小时才恢复，以及启动 5 秒后即完成的早期设想。
+- 先检测不可播放再备用修复格式的示例主循环。
+- 固定等待 10 秒或 15 秒即断言恢复完成的测试步骤。
 
-**测试逻辑**：
-```
-1. 创建测试文件（复制正常文件并重命名为temp_999.mp4）
-2. 重启服务（触发Recovery扫描）
-3. 等待15秒（给Recovery执行时间）
-4. 检查temp文件是否消失（已重命名）
-5. 查看日志确认重命名成功
-```
+2025-10-31 的“仅改名后文件只能播放约 4 秒”历史问题记录保留在 [恢复测试指南](./RECORDING_RECOVERY_TEST.md) 中；该记录不替代当前版本验收。
 
-**预期结果**：
-- ✅ temp_999.mp4不存在
-- ✅ 生成新文件，文件名包含正确时间范围
-- ✅ 日志显示 "Temp file renamed"
+## 8. 相关文档
 
-**验证命令**：
-```powershell
-# 创建测试文件
-ssh root@<VPS_IP> "cp [正常文件] [temp_999.mp4]"
-# 重启触发恢复
-ssh root@<VPS_IP> "pm2 restart vps-transcoder-api"
-# 15秒后检查
-Start-Sleep 15
-ssh root@<VPS_IP> "ls | grep temp"  # 应该为空
-```
-
----
-
-## 🚀 阶段4：异常验证（1小时）
-
-### 验证目标
-
-在真实异常场景下测试系统可靠性：
-1. **崩溃恢复**：程序异常终止后的恢复能力
-2. **性能影响**：修复过程对正常业务的影响
-
-### 4.1 崩溃恢复测试
-
-**测试场景**：模拟录制过程中程序崩溃
-
-**测试步骤**：
-```
-1. 开启录制（分段模式，15分钟）
-2. 等待5分钟（生成部分录制）
-3. 强制终止程序（pm2 kill）
-4. 重启服务
-5. 验证：
-   - 已录制部分可播放
-   - temp文件自动重命名
-   - 文件名包含实际时间
-```
-
-**关键检查点**：
-- 文件完整性：已录制部分可正常播放
-- 文件命名：temp文件已重命名为正式名称
-- 时间准确：文件名反映实际录制时间
-- 日志完整：Recovery日志显示处理过程
-
-### 4.2 性能影响测试
-
-**测试场景**：Recovery执行时的资源占用
-
-**测试方法**：
-```
-1. 同时开启3-4个频道录制
-2. 准备多个temp文件（模拟问题文件）
-3. 重启服务触发Recovery
-4. 监控系统资源：
-   - CPU使用率
-   - 内存使用量
-   - 磁盘I/O
-   - FFmpeg进程状态
-```
-
-**性能基准**：
-- CPU增加：+15-30%（修复时）
-- 内存增加：+50MB（修复时）
-- 持续时间：<60秒（单个文件）
-- 业务影响：录制不受影响
-
-**验证命令**：
-```powershell
-# 监控资源
-ssh root@<VPS_IP> "top -b -n 3 | grep -E 'Cpu|Mem|ffmpeg'"
-```
-
----
-
-## 📋 完成检查清单
-
-### 功能完整性
-- [ ] Fragmented MP4已启用
-- [ ] Recovery Service已部署  
-- [ ] 启动日志正常
-- [ ] 崩溃恢复正常
-- [ ] 文件名修复正常
-
-### 性能指标
-- [ ] 文件大小增加<2%
-- [ ] CPU无明显增加
-- [ ] 启动时间无影响
-
----
-
-## 🎉 部署完成
-
-**成果**: 预防文件损坏 + 自动修复 + 零性能影响  
-**可靠性**: 99.9% | **最大丢失**: 约2秒
-
----
-
-## 📎 附录：完整代码文件
-
-### RecordingRecoveryService.js 完整实现
-
-由于完整代码约250行，为保持文档简洁，完整代码请参考：
-
-**创建文件**: `vps-transcoder-api/vps-transcoder-api/src/services/RecordingRecoveryService.js`
-
-**代码要点**：
-1. **基础结构**（约60行）：构造函数、配置、启动方法
-2. **扫描逻辑**（约80行）：遍历频道、日期、文件，识别问题文件
-3. **修复逻辑**（约60行）：重命名temp文件、修复结束时间
-4. **工具方法**（约50行）：ffprobe获取时长、检查可播放性、格式修复
-
-**核心方法清单**：
-```javascript
-// 启动入口
-async startup()
-
-// 主执行流程
-async runRecovery()
-
-// 文件扫描
-async findFilesNeedingRecovery()
-async getRecordingChannels()
-
-// 文件识别
-isPresetEndTime()
-async needsEndTimeCheck()
-
-// 文件修复
-async fixFileName()
-async renameTempFile()
-async fixEndTime()
-
-// 格式修复
-async checkFilePlayable()
-async repairFileFormat()
-
-// 工具方法
-async getVideoDuration()
-parseTimeString()
-formatTime()
-```
-
-**实现细节**：
-- 使用 `child_process.spawn` 调用 ffprobe/ffmpeg
-- 使用 `fs` 模块进行文件操作
-- 使用 `Promise` 包装异步操作
-- 使用 `setTimeout` 实现延迟和超时
-- 使用 `logger` 记录详细日志
-
-**完整代码示例可参考**：
-- Node.js child_process 文档
-- fs 文件系统操作
-- Promise 异步编程模式
-
-根据上述代码结构和本文档的逻辑说明，可以完整实现RecordingRecoveryService。
+- [录制分段与命名规则](./RECORDING_SEGMENTATION_DESIGN.md)：当前统一规范，区分正常分段与异常恢复。
+- [录制文件恢复测试指南](./RECORDING_RECOVERY_TEST.md)：当前待执行用例及证据要求。
+- [系统架构文档](./ARCHITECTURE_V2.md)：架构及历史演进背景。

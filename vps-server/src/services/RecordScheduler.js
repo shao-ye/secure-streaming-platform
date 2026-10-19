@@ -24,6 +24,10 @@ class RecordScheduler {
     // 从统一配置读取Workers API配置，无默认值
     this.workersApiUrl = config.workersApiUrl;
     this.isRunning = false;
+    this.isStarting = false;
+    // 生命周期代次用于整体停止/重载；频道代次用于单频道停录，避免过期异步任务复活进程。
+    this.operationVersion = 0;
+    this.channelOperationVersions = new Map();
     this.healthCheckTimer = null;
     this.healthCheckIntervalMs = 60000;
     this.recordingOutputStaleMs = parseInt(process.env.RECORDING_OUTPUT_STALE_MS, 10) > 0
@@ -40,52 +44,58 @@ class RecordScheduler {
    * 启动调度器
    */
   async start() {
-    if (this.isRunning) {
-      logger.warn('RecordScheduler already running');
+    if (this.isRunning || this.isStarting) {
+      logger.warn('RecordScheduler already running or starting');
       return;
     }
-    
+    const operationVersion = ++this.operationVersion;
+    const channelVersions = new Map(this.channelOperationVersions);
+    this.isStarting = true;
     try {
       logger.info('Starting RecordScheduler...');
-      
-      // 1. 初始化工作日检查器
       await this.workdayChecker.initialize();
-      logger.info('WorkdayChecker initialized');
-      
-      // 2. 获取所有录制配置
+      if (!this.isOperationCurrent(operationVersion)) return;
+
       const configs = await this.fetchRecordConfigs();
+      if (!this.isOperationCurrent(operationVersion)) return;
       logger.info('Fetched record configs', { count: configs.length });
-      
-      // 3. 处理每个配置
+
       for (const config of configs) {
+        if (!this.isOperationCurrent(operationVersion)) return;
+        // 初始化等待期间收到的单频道配置更新优先，不能被较早的整批响应覆盖。
+        if ((this.channelOperationVersions.get(config.channelId) || 0)
+          !== (channelVersions.get(config.channelId) || 0)) continue;
         try {
-          // 检查是否应该立即开始录制
-          if (await this.shouldRecordNow(config)) {
-            logger.info('Starting immediate recording', { channelId: config.channelId });
-            await this.startRecording(config);
-          }
-          
-          // 设置定时任务
+          // 先登记本代配置；初始化阶段尚未 isRunning，但仍允许受代次约束的立即录制。
           this.scheduleChannel(config);
+          await this.startRecording(this.channelConfigs.get(config.channelId), { operationVersion });
         } catch (error) {
-          logger.error('Failed to process record config', { 
-            channelId: config.channelId, 
-            error: error.message 
-          });
+          logger.error('Failed to process record config', { channelId: config.channelId, error: error.message });
         }
       }
-      
-      this.startHealthCheck();
+      if (!this.isOperationCurrent(operationVersion)) return;
       this.isRunning = true;
-      logger.info('RecordScheduler started successfully', {
-        scheduledChannels: this.cronTasks.size
-      });
+      this.startHealthCheck();
+      logger.info('RecordScheduler started successfully', { scheduledChannels: this.cronTasks.size });
     } catch (error) {
+      if (this.operationVersion === operationVersion) await this.stop();
       logger.error('Failed to start RecordScheduler', { error: error.message });
       throw error;
+    } finally {
+      if (this.operationVersion === operationVersion) this.isStarting = false;
     }
   }
-  
+
+  /** 判断整体调度操作是否仍有效，初始化阶段与正常运行阶段均可接受本代任务。 */
+  isOperationCurrent(operationVersion) {
+    return this.operationVersion === operationVersion && (this.isRunning || this.isStarting);
+  }
+
+  /** 使指定频道先前排队的启动或恢复失效，不影响其他频道和下一次正常定时任务。 */
+  invalidateChannelOperations(channelId) {
+    this.channelOperationVersions.set(channelId, (this.channelOperationVersions.get(channelId) || 0) + 1);
+  }
+
   /**
    * 为频道设置定时任务
    * @param {Object} config - 录制配置
@@ -95,7 +105,7 @@ class RecordScheduler {
     
     // 清除已存在的任务
     this.unscheduleChannel(channelId);
-    this.channelConfigs.set(channelId, { ...config });
+    const scheduledConfig = { ...config };
     
     const [startH, startM] = startTime.split(':');
     const [endH, endM] = endTime.split(':');
@@ -105,10 +115,12 @@ class RecordScheduler {
     const startTask = cron.schedule(startCron, async () => {
       logger.info('Record start time triggered', { channelId, startTime });
       
-      if (await this.shouldRecordNow(config)) {
-        await this.startRecording(config);
-      } else {
-        logger.info('Skipping recording (not workday or out of range)', { channelId });
+      if (!this.isRunning || this.channelConfigs.get(channelId) !== scheduledConfig) return;
+      // startRecording 在任何配置请求前捕获代次，并在管理器拿锁后再次验证。
+      try {
+        await this.startRecording(scheduledConfig);
+      } catch (error) {
+        logger.error('Scheduled recording start failed', { channelId, error: error.message });
       }
     }, {
       scheduled: true,
@@ -118,6 +130,7 @@ class RecordScheduler {
     // 停止录制任务
     const stopCron = `${endM} ${endH} * * *`;
     const stopTask = cron.schedule(stopCron, async () => {
+      if (!this.isRunning || this.channelConfigs.get(channelId) !== scheduledConfig) return;
       logger.info('Record stop time triggered', { channelId, endTime });
       await this.stopRecording(channelId);
     }, {
@@ -126,6 +139,7 @@ class RecordScheduler {
     });
     
     this.cronTasks.set(channelId, { startTask, stopTask });
+    this.channelConfigs.set(channelId, scheduledConfig);
     
     logger.info('Scheduled record tasks', {
       channelId,
@@ -140,6 +154,7 @@ class RecordScheduler {
    * @param {string} channelId - 频道ID
    */
   unscheduleChannel(channelId) {
+    this.invalidateChannelOperations(channelId);
     const tasks = this.cronTasks.get(channelId);
     if (tasks) {
       tasks.startTask.stop();
@@ -189,30 +204,61 @@ class RecordScheduler {
   }
 
   /**
-   * 巡检当前录制状态
-   * 若仍处于录制时间窗，但 FFmpeg 已退出或只剩 HLS 进程，则自动补拉起录制
+   * 复核启动令牌、当前配置和录制时段，供普通启动及管理器锁内回调共同使用。
+   * 工作日检查可能异步等待，返回后必须再次检查代次和时间，避免越过停录/重载边界。
+   * @param {string} channelId - 频道ID
+   * @param {Object} expectedConfig - 启动时登记的配置对象
+   * @param {number} operationVersion - 整体调度操作代次
+   * @param {number} channelVersion - 频道停录/重载代次
+   * @returns {Promise<boolean>} 是否仍允许启动
+   */
+  async canStartRecording(channelId, expectedConfig, operationVersion, channelVersion) {
+    const isCurrent = () => this.isOperationCurrent(operationVersion)
+      && expectedConfig && expectedConfig.enabled !== false
+      && this.channelConfigs.get(channelId) === expectedConfig
+      && (this.channelOperationVersions.get(channelId) || 0) === channelVersion;
+    if (!isCurrent()) return false;
+    const shouldRecord = await this.shouldRecordNow(expectedConfig);
+    return shouldRecord && isCurrent()
+      && this.isInTimeRange(moment().tz('Asia/Shanghai').format('HH:mm'),
+        expectedConfig.startTime, expectedConfig.endTime);
+  }
+
+  /** 判断本轮健康恢复是否仍有效；恢复不在初始化或停止状态下执行。 */
+  async canRecoverRecording(channelId, expectedConfig, operationVersion = this.operationVersion,
+    channelVersion = this.channelOperationVersions.get(channelId) || 0) {
+    return this.isRunning && await this.canStartRecording(channelId, expectedConfig, operationVersion, channelVersion)
+      && this.isRunning;
+  }
+
+  /**
+   * 巡检当前录制状态。
+   * 跳过正在启动或停止的频道；恢复由管理器在频道锁内复核并直接启动录制，避免先切成纯观看。
    */
   async recoverInterruptedRecordings() {
     if (!this.isRunning || this.channelConfigs.size === 0) {
       return;
     }
 
-    const recordingStatus = this.streamManager.getRecordingStatus();
-    const recordingStatusMap = new Map(
-      recordingStatus.channels.map((channel) => [channel.channelId, channel])
-    );
-
     for (const [channelId, channelConfig] of this.channelConfigs.entries()) {
-      if (channelConfig.enabled === false) {
+      const operationVersion = this.operationVersion;
+      const channelVersion = this.channelOperationVersions.get(channelId) || 0;
+      if (this.recoveryLocks.has(channelId)
+        || this.streamManager.isChannelTransitioning(channelId)
+        || !(await this.canRecoverRecording(channelId, channelConfig, operationVersion, channelVersion))) {
         continue;
       }
 
-      if (!(await this.shouldRecordNow(channelConfig))) {
+      // 每个频道读取即时状态，不复用上一频道异步恢复之前的整批快照。
+      const currentStatus = this.streamManager.getRecordingStatus().channels
+        .find(channel => channel.channelId === channelId);
+      if (['starting', 'stopping'].includes(currentStatus?.state)
+        || this.streamManager.isChannelTransitioning(channelId)) {
         continue;
       }
 
-      const currentStatus = recordingStatusMap.get(channelId);
-      const isHealthyRecording = currentStatus?.isActive && currentStatus?.isRecording;
+      const isHealthyRecording = currentStatus?.state !== 'failed'
+        && currentStatus?.isActive && currentStatus?.isRecording;
       let recoveryReason = 'recording_status_inactive';
       let outputHealth = null;
 
@@ -220,32 +266,38 @@ class RecordScheduler {
         outputHealth = this.streamManager.getRecordingOutputHealth(channelId, {
           maxStaleMs: this.recordingOutputStaleMs
         });
-
         if (outputHealth.healthy) {
           continue;
         }
-
         recoveryReason = outputHealth.reason;
       }
 
+      // 前面的工作日判断可能让两轮巡检交错，申请本轮恢复标记前再检查一次。
       if (this.recoveryLocks.has(channelId)) {
         continue;
       }
-
       this.recoveryLocks.add(channelId);
-
       try {
+        const fullConfig = await this.buildRecordingConfig(channelConfig);
+        if (!(await this.canRecoverRecording(channelId, channelConfig, operationVersion, channelVersion))) {
+          continue;
+        }
+
         logger.warn('Detected interrupted recording, attempting recovery', {
           channelId,
           reason: recoveryReason,
+          state: currentStatus?.state || null,
           hasRecordingMarker: !!currentStatus,
           isActive: currentStatus?.isActive || false,
           isRecording: currentStatus?.isRecording || false,
           outputHealth
         });
 
-        await this.streamManager.disableRecording(channelId);
-        await this.startRecording(channelConfig);
+        await this.streamManager.recoverRecording(channelId, fullConfig, {
+          maxStaleMs: this.recordingOutputStaleMs,
+          // 管理器拿到锁后必须再次调用，防止排队期间用户关停、重载或越过结束时刻。
+          shouldRecover: () => this.canRecoverRecording(channelId, channelConfig, operationVersion, channelVersion)
+        });
       } catch (error) {
         logger.error('Failed to recover interrupted recording', {
           channelId,
@@ -257,7 +309,7 @@ class RecordScheduler {
       }
     }
   }
-  
+
   /**
    * 判断当前是否应该录制
    * @param {Object} config - 录制配置
@@ -324,7 +376,8 @@ class RecordScheduler {
       const response = await fetch(`${this.workersApiUrl}/api/admin/cleanup/config`, {
         headers: {
           'X-API-Key': apiKey
-        }
+        },
+        signal: AbortSignal.timeout(10000)
       });
       
       if (!response.ok) {
@@ -359,48 +412,55 @@ class RecordScheduler {
   }
   
   /**
-   * 启动录制
-   * @param {Object} config - 录制配置
+   * 为启动和健康恢复构建一致的录制配置。
+   * 分段设置以本次读取的全局配置为准，频道自己的录制时段等字段保持原值。
+   * @param {Object} channelConfig - 频道录制配置
+   * @returns {Promise<Object>} 包含全局分段参数的录制配置
    */
-  async startRecording(config) {
+  async buildRecordingConfig(channelConfig) {
+    const systemSettings = await this.fetchSystemSettings();
+    return {
+      ...channelConfig,
+      segmentEnabled: systemSettings.segmentEnabled,
+      segmentDuration: systemSettings.segmentDuration
+    };
+  }
+
+  /**
+   * 启动当前代次的录制；网络等待或频道锁等待期间停录、重载、关停均会取消本轮启动。
+   * @param {Object} config - 已登记到 channelConfigs 的录制配置
+   * @param {Object} options - 上层初始化或重载操作的代次
+   * @returns {Promise<Object>} 管理器结果，过期任务返回 skipped
+   */
+  async startRecording(config, options = {}) {
+    const operationVersion = options.operationVersion ?? this.operationVersion;
+    const channelVersion = this.channelOperationVersions.get(config.channelId) || 0;
+    const shouldStart = () => this.canStartRecording(config.channelId, config, operationVersion, channelVersion);
     try {
-      logger.info('Starting recording', { 
-        channelId: config.channelId,
-        channelName: config.channelName
-      });
-      
-      // 🆕 获取系统设置（分段配置）
-      const systemSettings = await this.fetchSystemSettings();
-      
-      // 🆕 合并配置
-      const fullConfig = {
-        ...config,
-        segmentEnabled: systemSettings.segmentEnabled,
-        segmentDuration: systemSettings.segmentDuration
-      };
-      
+      if (!(await shouldStart())) return { skipped: true };
+      logger.info('Starting recording', { channelId: config.channelId, channelName: config.channelName });
+      const fullConfig = await this.buildRecordingConfig(config);
+      if (!(await shouldStart())) return { skipped: true };
       logger.info('Recording config prepared', {
         channelId: config.channelId,
         segmentEnabled: fullConfig.segmentEnabled,
         segmentDuration: fullConfig.segmentDuration
       });
-      
-      await this.streamManager.enableRecording(config.channelId, fullConfig);
-      
-      logger.info('Recording started successfully', { channelId: config.channelId });
+      const result = await this.streamManager.enableRecording(config.channelId, fullConfig, { shouldStart });
+      if (!result?.skipped) logger.info('Recording started successfully', { channelId: config.channelId });
+      return result;
     } catch (error) {
-      logger.error('Failed to start recording', { 
-        channelId: config.channelId, 
-        error: error.message 
-      });
+      logger.error('Failed to start recording', { channelId: config.channelId, error: error.message });
+      throw error;
     }
   }
-  
+
   /**
    * 停止录制
    * @param {string} channelId - 频道ID
    */
   async stopRecording(channelId) {
+    this.invalidateChannelOperations(channelId);
     try {
       logger.info('Stopping recording', { channelId });
       
@@ -430,7 +490,8 @@ class RecordScheduler {
       const response = await fetch(`${this.workersApiUrl}/api/record/configs`, {
         headers: {
           'X-API-Key': apiKey
-        }
+        },
+        signal: AbortSignal.timeout(10000)
       });
       
       if (!response.ok) {
@@ -459,192 +520,112 @@ class RecordScheduler {
    * 重新加载配置（用于配置更新后热重载）
    */
   async reloadSchedule() {
+    if (!this.isRunning && !this.isStarting) return { skipped: true };
+    const operationVersion = ++this.operationVersion;
+    // 请求新配置之前先让旧任务失效，不能让旧 cron 在请求返回后继续启用录制。
+    for (const channelId of this.cronTasks.keys()) this.unscheduleChannel(channelId);
+    this.channelConfigs.clear();
+    const channelVersions = new Map(this.channelOperationVersions);
     try {
       logger.info('Reloading record schedule...');
-      
-      // 1. 获取新的配置
       const configs = await this.fetchRecordConfigs();
-      const newEnabledChannels = new Set(configs.map(c => c.channelId));
-      
-      // 2. 停止不再需要录制的频道
+      if (!this.isOperationCurrent(operationVersion)) return { skipped: true };
+      const newEnabledChannels = new Set(configs.map(config => config.channelId));
       const recordingStatus = this.streamManager.getRecordingStatus();
       for (const channel of recordingStatus.channels) {
+        if (!this.isOperationCurrent(operationVersion)) return { skipped: true };
+        if ((this.channelOperationVersions.get(channel.channelId) || 0)
+          !== (channelVersions.get(channel.channelId) || 0)) continue;
         if (channel.isRecording && !newEnabledChannels.has(channel.channelId)) {
-          logger.info('Stopping recording for disabled channel', { 
-            channelId: channel.channelId 
-          });
-          try {
-            // 🔧 修复：使用正确的方法名 disableRecording
-            await this.streamManager.disableRecording(channel.channelId);
-          } catch (error) {
-            logger.error('Failed to stop recording', { 
-              channelId: channel.channelId, 
-              error: error.message 
-            });
-          }
+          await this.stopRecording(channel.channelId);
         }
       }
-      
-      // 3. 停止所有现有的定时任务
-      for (const channelId of this.cronTasks.keys()) {
-        this.unscheduleChannel(channelId);
-      }
-      
-      // 4. 为启用的频道设置新任务
       for (const config of configs) {
+        if (!this.isOperationCurrent(operationVersion)) return { skipped: true };
+        if ((this.channelOperationVersions.get(config.channelId) || 0)
+          !== (channelVersions.get(config.channelId) || 0)) continue;
         try {
-          // 检查频道是否已经在录制中
-          const isAlreadyRecording = recordingStatus.channels.some(
-            ch => ch.channelId === config.channelId && ch.isRecording
-          );
-          
-          // 只有在未录制且应该录制时才启动录制
-          if (!isAlreadyRecording && await this.shouldRecordNow(config)) {
-            logger.info('Starting recording for new config', { 
-              channelId: config.channelId,
-              reason: 'in time range and not recording'
-            });
-            await this.startRecording(config);
-          } else if (isAlreadyRecording) {
-            logger.info('Skipping recording start (already recording)', { 
-              channelId: config.channelId 
-            });
-          }
-          
-          // 设置定时任务（无论是否在录制，都要设置定时任务）
           this.scheduleChannel(config);
+          const currentConfig = this.channelConfigs.get(config.channelId);
+          const channelVersion = this.channelOperationVersions.get(config.channelId) || 0;
+          const isAlreadyRecording = this.streamManager.getRecordingStatus().channels
+            .some(channel => channel.channelId === config.channelId && channel.isRecording);
+          if (!isAlreadyRecording) {
+            await this.startRecording(currentConfig, { operationVersion });
+          } else {
+            const shouldRecord = await this.shouldRecordNow(currentConfig);
+            if (!this.isOperationCurrent(operationVersion)) return { skipped: true };
+            if (this.channelConfigs.get(config.channelId) !== currentConfig
+              || (this.channelOperationVersions.get(config.channelId) || 0) !== channelVersion) continue;
+            // 配置请求可能跨过旧 cron 的结束时刻，重建调度时立即补上应执行的停录。
+            if (!shouldRecord || !this.isInTimeRange(moment().tz('Asia/Shanghai').format('HH:mm'),
+              currentConfig.startTime, currentConfig.endTime)) await this.stopRecording(config.channelId);
+          }
         } catch (error) {
-          logger.error('Failed to reload config', { 
-            channelId: config.channelId, 
-            error: error.message 
-          });
+          logger.error('Failed to reload config', { channelId: config.channelId, error: error.message });
         }
       }
-      
-      logger.info('Record schedule reloaded successfully', {
-        scheduledChannels: this.cronTasks.size,
-        stoppedChannels: recordingStatus.channels.length - newEnabledChannels.size
-      });
-      
-      return {
-        status: 'success',
-        scheduledChannels: this.cronTasks.size
-      };
+      if (!this.isOperationCurrent(operationVersion)) return { skipped: true };
+      if (this.isStarting && !this.isRunning) {
+        this.isRunning = true;
+        this.isStarting = false;
+        this.startHealthCheck();
+      }
+      logger.info('Record schedule reloaded successfully', { scheduledChannels: this.cronTasks.size });
+      return { status: 'success', scheduledChannels: this.cronTasks.size };
     } catch (error) {
+      if (this.isStarting && !this.isRunning && this.operationVersion === operationVersion) await this.stop();
       logger.error('Failed to reload schedule', { error: error.message });
       throw error;
     }
   }
-  
+
   /**
    * 使用直接传递的配置重载单个频道的录制调度
    * @param {string} channelId - 频道ID
    * @param {Object} config - 完整的录制配置对象
    */
   async reloadScheduleWithConfig(channelId, config) {
+    if (!this.isRunning && !this.isStarting) return { skipped: true };
+    const operationVersion = this.operationVersion;
+    this.unscheduleChannel(channelId);
     try {
-      logger.info('Reloading schedule with direct config', { 
-        channelId, 
-        enabled: config.enabled,
-        startTime: config.startTime,
-        endTime: config.endTime
+      logger.info('Reloading schedule with direct config', {
+        channelId, enabled: config.enabled, startTime: config.startTime, endTime: config.endTime
       });
-      
-      // 1. 检查该频道当前的录制状态
       const recordingStatus = this.streamManager.getRecordingStatus();
       const isCurrentlyRecording = recordingStatus.channels.some(
-        ch => ch.channelId === channelId && ch.isRecording
-      );
-      // ✅ 同时检查是否有录制标记（进程可能已停止但标记未清理）
+        channel => channel.channelId === channelId && channel.isRecording);
       const hasRecordingMarker = this.streamManager.recordingChannels.has(channelId);
-      
-      // 2. 停止该频道现有的定时任务
-      this.unscheduleChannel(channelId);
-      
-      // 3. 根据新配置处理
       if (config.enabled) {
-        // 3.1 配置启用录制
-        logger.info('Config enabled, checking if should start recording now', { 
-          channelId,
-          isCurrentlyRecording 
-        });
-        
-        // 只有在未录制且应该录制时才启动
-        if (!isCurrentlyRecording && await this.shouldRecordNow(config)) {
-          logger.info('Starting recording immediately', { 
-            channelId,
-            reason: 'in time range and config enabled'
-          });
-          await this.startRecording(config);
-        } else if (isCurrentlyRecording) {
-          // 🎯 检查当前时间是否还在新的时间范围内
-          if (await this.shouldRecordNow(config)) {
-            logger.info('Already recording and in new time range, keeping state', { channelId });
-          } else {
-            // 当前时间不在新范围内，立即停止录制
-            logger.info('Out of new recording range, stopping recording', { 
-              channelId,
-              reason: 'time range updated, current time out of range',
-              startTime: config.startTime,
-              endTime: config.endTime,
-              currentTime: moment().tz('Asia/Shanghai').format('HH:mm')
-            });
-            await this.streamManager.disableRecording(channelId);
-          }
-        } else {
-          logger.info('Not in recording time range, scheduling only', { channelId });
-        }
-        
-        // 设置新的定时任务
+        // 先发布新配置，使旧代启动立即失效；后续异步操作都以这个对象和代次为准。
         this.scheduleChannel(config);
-        
-      } else {
-        // 3.2 配置禁用录制
-        logger.info('Config disabled, stopping recording if active', { 
-          channelId,
-          isCurrentlyRecording,
-          hasRecordingMarker
-        });
-        
-        // ✅ 修改判断条件：进程在录制 或 有录制标记都需要调用disableRecording
-        if (isCurrentlyRecording || hasRecordingMarker) {
-          try {
-            await this.streamManager.disableRecording(channelId);
-            logger.info('Recording stopped for disabled config', { channelId });
-          } catch (error) {
-            logger.error('Failed to stop recording', { 
-              channelId, 
-              error: error.message 
-            });
-          }
+        const currentConfig = this.channelConfigs.get(channelId);
+        const channelVersion = this.channelOperationVersions.get(channelId) || 0;
+        if (!isCurrentlyRecording) {
+          await this.startRecording(currentConfig, { operationVersion });
+        } else {
+          const shouldRecord = await this.shouldRecordNow(currentConfig);
+          if (!this.isOperationCurrent(operationVersion)
+            || this.channelConfigs.get(channelId) !== currentConfig
+            || (this.channelOperationVersions.get(channelId) || 0) !== channelVersion) return { skipped: true };
+          if (!shouldRecord || !this.isInTimeRange(moment().tz('Asia/Shanghai').format('HH:mm'),
+            currentConfig.startTime, currentConfig.endTime)) await this.stopRecording(channelId);
         }
-        
-        // 不设置定时任务（因为已禁用）
+      } else if (isCurrentlyRecording || hasRecordingMarker) {
+        await this.stopRecording(channelId);
       }
-      
+      if (!this.isOperationCurrent(operationVersion)) return { skipped: true };
       logger.info('Schedule reloaded successfully with direct config', {
-        channelId,
-        enabled: config.enabled,
-        hasScheduledTask: this.cronTasks.has(channelId),
-        isRecording: this.streamManager.getRecordingStatus().channels
-          .some(ch => ch.channelId === channelId && ch.isRecording)
+        channelId, enabled: config.enabled, hasScheduledTask: this.cronTasks.has(channelId)
       });
-      
-      return {
-        status: 'success',
-        channelId,
-        enabled: config.enabled
-      };
+      return { status: 'success', channelId, enabled: config.enabled };
     } catch (error) {
-      logger.error('Failed to reload schedule with config', { 
-        channelId, 
-        error: error.message,
-        stack: error.stack
-      });
+      logger.error('Failed to reload schedule with config', { channelId, error: error.message, stack: error.stack });
       throw error;
     }
   }
-  
+
   /**
    * 获取调度器状态
    */
@@ -664,14 +645,17 @@ class RecordScheduler {
    */
   async stop() {
     logger.info('Stopping RecordScheduler...');
-    
+    // 先关闭恢复入口，再清理定时任务，禁止旧巡检在关停期间继续启动录制。
+    this.isRunning = false;
+    this.isStarting = false;
+    this.operationVersion++;
+
     // 停止所有定时任务
     for (const channelId of this.cronTasks.keys()) {
       this.unscheduleChannel(channelId);
     }
     
     this.stopHealthCheck();
-    this.isRunning = false;
     this.channelConfigs.clear();
     this.recoveryLocks.clear();
     logger.info('RecordScheduler stopped');

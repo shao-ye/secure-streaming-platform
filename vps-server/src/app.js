@@ -239,7 +239,14 @@ app.post('/api/admin/recovery/execute', async (req, res) => {
     
     // 手动触发恢复
     logger.info('🔧 手动触发录制文件恢复...');
-    await recoveryService.runRecovery();
+    const recoveryResult = await recoveryService.runRecovery();
+    if (recoveryResult && recoveryResult.status === 'skipped') {
+      return res.status(202).json({
+        status: 'success',
+        message: 'Recovery request skipped because service is busy or stopping',
+        timestamp: new Date().toISOString()
+      });
+    }
     
     res.json({
       status: 'success',
@@ -400,47 +407,62 @@ const processManager = new ProcessManager();
 // 声明videoCleanupScheduler（在外部作用域，供gracefulShutdown访问）
 // videoCleanupScheduler在上面的try块中已初始化
 
-// 优雅退出处理
-const gracefulShutdown = async (signal) => {
-    logger.info(`${signal} received, shutting down gracefully...`);
+// 同一轮关停只执行一次，避免 SIGINT/SIGTERM 重入并重复处理录制文件。
+let shutdownPromise = null;
 
-    try {
-        // 停止所有流
-        await processManager.stopAllStreams();
-        logger.info('All streams stopped');
-        
-        // 停止录制上传扫描器（迭代 3）
-        if (uploadScanner) {
-          try {
-            uploadScanner.stop();
-            logger.info('RecordingUploadScanner stopped');
-          } catch (error) {
-            logger.error('RecordingUploadScanner 停止失败', { error: error.message });
-          }
+/**
+ * 先关闭所有可能重新启动录制或处理文件的入口，再等待实际流管理器结束写入并收尾。
+ * 单个组件失败仍继续关闭其余组件，最终以非零状态退出，保留错误和临时录制文件供恢复。
+ */
+const gracefulShutdown = (signal) => {
+    if (shutdownPromise) return shutdownPromise;
+
+    shutdownPromise = (async () => {
+        logger.info(`${signal} received, shutting down gracefully...`);
+        const failures = [];
+
+        // 在第一个异步等待前阻止新会话，避免关闭调度或恢复任务时仍接受观看/录制启动。
+        if (streamManager && typeof streamManager.beginShutdown === 'function') {
+            streamManager.beginShutdown();
         }
 
-        // 停止上传 Worker（迭代 2）
-        if (uploadWorker) {
-          try {
-            await uploadWorker.stop();
-            logger.info('CloudUploadWorker stopped');
-          } catch (error) {
-            logger.error('CloudUploadWorker 停止失败', { error: error.message });
-          }
-        }
+        // 各组件独立捕获异常，不能因一个定时器关闭失败而跳过真正的 FFmpeg 退出等待。
+        const stopComponent = async (name, stop) => {
+            try {
+                await stop();
+                logger.info(`${name} stopped`);
+            } catch (error) {
+                failures.push(name);
+                logger.error(`${name} shutdown failed; unfinished recording temp files are retained`, {
+                    error: error.message,
+                    stack: error.stack
+                });
+            }
+        };
 
-        // 停止视频清理调度器
-        if (videoCleanupScheduler) {
-            await videoCleanupScheduler.stop();
-            logger.info('Video cleanup scheduler stopped');
+        // 先停调度和扫描；否则停止进程期间的健康检查可能重新启动同一频道。
+        if (recordScheduler) await stopComponent('RecordScheduler', () => recordScheduler.stop());
+        if (preloadScheduler) await stopComponent('PreloadScheduler', () => preloadScheduler.stop());
+        if (preloadHealthCheck) await stopComponent('PreloadHealthCheck', () => preloadHealthCheck.stop());
+        if (uploadScanner) await stopComponent('RecordingUploadScanner', () => uploadScanner.stop());
+        if (videoCleanupScheduler) await stopComponent('VideoCleanupScheduler', () => videoCleanupScheduler.stop());
+        if (recoveryService) await stopComponent('RecordingRecoveryService', () => recoveryService.stop());
+
+        // 实际录制由 SimpleStreamManager 持有；旧 ProcessManager 不能替代它的关闭过程。
+        if (streamManager) await stopComponent('SimpleStreamManager', () => streamManager.destroy());
+        await stopComponent('ProcessManager', () => processManager.stopAllStreams());
+        if (uploadWorker) await stopComponent('CloudUploadWorker', () => uploadWorker.stop());
+
+        if (failures.length > 0) {
+            logger.error('Graceful shutdown incomplete; retain temp files for recovery', { failures });
+            process.exit(1);
+            return;
         }
-        
         logger.info('Graceful shutdown completed, exiting process');
         process.exit(0);
-    } catch (error) {
-        logger.error('Error during graceful shutdown:', error);
-        process.exit(1);
-    }
+    })();
+
+    return shutdownPromise;
 };
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -482,12 +504,19 @@ if (require.main === module) {
             });
           }
         }
+
+        // 初始化等待期间可能已收到退出信号，不能在关停后重新打开调度入口。
+        if (shutdownPromise) return;
         
         // 🆕 启动PreloadScheduler（在服务器启动后，确保单次执行）
         if (preloadScheduler) {
           try {
             logger.info('🔄 Starting PreloadScheduler...');
             await preloadScheduler.start();
+            if (shutdownPromise) {
+              await preloadScheduler.stop();
+              return;
+            }
             logger.info('✅ PreloadScheduler started successfully');
             
             // 启动健康检查
@@ -503,11 +532,17 @@ if (require.main === module) {
           }
         }
         
+        if (shutdownPromise) return;
+
         // 🆕 启动RecordScheduler
         if (recordScheduler) {
           try {
             logger.info('🔄 Starting RecordScheduler...');
             await recordScheduler.start();
+            if (shutdownPromise) {
+              await recordScheduler.stop();
+              return;
+            }
             logger.info('✅ RecordScheduler started successfully');
           } catch (error) {
             logger.error('❌ Failed to start RecordScheduler', { 
@@ -516,6 +551,8 @@ if (require.main === module) {
             });
           }
         }
+
+        if (shutdownPromise) return;
         
         // 🆕 启动上传 Worker（迭代 2）
         if (uploadWorker) {

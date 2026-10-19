@@ -42,28 +42,43 @@ router.post('/start-watching', async (req, res) => {
       });
     }
     
-    logger.info('Starting stream with provided parameters', { channelId, rtmpUrl });
-    
-    // 🆕 从 Workers 获取频道配置
+    logger.info('Starting stream with provided parameters', { channelId });
+
+    // 配置未知不能解释为用户改成原始比例；失败时继续传 null，由管理器保留现有流设置。
+    // 日志只保留结构化诊断字段，不记录请求头、响应原文或可能含凭据的完整错误消息。
     let channelConfig = null;
+    const configRequestStartedAt = Date.now();
     try {
       const config = require('../../config');
       const configUrl = `${config.workersApiUrl}/api/channel/${channelId}/config`;
       const response = await axios.get(configUrl, { timeout: 3000 });
-      if (response.data.status === 'success') {
-        channelConfig = response.data.data;
-        logger.info('Fetched channel config', { 
-          channelId, 
-          videoAspectRatio: channelConfig.videoAspectRatio 
+      const responseConfig = response.data?.data;
+      if (response.data?.status === 'success' && responseConfig
+        && ['original', '4:3', '16:9'].includes(responseConfig.videoAspectRatio)) {
+        channelConfig = responseConfig;
+        logger.info('Fetched channel config', {
+          channelId,
+          videoAspectRatio: channelConfig.videoAspectRatio
+        });
+      } else {
+        logger.warn('Invalid channel config response, retaining current stream settings', {
+          channelId,
+          httpStatus: response.status,
+          responseStatus: ['success', 'error'].includes(response.data?.status)
+            ? response.data.status : 'invalid',
+          elapsedMs: Date.now() - configRequestStartedAt
         });
       }
     } catch (error) {
-      logger.warn('Failed to fetch channel config, using defaults', { 
-        channelId, 
-        error: error.message 
+      logger.warn('Failed to fetch channel config, retaining current stream settings', {
+        channelId,
+        errorCode: typeof error.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code)
+          ? error.code : 'UNKNOWN',
+        httpStatus: Number.isInteger(error.response?.status) ? error.response.status : null,
+        elapsedMs: Date.now() - configRequestStartedAt
       });
     }
-    
+
     // 启动观看，传递配置
     const hlsUrl = await streamManager.startWatching(channelId, rtmpUrl, channelConfig);
     
@@ -224,26 +239,9 @@ router.post('/restart-channel', async (req, res) => {
       reason: reason || 'No reason provided' 
     });
     
-    // 步骤1：停止当前频道
-    try {
-      await streamManager.stopChannel(channelId);
-      logger.info('Channel stopped successfully', { channelId });
-    } catch (stopError) {
-      // 如果频道未运行，忽略停止错误
-      logger.warn('Failed to stop channel (may not be running)', { 
-        channelId, 
-        error: stopError.message 
-      });
-    }
-    
-    // 步骤2：使用新的RTMP URL重新启动
-    const hlsUrl = await streamManager.startWatching(channelId, rtmpUrl);
-    
-    logger.info('Channel restarted successfully', { 
-      channelId, 
-      hlsUrl 
-    });
-    
+    // 在管理器的频道锁内完成重启，保留原录制模式及配置，避免先停频道再变成纯观看。
+    const hlsUrl = await streamManager.restartChannel(channelId, rtmpUrl);
+
     res.json({
       status: 'success',
       message: 'Channel restarted successfully',

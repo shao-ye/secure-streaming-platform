@@ -1,475 +1,184 @@
-# 录制文件修复功能测试文档
+# 录制文件恢复测试指南
 
-**版本**: v1.0  
-**日期**: 2025-10-31  
-**测试目标**: 验证VPS重启后录制文件能否正确修复并完整播放
+**更新日期**：2026-10-19
 
----
+**代码基线**：`66e5339`
 
-## 📋 测试概述
+**执行状态**：本文为按当前代码整理的待执行指南；本次未部署、未重启服务、未运行恢复或播放验收。
 
-### 测试场景
-模拟录制过程中VPS意外重启，验证RecordingRecoveryService能否：
-1. 自动识别未完成的temp文件
-2. 转换Fragmented MP4为标准MP4
-3. 正确计算文件时间范围并重命名
-4. 确保修复后的文件可以完整播放
+规则以 [录制分段与命名规则](./RECORDING_SEGMENTATION_DESIGN.md) 和 [恢复实现说明](./RECORDING_RECOVERY_IMPLEMENTATION.md) 为准。本指南区分启动自动恢复与手动恢复，避免以历史测试等待时间、日志示例或空白结果表代替实际证据。
 
-### 前置条件
-- [ ] VPS服务正常运行
-- [ ] 已配置至少一个频道的录制功能
-- [ ] 录制存储路径正常（`/srv/filebrowser/yoyo-k`）
-- [ ] RecordingRecoveryService已启用
+## 1. 测试前记录
 
----
+| 项目 | 待填写内容 |
+| --- | --- |
+| 测试环境、时间、执行人 | __________ |
+| 部署提交、PM2 应用名、实际工作目录 | __________ |
+| Node 进程本地时区 | __________ |
+| `RECOVERY_SCAN_HOURS` / 启动日志 `scanRecentHours` | __________ |
+| `RECORDINGS_PATH`、频道 `storagePath`、频道 ID | __________ |
+| 测试文件完整路径、来源、备份位置 | __________ |
 
-## 🎯 测试步骤
+当前启动路径从 `RECOVERY_SCAN_HOURS` 读取小时数，默认 48；不是从前端配置接口取得。两条扫描路径都只取频道最近 3 个日期目录，再按文件 mtime 筛选。构造器中的范围注释不能代替环境变量校验。
 
-### 阶段1：启动录制（0-60秒）
+测试使用隔离环境及录制样本副本；原录制文件保留用于前后比对。记录复制后的 mtime，必要时在测试副本上设置已知 mtime；复制动作可能改变修改时间，不能据原拍摄时间直接推导恢复名。
 
-#### 步骤1.1：开启录制
-```bash
-# 1. 打开管理后台
-# 2. 选择测试频道（如：二楼教室2）
-# 3. 编辑频道配置
-# 4. 启用录制功能
-# 5. 设置录制时间：当前时间开始，持续10分钟
-# 6. 保存配置
-```
+需要远程取证时，SSH 连接和远端命令均应设置超时；PM2 日志读取使用 `--nostream`。应用名、目录和频道从目标环境核实，不沿用历史示例。
 
-#### 步骤1.2：验证录制已启动
-```bash
-# 检查FFmpeg进程
-ssh root@<VPS_IP> "ps aux | grep ffmpeg | grep -v grep"
+## 2. 准备有明确预期的样本
 
-# 预期输出：应该看到ffmpeg进程，包含录制参数
-# - 包含频道ID
-# - 包含temp文件路径
-# - 包含movflags=+frag_keyframe+empty_moov+default_base_moof
-```
+至少准备以下样本，使用完整文件名，不要仅命名为 `temp_999.mp4`：
 
-**验证点**：
-- [ ] FFmpeg进程存在
-- [ ] 进程参数包含正确的频道ID
-- [ ] 使用Fragmented MP4参数
+| 样本 | 示例或条件 | 预期用途 |
+| --- | --- | --- |
+| 新格式静止临时文件 | `示例教室1_stream_example_20261019_090000_temp_000.mp4` | 验证含会话时间的新格式恢复 |
+| 旧格式静止临时文件 | `示例教室1_stream_example_20261019_temp_001.mp4` | 验证旧格式兼容 |
+| 持续增长的临时文件 | 来自隔离环境中的实际分段录制 | 验证自动恢复按大小变化跳过 |
+| 扫描范围外的文件 | mtime 超出窗口，或位于最近 3 个目录之外 | 验证范围限制 |
+| 目标正式名已经存在 | 由同一文件时间算法算出的目标名 | 验证不覆盖现有正式文件 |
+| 格式不匹配的临时文件 | 包含 `_temp_`，但不满足完整命名正则 | 验证扫描到后无法解析会跳过 |
 
-#### 步骤1.3：检查temp文件生成
-```bash
-# 获取当前日期（北京时间）
-DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)
+日期目录和 mtime 应与实际测试日期对应；以上 `20261019` 只是示例。当前临时名正则只接受 3 位段号。
 
-# 检查文件
-ssh root@<VPS_IP> "ls -lh /srv/filebrowser/yoyo-k/stream_gkg5hknc/${DATE}/"
-
-# 预期输出：
-# 二楼教室2_stream_gkg5hknc_20251031_110915_temp_000.mp4  2.5M
-#                                      ^^^^^^ (开始时间)
-```
-
-**验证点**：
-- [ ] temp_000.mp4文件已生成
-- [ ] 文件名包含开始时间戳（HHMMSS格式）
-- [ ] 文件大小持续增长
-
-#### 步骤1.4：等待1分钟
-```bash
-# 等待60秒，让视频录制足够内容
-echo "⏳ 等待60秒..."
-sleep 60
-echo "✅ 等待完成，录制了约60秒内容"
-```
-
-#### 步骤1.5：记录temp文件信息
-```bash
-# 再次检查文件大小
-ssh root@<VPS_IP> "ls -lh /srv/filebrowser/yoyo-k/stream_gkg5hknc/${DATE}/ | grep temp"
-
-# 记录输出（预期约3-5MB for 60秒视频）
-# 示例：二楼教室2_stream_gkg5hknc_20251031_110915_temp_000.mp4  4.2M
-```
-
-**验证点**：
-- [ ] 文件大小在3-5MB范围（60秒录制）
-- [ ] 文件仍在持续增长
-
----
-
-### 阶段2：模拟崩溃（60秒时刻）
-
-#### 步骤2.1：重启VPS服务
-```bash
-# 重启PM2服务（模拟程序崩溃）
-echo "⚠️ 重启VPS服务（模拟崩溃）..."
-ssh root@<VPS_IP> "pm2 restart vps-transcoder-api"
-
-# 记录重启时间
-echo "🕐 重启时间: $(date '+%Y-%m-%d %H:%M:%S')"
-```
-
-**验证点**：
-- [ ] PM2服务成功重启
-- [ ] 无错误日志输出
-
-#### 步骤2.2：等待RecordingRecoveryService启动
-```bash
-# 等待10秒（RecoveryService延迟5秒启动 + 执行时间）
-echo "⏳ 等待RecoveryService启动并执行修复..."
-sleep 10
-echo "✅ 等待完成"
-```
-
----
-
-### 阶段3：验证修复（70-100秒）
-
-#### 步骤3.1：检查文件列表
-```bash
-# 检查文件夹内容
-ssh root@<VPS_IP> "ls -lh /srv/filebrowser/yoyo-k/stream_gkg5hknc/${DATE}/"
-
-# 预期输出：
-# 二楼教室2_stream_gkg5hknc_20251031_110915_to_111015.mp4  4.1M  ← 修复后的文件
-# 二楼教室2_stream_gkg5hknc_20251031_111025_temp_000.mp4  1.2M  ← 新录制的文件
-```
-
-**验证点**：
-- [ ] 旧的temp_000.mp4已消失
-- [ ] 生成了正式命名的文件（包含_to_时间）
-- [ ] 新的temp_000.mp4已生成（录制恢复）
-
-#### 步骤3.2：检查修复日志
-```bash
-# 查看RecoveryService日志
-ssh root@<VPS_IP> "pm2 logs vps-transcoder-api --lines 100 --nostream | grep -A 5 -B 5 'Recovery'"
-
-# 预期日志关键词：
-# 🚀 Starting recovery service...
-# 📦 Found temp file: 二楼教室2_stream_gkg5hknc_20251031_110915_temp_000.mp4
-# 🔄 Converting temp file to standard MP4...
-# ✅ Segment converted to standard MP4
-# ✅ Temp file converted and renamed
-# Recovery completed
-```
-
-**验证点**：
-- [ ] 显示"Starting recovery service"
-- [ ] 显示"Found temp file"
-- [ ] 显示"Converting temp file to standard MP4"
-- [ ] 显示"Segment converted to standard MP4"
-- [ ] 显示"Recovery completed"
-- [ ] 无转换失败错误
-
-#### 步骤3.3：检查转换日志（详细）
-```bash
-# 查看FFmpeg转换过程
-ssh root@<VPS_IP> "pm2 logs vps-transcoder-api --lines 200 --nostream | grep -E 'convertSegmentToStandardMp4|Segment converted'"
-
-# 预期输出：
-# ✅ Segment converted to standard MP4 from: xxx_temp_000.mp4 to: xxx_to_111015.mp4
-```
-
-**验证点**：
-- [ ] 转换成功完成
-- [ ] 无"conversion failed"错误
-- [ ] 无"timeout"错误
-
----
-
-### 阶段4：验证播放（70-100秒）
-
-#### 步骤4.1：下载修复后的文件
-```bash
-# 获取文件名（替换为实际文件名）
-FIXED_FILE="二楼教室2_stream_gkg5hknc_20251031_110915_to_111015.mp4"
-
-# 下载到本地
-scp root@<VPS_IP>:/srv/filebrowser/yoyo-k/stream_gkg5hknc/${DATE}/${FIXED_FILE} ./
-
-echo "✅ 文件已下载到当前目录"
-```
-
-#### 步骤4.2：验证文件格式
-```bash
-# 使用ffprobe检查文件信息（需要本地安装FFmpeg）
-ffprobe -v error -show_format -show_streams "${FIXED_FILE}"
-
-# 关键检查点：
-# - format_name: mov,mp4,m4a,3gp,3g2,mj2 (标准MP4格式)
-# - duration: 约60秒
-# - video codec: h264
-```
-
-**验证点**：
-- [ ] 文件格式为标准MP4
-- [ ] duration约60秒（不是4秒）
-- [ ] codec正确（h264）
-
-#### 步骤4.3：播放测试
-```bash
-# 方法1：使用VLC播放器
-vlc "${FIXED_FILE}"
-
-# 方法2：使用Windows Media Player
-# 双击文件播放
-
-# 方法3：使用FFplay
-ffplay "${FIXED_FILE}"
-```
-
-**验证点（关键）**：
-- [ ] **文件可以播放** ✅
-- [ ] **播放时长约60秒**（不是4秒） ✅
-- [ ] 画面清晰，无花屏
-- [ ] 播放流畅，无卡顿
-- [ ] 播放进度条可以拖动
-- [ ] 可以播放到文件末尾
-
-#### 步骤4.4：验证正在录制的文件
-```bash
-# 等待30秒，让新录制文件有足够内容
-sleep 30
-
-# 下载新的temp文件
-NEW_TEMP=$(ssh root@<VPS_IP> "ls -t /srv/filebrowser/yoyo-k/stream_gkg5hknc/${DATE}/*temp*.mp4 | head -1")
-scp root@<VPS_IP>:${NEW_TEMP} ./new_temp.mp4
-
-# 播放测试
-ffplay ./new_temp.mp4
-```
-
-**验证点**：
-- [ ] 新temp文件可以播放（Fragmented MP4防崩溃保护生效）
-- [ ] 内容为重启后的新录制
-- [ ] 播放流畅
-
----
-
-## ✅ 测试结果记录
-
-### 测试信息
-- **测试日期**：____________________
-- **测试人员**：____________________
-- **频道名称**：____________________
-- **频道ID**：____________________
-
-### 阶段1：启动录制
-- [ ] 录制成功启动
-- [ ] temp文件生成正常
-- [ ] 文件大小持续增长
-- [ ] 录制时长：____秒
-- [ ] temp文件大小：____MB
-
-### 阶段2：模拟崩溃
-- [ ] 服务成功重启
-- [ ] 无启动错误
-
-### 阶段3：验证修复
-- [ ] temp文件已转换为正式文件
-- [ ] 文件命名正确（包含时间范围）
-- [ ] 新temp文件已生成（录制恢复）
-- [ ] 日志显示转换成功
-- [ ] 修复后文件大小：____MB
-
-### 阶段4：验证播放（⭐ 核心验证）
-- [ ] ✅ 修复后的文件可以播放
-- [ ] ✅ 播放时长正确（约60秒，不是4秒）
-- [ ] 画面清晰无花屏
-- [ ] 播放流畅无卡顿
-- [ ] 进度条可以拖动
-- [ ] 可以播放到末尾
-- [ ] 新temp文件可以播放
-
----
-
-## 🐛 问题记录
-
-### 问题1：修复后的文件只能播放4秒（已修复）
-
-**现象**：
-- 录制60秒，VPS重启
-- 修复后文件4.1MB，但只能播放4秒
-- 预期应该播放60秒
-
-**根本原因**：
-- RecordingRecoveryService只重命名，不转换格式
-- temp文件使用Fragmented MP4（防崩溃保护）
-- segment muxer异常关闭的Fragmented MP4只保留第一个fragment索引
-- 结果：只能播放第一个fragment（约4秒）
-
-**解决方案**：
-- RecordingRecoveryService调用`streamManager.convertSegmentToStandardMp4`
-- 与分段完成逻辑保持一致
-- 使用`-c copy`避免重新编码
-- 转换失败时降级为直接重命名
-
-**修复版本**：fa964981  
-**修复时间**：2025-10-31 11:23
-
----
-
-## 📊 预期结果 vs 实际结果
-
-| 验证项 | 预期结果 | 实际结果 | 状态 |
-|-------|---------|---------|------|
-| temp文件转换 | 自动转换为标准MP4 | _______ | ☐ 通过 ☐ 失败 |
-| 文件命名 | 包含正确时间范围 | _______ | ☐ 通过 ☐ 失败 |
-| 播放时长 | 约60秒 | _______ | ☐ 通过 ☐ 失败 |
-| 播放质量 | 清晰流畅 | _______ | ☐ 通过 ☐ 失败 |
-| 录制恢复 | 新temp文件生成 | _______ | ☐ 通过 ☐ 失败 |
-
----
-
-## 🔧 故障排查
-
-### 如果修复失败
-
-#### 问题A：temp文件未被修复
-```bash
-# 检查RecoveryService是否启动
-ssh root@<VPS_IP> "pm2 logs vps-transcoder-api --lines 50 | grep 'Recovery service'"
-
-# 检查扫描范围配置
-# 默认扫描48小时内的文件，如果temp文件创建时间超过48小时则不会被修复
-```
-
-#### 问题B：转换失败
-```bash
-# 查看转换错误日志
-ssh root@<VPS_IP> "pm2 logs vps-transcoder-api --lines 200 | grep -A 10 'conversion failed'"
-
-# 检查FFmpeg是否可用
-ssh root@<VPS_IP> "which ffmpeg && ffmpeg -version"
-```
-
-#### 问题C：文件仍然只能播放4秒
-```bash
-# 检查是否使用了旧版本代码
-ssh root@<VPS_IP> "cd /root/vps-transcoder-api && git log --oneline -5"
-
-# 应该看到提交：fa964981 fix(critical): RecordingRecoveryService转换Fragmented MP4为标准MP4
-
-# 如果看不到，重新部署：
-ssh root@<VPS_IP> "cd /tmp/github/secure-streaming-platform/vps-transcoder-api && bash vps-simple-deploy.sh"
-```
-
----
-
-## 📝 测试结论
-
-### 通过标准
-- [ ] 所有阶段验证点全部通过
-- [ ] 修复后的文件可以完整播放（60秒+）
-- [ ] 录制自动恢复
-- [ ] 无错误日志
-
-### 测试结论
-- ☐ **测试通过** - 所有功能正常
-- ☐ **测试失败** - 存在问题，需要修复
-- ☐ **部分通过** - 主要功能正常，存在次要问题
-
-### 测试签名
-- **测试人员**：____________________
-- **审核人员**：____________________
-- **日期**：____________________
-
----
-
-## 📚 参考文档
-
-- [ARCHITECTURE_V2.md](./ARCHITECTURE_V2.md) - 系统架构文档（第998-1261行：录制文件防损坏与修复系统）
-- [RECORDING_SEGMENTATION_IMPLEMENTATION.md](./RECORDING_SEGMENTATION_IMPLEMENTATION.md) - 频道录制分段功能
-- [RECORDING_RECOVERY_IMPLEMENTATION.md](./RECORDING_RECOVERY_IMPLEMENTATION.md) - 录制文件防损坏与修复功能
-
----
-
-## 🎯 自动化测试脚本
+对每个样本记录原始字节数、mtime 和 ffprobe 时长。可在样本副本上读取媒体信息：
 
 ```bash
-#!/bin/bash
-# 录制修复功能自动化测试脚本
-# 使用方法：bash recording_recovery_test.sh <channelId>
-
-CHANNEL_ID=${1:-"stream_gkg5hknc"}
-DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)
-RECORD_PATH="/srv/filebrowser/yoyo-k/${CHANNEL_ID}/${DATE}"
-
-echo "🚀 开始录制修复功能测试"
-echo "📌 频道ID: ${CHANNEL_ID}"
-echo "📅 日期: ${DATE}"
-echo ""
-
-# 步骤1：检查录制状态
-echo "📝 步骤1: 检查录制状态..."
-ssh root@<VPS_IP> "ps aux | grep ffmpeg | grep ${CHANNEL_ID} | grep -v grep"
-if [ $? -eq 0 ]; then
-    echo "✅ 录制进程存在"
-else
-    echo "❌ 录制进程不存在，请先启动录制"
-    exit 1
-fi
-
-# 步骤2：检查temp文件
-echo ""
-echo "📝 步骤2: 检查temp文件..."
-TEMP_FILE=$(ssh root@<VPS_IP> "ls ${RECORD_PATH}/*temp*.mp4 2>/dev/null | head -1")
-if [ -n "${TEMP_FILE}" ]; then
-    echo "✅ 找到temp文件: $(basename ${TEMP_FILE})"
-    TEMP_SIZE=$(ssh root@<VPS_IP> "ls -lh ${TEMP_FILE} | awk '{print \$5}'")
-    echo "📊 文件大小: ${TEMP_SIZE}"
-else
-    echo "❌ 未找到temp文件"
-    exit 1
-fi
-
-# 步骤3：等待录制
-echo ""
-echo "⏳ 步骤3: 等待60秒录制..."
-sleep 60
-echo "✅ 等待完成"
-
-# 步骤4：重启服务
-echo ""
-echo "⚠️  步骤4: 重启VPS服务（模拟崩溃）..."
-ssh root@<VPS_IP> "pm2 restart vps-transcoder-api"
-echo "✅ 服务已重启"
-
-# 步骤5：等待修复
-echo ""
-echo "⏳ 步骤5: 等待修复服务执行..."
-sleep 15
-echo "✅ 等待完成"
-
-# 步骤6：验证修复
-echo ""
-echo "📝 步骤6: 验证修复结果..."
-FIXED_FILE=$(ssh root@<VPS_IP> "ls ${RECORD_PATH}/*_to_*.mp4 2>/dev/null | tail -1")
-if [ -n "${FIXED_FILE}" ]; then
-    echo "✅ 找到修复后的文件: $(basename ${FIXED_FILE})"
-    FIXED_SIZE=$(ssh root@<VPS_IP> "ls -lh ${FIXED_FILE} | awk '{print \$5}'")
-    echo "📊 文件大小: ${FIXED_SIZE}"
-else
-    echo "❌ 未找到修复后的文件"
-    exit 1
-fi
-
-# 步骤7：检查日志
-echo ""
-echo "📝 步骤7: 检查修复日志..."
-ssh root@<VPS_IP> "pm2 logs vps-transcoder-api --lines 50 --nostream | grep -E 'Converting temp file|Segment converted'"
-if [ $? -eq 0 ]; then
-    echo "✅ 日志显示转换成功"
-else
-    echo "⚠️  未找到转换日志"
-fi
-
-echo ""
-echo "🎉 测试完成！"
-echo "📥 请下载文件并验证播放："
-echo "   scp root@<VPS_IP>:${FIXED_FILE} ./"
-echo "   ffplay $(basename ${FIXED_FILE})"
+ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '<样本完整路径>'
+ffprobe -v error -show_format -show_streams '<样本完整路径>'
 ```
 
-保存为 `recording_recovery_test.sh` 并执行：
-```bash
-bash recording_recovery_test.sh stream_gkg5hknc
+不要把“约 60 秒视频必须 3–5 MB”作为标准；文件大小取决于源流码率。`format_name` 显示 MP4 也不能单独区分所有 Fragmented MP4 与标准 MP4 情况，仍需转换日志及播放检查。
+
+## 3. 启动自动恢复
+
+### 3.1 触发与观察
+
+1. 记录本次静止样本的完整路径、大小、mtime 和已知时长；确认样本处于有效扫描范围。
+2. 在隔离环境中启动或重启服务，记录恢复服务初始化日志的时间与 `scanRecentHours`。
+3. 等待本次启动恢复扫描并记录初始大小；有候选文件时，代码再观察 30 秒。
+4. 核对每个样本出现的是 `File stopped growing` 还是 `File still growing`，并关联完整路径。
+5. 对进入恢复的样本继续检查时间计算、转换结果与最终文件，直到确认本轮完成、明确失败或超过事先约定的观察上限。
+
+当前调用链为：
+
+```text
+app.js → startup()
+  → 延迟 5 秒
+  → runRecoveryWithSizeCheck() → findTempFiles()
+  → 记录大小 → 等待 30 秒 → 大小未变的文件进入 fixFileName()
+  → renameTempFile() → convertSegmentToStandardMp4()
 ```
+
+**等待条件**：有候选文件时，5 秒启动延迟加 30 秒观察只是前置等待，后面还有逐文件 ffprobe 和重封装。旧测试的 `sleep 10`、`sleep 15` 不足以判断完成。多文件处理时间会累积，应以该次扫描日志和对应文件状态为准；无候选文件时可能提前返回。
+
+可关联的日志关键词包括：
+
+- `Recovery service scheduled with smart size detection`
+- `Starting recovery service`、`Starting recording file recovery with size check`
+- `Initial size`、`Waiting 30 seconds`
+- `File stopped growing` / `File still growing`
+- `Calculated times from mtime`、`Target name`
+- `Converting temp file to standard MP4`、`Segment converted to standard MP4`
+- `Recovery completed`，或无候选、全部仍在增长等提前退出日志
+
+日志汇总不是逐文件成功证明。目标名已存在、名称不匹配、函数内部捕获异常或转换降级时，仍需核对具体文件结果。
+
+### 3.2 自动恢复验收点
+
+- [ ] 有效范围内、30 秒观察期间大小未变的样本进入恢复。
+- [ ] 观察期间持续增长的文件未被本次恢复改名。
+- [ ] 超出 mtime 窗口或最近 3 个日期目录范围的样本没有进入恢复。
+- [ ] 已存在的目标正式文件未被覆盖，原临时文件仍保留并有跳过日志。
+- [ ] 每个处理结果都能与本次输入文件对应，未把目录中原有的其他正式文件误当作本次输出。
+
+自动路径不是后台持续轮询；本次大小有变化的文件被跳过后，不保证在它随后停止增长时自动再次扫描。
+
+## 4. 手动恢复
+
+手动入口为 `POST /api/admin/recovery/execute`，请求携带有效 `x-api-key`。测试记录中不得写入真实密钥。
+
+手动调用进入 `runRecovery()`，不会等待自动路径的 30 秒大小观察。临时文件需同时满足：
+
+- 处于相同的目录和 mtime 扫描范围内。
+- mtime 距当前至少 30 秒。
+- 对应频道在 `activeStreams` 中没有活跃的 `isRecording` 状态。
+
+建议分别测试最近修改的临时文件、超过 30 秒的静止临时文件，以及“该频道正在录制但留下了旧临时文件”的情况。第三种情况在手动路径中会按频道状态跳过，不能套用自动路径按单个文件大小判断的预期。
+
+手动路径还会在频道具有 `recordConfig` 时检查预设结束时间的正式文件；目录兜底扫描得到的频道没有该配置，会跳过此检查。启动自动恢复不会修正这类正式文件。
+
+**已知边界**：`needsEndTimeCheck()` 将 `parseTimeString()` 返回的秒差再除以 1000，与 ffprobe 秒数比较，且未处理跨午夜差值。因此“相差超过 5 分钟才修复”不是当前可承诺的验收标准。应单独记录该分支实际判定结果及问题，不把它混入临时文件恢复通过结论；本次文档更新没有修改代码。
+
+## 5. 核对恢复命名
+
+对进入 `renameTempFile()` 的新旧格式样本，按以下公式计算预期值：
+
+```text
+结束 = 原临时文件 mtime
+开始 = mtime - ffprobe duration（秒）
+日期 = 原临时文件名中的 YYYYMMDD
+输出 = {频道名}_{频道ID}_{日期}_{开始HHMMSS}_to_{结束HHMMSS}.mp4
+```
+
+恢复格式化使用 Node 进程本地时区；没有显式统一成北京时间。测试须记录该时区，并将 mtime、计算时间和输出名按同一时区对照，不能直接拿正常分段显式计算的北京时间结果套验。
+
+例如：若进程时区为 `Asia/Shanghai`，原样本 mtime 为 2026-10-19 09:01:00，ffprobe 时长恰好为 60 秒，则预期后缀为 `20261019_090000_to_090100.mp4`。这是构造示例，不是已执行结果。
+
+新格式中的会话开始时间只用于差异检查。差异超过 60 秒时会告警，但不会据此改用文件名时间；后续段的计算开始时间本就可能与会话开始不同。段号不参与异常恢复的起止时间计算。
+
+## 6. 核对重封装、降级和播放
+
+临时文件恢复的常规步骤是调用 `convertSegmentToStandardMp4()`，通过 `-c copy -movflags faststart` 重封装。不要依据外层旧注释“只重命名”判定当前行为。
+
+逐个样本记录：
+
+- [ ] 是否出现真正的 `Segment converted to standard MP4` 成功日志。
+- [ ] 是否出现转换失败、进程错误、超时或直接改名降级日志。
+- [ ] 正常转换成功时，正式文件存在且原临时文件已删除。
+- [ ] 目标名已存在时，目标未被覆盖；本次样本按跳过记录。
+- [ ] 对最终文件重新读取 ffprobe 时长，并与备份样本和录制片段证据比较。
+- [ ] 在播放器中验证开头、拖动、末尾及实际可播放内容，记录无法播放或截短现象。
+
+“正式文件存在”或 ffprobe 能读取时长，均不能单独证明内容完整。代码的成功分支只检查 FFmpeg 返回码和输出文件存在；人工验收还需要比对时长和播放。降级为直接改名的样本应单独标明“降级”，不能填写成标准 MP4 转换通过。
+
+恢复完成后派发自动上传事件与云端上传完成是不同阶段；本指南不把队列派发视为云端成功。
+
+## 7. 服务重启与异常中断样本
+
+普通 PM2 重启可能走应用的信号关闭流程，不能仅因执行了重启就认定已经覆盖意外崩溃场景。测试记录需说明中断方式，并确认确有未完成的临时文件留给恢复服务处理。
+
+如需验证实际异常中断，应在隔离环境中采用已明确范围的故障注入方式，保存中断前后的文件及进程证据。本文不提供终止整个 PM2 管理器的旧脚本。
+
+新录制是否在启动后恢复，由录制调度器、当前录制时段和工作日等条件决定；Recovery 服务本身负责历史文件处理。若验证新临时文件，应另记调度条件和新会话时间，不能把“必然生成新文件”作为所有恢复测试的共同前提。
+
+## 8. 结果记录（待执行）
+
+| 样本/用例 | 输入路径与 mtime | 入口与筛选证据 | 预期目标名 | 实际结果/日志位置 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| 新格式静止文件 | 待填写 | 自动 | 待计算 | 待执行 | 未执行 |
+| 旧格式静止文件 | 待填写 | 自动 | 待计算 | 待执行 | 未执行 |
+| 持续增长文件 | 待填写 | 自动跳过 | 不改名 | 待执行 | 未执行 |
+| 扫描范围外文件 | 待填写 | 范围筛选 | 不改名 | 待执行 | 未执行 |
+| 目标名已存在 | 待填写 | 冲突跳过 | 不覆盖 | 待执行 | 未执行 |
+| mtime 不足 30 秒 | 待填写 | 手动跳过 | 不改名 | 待执行 | 未执行 |
+| 频道活跃录制 | 待填写 | 手动跳过 | 不改名 | 待执行 | 未执行 |
+| 手动正式文件检查 | 待填写 | 记录单位问题影响 | 单独记录 | 待执行 | 未执行 |
+| 转换及播放检查 | 待填写 | 成功或降级日志 | 待计算 | 待执行 | 未执行 |
+
+最终结论必须填写实际已执行范围，并分别标明“通过、失败、跳过、降级、未执行”。本次文档修订不预填任何通过结果。
+
+## 9. 历史记录与失效步骤
+
+原版测试文档日期为 2025-10-31，包含空白验收表和示例日志；这些内容不能证明基线 `66e5339` 已通过测试。
+
+历史问题记录曾描述“录制约 60 秒，恢复后的 4.1 MB 文件只能播放约 4 秒”，并将改为标准 MP4 重封装的修复关联到提交 `fa964981`、时间 2025-10-31 11:23。本次只保留这一历史关联，没有重新验证该故障原因或该提交的目标环境结果。当前代码仍可见重封装及失败降级路径，实际效果按上述样本验收。
+
+旧测试中的固定 10/15 秒等待、用任意 `_to_` 文件判定成功、仅 `grep` 到转换文本即通过、硬编码旧部署目录以及“创建时间超过 48 小时”的说法已被替换。恢复范围实际使用 mtime；结果必须关联具体输入输出，不能按目录中的第一或最后一个文件推断。
+
+原自动化脚本不再作为可复制执行方案。后续若编写自动化测试，应明确样本映射、单次扫描标识或日志时间范围、观察上限、转换与降级区别，并在超时或缺证据时返回未完成，而不是打印成功。
+
+## 10. 相关文档
+
+- [录制分段与命名规则](./RECORDING_SEGMENTATION_DESIGN.md)
+- [录制文件恢复实现说明](./RECORDING_RECOVERY_IMPLEMENTATION.md)
+- [系统架构文档](./ARCHITECTURE_V2.md)
