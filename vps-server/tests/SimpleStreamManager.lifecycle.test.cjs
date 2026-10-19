@@ -211,7 +211,9 @@ function writeHls(manager, info, stale = false) {
   for (const [name, content] of [['playlist.m3u8', '#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nsegment001.ts\n'], ['segment001.ts', Buffer.alloc(2048)]]) {
     const file = path.join(dir, name);
     fs.writeFileSync(file, content);
-    if (stale) fs.utimesSync(file, new Date(0), new Date(0));
+    // 显式构造新旧时间，避免 Linux 文件时间精度使刚创建的样本早于模拟 spawn。
+    const timestamp = new Date(stale ? 0 : info.spawnedAt + 1);
+    fs.utimesSync(file, timestamp, timestamp);
   }
 }
 
@@ -228,6 +230,7 @@ test('新 HLS 正常但录像不增长时，不能报告录制启动成功', asy
   writeHls(manager, info);
   fs.mkdirSync(path.dirname(info.recordingPath), { recursive: true });
   fs.writeFileSync(info.recordingPath.replace('%03d', '000'), Buffer.alloc(4096));
+  fs.utimesSync(info.recordingPath.replace('%03d', '000'), new Date(info.spawnedAt + 1), new Date(info.spawnedAt + 1));
   await assert.rejects(manager.waitForStreamReady('stream_test', 30, info), /not ready/);
   // 此测试只检查就绪条件，移除伪造媒体，避免触发正式封装。
   fs.unlinkSync(info.recordingPath.replace('%03d', '000'));
@@ -240,7 +243,8 @@ test('本会话 HLS 与录像增长同时满足后才报告就绪', async t => {
   fs.mkdirSync(path.dirname(info.recordingPath), { recursive: true });
   const file = info.recordingPath.replace('%03d', '000');
   fs.writeFileSync(file, Buffer.alloc(4096));
-  const ready = manager.waitForStreamReady('stream_test', 1000, info);
+  fs.utimesSync(file, new Date(info.spawnedAt + 1), new Date(info.spawnedAt + 1));
+  const ready = manager.waitForStreamReady('stream_test', 3000, info);
   await new Promise(resolve => setTimeout(resolve, 60));
   fs.appendFileSync(file, Buffer.alloc(4096));
   await ready;
